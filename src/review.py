@@ -1,4 +1,4 @@
-"""Clean up messy pending-mask logic from review."""
+"""Interactive CLI review — confirm categories and grow the rules file."""
 
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ from src.classify import append_rule, load_rules
 
 console = Console()
 
+FINAL_SOURCES = ("rule", "manual", "merchant")
+
 
 def _escape_regex(merchant: str) -> str:
     tokens = [re.escape(t) for t in merchant.split() if t]
@@ -21,9 +23,9 @@ def _escape_regex(merchant: str) -> str:
     return "(?i)" + r"\s+".join(tokens)
 
 
-def _needs_review(row: pd.Series) -> bool:
+def needs_review(row: pd.Series) -> bool:
     by = row.get("classified_by")
-    if by in ("rule", "manual"):
+    if by in FINAL_SOURCES:
         return False
     if by == "ai":
         return True
@@ -31,12 +33,16 @@ def _needs_review(row: pd.Series) -> bool:
     return cat is None or cat == "" or cat == "Uncategorized" or pd.isna(cat)
 
 
+def _is_blank(value) -> bool:
+    return value is None or value == "" or (isinstance(value, float) and pd.isna(value))
+
+
 def review(frame: pd.DataFrame) -> pd.DataFrame:
     out = frame.copy()
     rules = load_rules()
     categories = rules.get("categories") or ["Uncategorized"]
 
-    pending = out[out.apply(_needs_review, axis=1)]
+    pending = out[out.apply(needs_review, axis=1)]
     if pending.empty:
         console.print("[green]No transactions need review.[/green]")
         return out
@@ -53,14 +59,16 @@ def review(frame: pd.DataFrame) -> pd.DataFrame:
         table.add_row("Card", str(row["card"]))
         table.add_row("Amount", f"{float(row['amount']):.2f}")
         table.add_row("Raw", str(row["raw_description"]))
-        table.add_row("Merchant", str(row["normalized_merchant"]))
-        proposed = row.get("proposed_category") or ""
-        proposed_sub = row.get("proposed_subcategory") or ""
-        if proposed and not (isinstance(proposed, float) and pd.isna(proposed)):
-            table.add_row("AI proposal", f"{proposed} / {proposed_sub}")
+        table.add_row("Normalized", str(row["normalized_merchant"]))
+        if not _is_blank(row.get("canonical_merchant")):
+            table.add_row("Canonical", str(row["canonical_merchant"]))
+        proposed = row.get("proposed_category")
+        proposed_sub = row.get("proposed_subcategory")
+        if not _is_blank(proposed):
+            table.add_row("AI proposal", f"{proposed} / {proposed_sub or ''}")
         console.print(table)
 
-        default = proposed if proposed and not (isinstance(proposed, float) and pd.isna(proposed)) else "Uncategorized"
+        default = proposed if not _is_blank(proposed) else "Uncategorized"
         answer = Prompt.ask("Category (s=skip, q=quit)", default=str(default)).strip()
         if answer.lower() == "q":
             console.print("[yellow]Stopped review early.[/yellow]")
@@ -70,7 +78,9 @@ def review(frame: pd.DataFrame) -> pd.DataFrame:
             continue
 
         category = answer
-        subcategory = Prompt.ask("Subcategory", default=str(proposed_sub or "")).strip()
+        subcategory = Prompt.ask(
+            "Subcategory", default=str("" if _is_blank(proposed_sub) else proposed_sub)
+        ).strip()
 
         out.at[idx, "category"] = category
         out.at[idx, "subcategory"] = subcategory
@@ -79,9 +89,21 @@ def review(frame: pd.DataFrame) -> pd.DataFrame:
         out.at[idx, "proposed_subcategory"] = None
 
         if Confirm.ask("Save as a reusable rule for this merchant?", default=True):
-            pattern = _escape_regex(str(row["normalized_merchant"]))
-            append_rule(merchant_regex=pattern, category=category, subcategory=subcategory)
-            console.print(f"[green]Rule saved[/green] → {category}/{subcategory}\n")
+            canonical = row.get("canonical_merchant")
+            if not _is_blank(canonical):
+                append_rule(
+                    merchant_canonical=str(canonical),
+                    category=category,
+                    subcategory=subcategory,
+                )
+                console.print(f"[green]Rule saved[/green] canonical={canonical} → {category}/{subcategory}\n")
+            else:
+                append_rule(
+                    merchant_regex=_escape_regex(str(row["normalized_merchant"])),
+                    category=category,
+                    subcategory=subcategory,
+                )
+                console.print(f"[green]Rule saved[/green] → {category}/{subcategory}\n")
         else:
             console.print("[dim]Saved on this transaction only[/dim]\n")
 

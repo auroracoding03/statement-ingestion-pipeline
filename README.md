@@ -1,8 +1,8 @@
 # Statement Ingestion Pipeline
 
-Local-first credit-card statement ingestion, classification, recurring-bill detection, and a static finance dashboard.
+Local-first credit-card statement ingestion, merchant canonicalization, classification, recurring-bill detection, and a finance dashboard.
 
-Raw statements and `rules.yaml` stay on your machine. The dashboard is a thin consumer of exported aggregates (optionally line items) and can publish to Cloudflare Pages behind Access.
+Raw statements, `rules.yaml`, and `merchants.yaml` stay on your machine. The published dashboard is a thin read-only consumer of exported aggregates (optionally line items) and can go to Cloudflare Pages behind Access.
 
 ## Quick start
 
@@ -18,54 +18,111 @@ cp fixtures/sample_chase.csv inbox/chase/2026-01.csv
 cp fixtures/sample_amex.csv inbox/amex/2026-01.csv
 
 fin ingest
-fin classify          # rules only
+fin classify            # merchants.yaml + rules.yaml
 fin classify --with-ai  # optional: Ollama proposals for the unclassified tail
-fin review            # confirm proposals; writes new rules
-fin build             # recurring + DuckDB + dashboard exports
+fin review              # confirm proposals; writes new rules
+fin build               # recurring + DuckDB + dashboard exports
 fin status
-fin publish --dry-run # builds dashboard/dist
 ```
 
+### Interactive UI
+
+```bash
+cd ui && npm install && npm run build && cd ..
+fin serve               # http://127.0.0.1:8787
+```
+
+`fin serve` binds to localhost only and serves the React app plus the `/api/*` routes that drive ingest, the review queue, and merchant curation. During UI development, run `npm run dev` in `ui/` (port 5173, proxies `/api` to 8787).
+
 CLI entrypoint: `fin` (also `python -m src.cli`).
+
+## Merchant identity
+
+Three layers, from immutable to curated:
+
+| Layer | Example | Owner |
+| --- | --- | --- |
+| `raw_description` | `WAL-MART #1234 ATLANTA GA` | the statement |
+| `normalized_merchant` | `WAL-MART ATLANTA GA` | `src/normalize.py` |
+| `canonical_merchant` | `Walmart` | `config/merchants.yaml` |
+
+`config/merchants.yaml` is a durable asset, the counterpart to `rules.yaml`. One canonical entry collapses every statement variant (`W*LMART`, `WLMRT`, `WAL-MART #1234`) into a single brand, so a single `canonical: Walmart` rule replaces a pile of variant regexes.
+
+Merchants with no alias match get grouped into fuzzy clusters (`rapidfuzz`, tunable threshold) and surfaced in the Merchants page ranked by spend. The local model can propose a brand name for each cluster, but nothing is written until you confirm it. `merchant_source` records how each row got its name: `alias`, `manual`, `ai`, or `none`.
+
+```bash
+fin merchants list
+fin merchants unknown --with-ai
+fin merchants add "Local Coffee Roasters" -m "LOCAL COFFEE ROASTERS DOWNTOWN" --category Food
+```
+
+## Classification model
+
+Precedence, first match wins:
+
+1. `rules.yaml` rule on `merchant_canonical`
+2. `rules.yaml` rule on `merchant_exact` or `merchant_regex` (checked against canonical, then normalized, then raw)
+3. Default `category` declared on the merchant in `merchants.yaml`
+4. Ollama proposal for whatever is left — **advisory only**, confirmed via `fin review` or the UI
+
+## Transaction ids
+
+`txn_id` = sha256(`card|posted_date|amount|raw_description|seq`)[:16].
+
+It is deliberately hashed from the *immutable* source text rather than a derived merchant field, so retuning normalization or canonicalization never churns ids or breaks dedup. `seq` is a within-group ordinal, so two genuinely identical same-day purchases stay two rows while a re-imported file still collapses.
+
+Ledgers written before this change are upgraded automatically on load, or explicitly:
+
+```bash
+fin migrate-ids   # rewrites ids, keeps categories, backs up to ledger.parquet.bak
+```
+
+## Publish modes
+
+In `config/publish.yaml`:
+
+- `aggregates_only` (default) — category totals, recurring, reconciliation, and merchant totals leave the machine
+- `full` — also includes line-item `ledger.json`
+
+The same React codebase produces both builds. `npm run build:static` emits a read-only bundle into `dashboard/dist` that reads `./data/*.json` instead of the API, with every write control hidden.
+
+```bash
+cd ui && npm run build:static && cd ..
+fin publish --dry-run   # build only
+fin publish             # wrangler pages deploy
+```
+
+Put Cloudflare Access in front of the Pages project before sharing the URL.
 
 ## Layout
 
 ```
 inbox/<card>/*.csv|pdf   # immutable inputs (gitignored)
 config/rules.yaml        # durable classification asset
+config/merchants.yaml    # durable canonical merchant asset
 config/expected_recurring.yaml
 config/publish.yaml      # full | aggregates_only
 config/parsers/          # per-issuer CSV/PDF parsers
-src/                     # extract → normalize → classify → ai → review → recurring → store
+src/                     # extract → normalize → canonicalize → classify → ai → review → recurring → store
+src/api/                 # FastAPI app behind fin serve
+ui/                      # Vite + React UI (live and static builds)
 data/                    # ledger.parquet, finance.duckdb, export/ (gitignored)
-dashboard/public/        # static dashboard
+dashboard/dist/          # static publish artifact (gitignored)
 fixtures/                # sample CSVs
 ```
 
-## Classification model
+## Concurrency
 
-1. Ordered regex / merchant rules in `config/rules.yaml` (first match wins)
-2. Optional Ollama suggestions for the unclassified tail (**proposals only**)
-3. `fin review` confirms and can append a new rule for next run
+`ledger.parquet` is read-modify-write, so both the CLI and the API take a `filelock` on `data/ledger.lock` before mutating. A UI action and a CLI run can safely overlap.
 
-Stable `txn_id` = sha256(`card|date|amount|normalized_merchant`)[:16] so re-imports dedupe cleanly.
-
-## Publish modes
-
-In `config/publish.yaml`:
-
-- `aggregates_only` (default) — category totals + recurring + reconciliation leave the machine
-- `full` — also includes line-item `ledger.json`
-
-Deploy when ready:
+## Tests
 
 ```bash
-npm i -g wrangler
-fin publish
-# or: wrangler pages deploy dashboard/dist --project-name statement-ingestion-dashboard
+pytest                          # pipeline, merchants, API
+cd ui && npm run typecheck      # UI
 ```
 
-Put Cloudflare Access in front of the Pages project before sharing the URL.
+Tests never touch the real `config/` — `tests/conftest.py` redirects config paths to a temp copy unless a test opts in with the `real_config` marker.
 
 ## Adding an issuer parser
 

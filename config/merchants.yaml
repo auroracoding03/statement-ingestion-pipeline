@@ -1,0 +1,118 @@
+# Curated canonical merchant identities.
+# Collapses statement variants (W*LMART, WLMRT, WAL-MART #1234) to one brand name.
+# AI may propose entries; only human-confirmed ones land here.
+#
+# Each entry:
+#   canonical:   the display name
+#   category/subcategory: optional default, applied only when no rules.yaml rule matches
+#   aliases:     list of {regex: ...} or {exact: ...} matched against the
+#                normalized merchant and the raw description
+
+merchants:
+  - canonical: Walmart
+    category: Shopping
+    subcategory: Retail
+    aliases:
+      - regex: "(?i)wal[-\\s]?mart|\\bwlmrt\\b|w\\s*\\*?\\s*lmart"
+
+  - canonical: Amazon
+    category: Shopping
+    subcategory: Retail
+    aliases:
+      - regex: "(?i)amazon(\\.com)?|\\bamzn\\b"
+
+  - canonical: Target
+    category: Shopping
+    subcategory: Retail
+    aliases:
+      - regex: "(?i)\\btarget\\b(?!\\s*market)"
+
+  - canonical: Costco
+    category: Shopping
+    subcategory: Warehouse
+    aliases:
+      - regex: "(?i)\\bcostco\\b"
+
+  - canonical: Chick-fil-A
+    category: Food
+    subcategory: FastFood
+    aliases:
+      - regex: "(?i)chick[-\\s]?fil[-\\s]?a|\\bcfa\\b"
+
+  - canonical: Starbucks
+    category: Food
+    subcategory: Coffee
+    aliases:
+      - regex: "(?i)\\bstarbucks\\b|\\bsbux\\b"
+
+  - canonical: Whole Foods
+    category: Food
+    subcategory: Groceries
+    aliases:
+      - regex: "(?i)whole\\s?foods|\\bwfm\\b"
+
+  - canonical: Trader Joe's
+    category: Food
+    subcategory: Groceries
+    aliases:
+      - regex: "(?i)trader\\s?joe"
+
+  - canonical: Uber
+    category: Transport
+    subcategory: Rideshare
+    aliases:
+      - regex: "(?i)\\buber\\b(?!\\s*eats)"
+
+  - canonical: Uber Eats
+    category: Food
+    subcategory: Delivery
+    aliases:
+      - regex: "(?i)uber\\s?eats"
+
+  - canonical: Lyft
+    category: Transport
+    subcategory: Rideshare
+    aliases:
+      - regex: "(?i)\\blyft\\b"
+
+  - canonical: Shell
+    category: Transport
+    subcategory: Gas
+    aliases:
+      - regex: "(?i)\\bshell\\b\\s*(oil)?"
+
+  - canonical: Netflix
+    category: Subscriptions
+    subcategory: Streaming
+    aliases:
+      - regex: "(?i)netflix"
+
+  - canonical: Spotify
+    category: Subscriptions
+    subcategory: Streaming
+    aliases:
+      - regex: "(?i)spotify"
+
+  - canonical: Duke Energy
+    category: Utilities
+    subcategory: Electric
+    aliases:
+      - regex: "(?i)duke\\s?energy"
+
+  - canonical: Xfinity
+    category: Utilities
+    subcategory: InternetPhone
+    aliases:
+      - regex: "(?i)xfinity|comcast"
+
+  - canonical: Rocket Mortgage
+    category: Housing
+    subcategory: Mortgage
+    aliases:
+      - regex: "(?i)rocket\\s?mortgage|quicken\\s?loans"
+
+  - canonical: Delta Air Lines
+    category: Travel
+    subcategory: Airfare
+    aliases:
+      - regex: "(?i)delta\\s?air"

@@ -10,12 +10,16 @@ DATA = ROOT / "data"
 CONFIG = ROOT / "config"
 DASHBOARD = ROOT / "dashboard"
 
+UI = ROOT / "ui"
+
 RULES_PATH = CONFIG / "rules.yaml"
+MERCHANTS_PATH = CONFIG / "merchants.yaml"
 EXPECTED_RECURRING_PATH = CONFIG / "expected_recurring.yaml"
 PUBLISH_PATH = CONFIG / "publish.yaml"
 OLLAMA_PATH = CONFIG / "ollama.yaml"
 
 LEDGER_PARQUET = DATA / "ledger.parquet"
+LEDGER_LOCK = DATA / "ledger.lock"
 FINANCE_DB = DATA / "finance.duckdb"
 PROPOSALS_PARQUET = DATA / "proposals.parquet"
 RECURRING_PARQUET = DATA / "recurring.parquet"
