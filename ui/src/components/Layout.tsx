@@ -1,10 +1,11 @@
-import { NavLink, Outlet } from "react-router-dom";
+import type { ReactNode } from "react";
 
 import { canWrite } from "../lib/dataSource";
+import { hashHref, useHashPath } from "../lib/router";
 import { PipelineBar } from "./PipelineBar";
 
 const LINKS = [
-  { to: "/", label: "Overview", end: true },
+  { to: "/", label: "Overview" },
   { to: "/transactions", label: "Transactions" },
   { to: "/categories", label: "Categories" },
   { to: "/recurring", label: "Recurring" },
@@ -13,7 +14,8 @@ const LINKS = [
   { to: "/rules", label: "Rules", writeOnly: true },
 ];
 
-export function Layout() {
+export function Layout({ children }: { children: ReactNode }) {
+  const path = useHashPath();
   return (
     <div className="app">
       <header className="site-header">
@@ -23,9 +25,13 @@ export function Layout() {
         </div>
         <nav>
           {LINKS.filter((l) => canWrite || !l.writeOnly).map((link) => (
-            <NavLink key={link.to} to={link.to} end={link.end}>
+            <a
+              key={link.to}
+              href={hashHref(link.to)}
+              className={path === link.to ? "active" : undefined}
+            >
               {link.label}
-            </NavLink>
+            </a>
           ))}
         </nav>
       </header>
@@ -33,7 +39,7 @@ export function Layout() {
       {canWrite && <PipelineBar />}
 
       <main>
-        <Outlet />
+        {children}
       </main>
     </div>
   );

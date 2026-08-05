@@ -9,33 +9,67 @@ import duckdb
 import pandas as pd
 import yaml
 
+from src.atomic import (
+    atomic_build_file,
+    atomic_copy_file,
+    atomic_replace_directory,
+    atomic_write_csv,
+    atomic_write_parquet,
+    atomic_write_text,
+)
 from src.paths import (
     EXPORT_DIR,
     FINANCE_DB,
+    INGEST_MANIFEST,
     LEDGER_PARQUET,
     PUBLISH_PATH,
     RECONCILE_PARQUET,
     RECURRING_PARQUET,
+    TRANSACTION_SOURCES_PARQUET,
     ensure_dirs,
 )
 
 
 def write_ledger(ledger: pd.DataFrame, path: Path = LEDGER_PARQUET) -> Path:
     ensure_dirs()
-    ledger.to_parquet(path, index=False)
-    return path
+    if path.exists():
+        atomic_copy_file(path, path.with_suffix(path.suffix + ".bak"))
+    return atomic_write_parquet(ledger, path)
 
 
 def write_recurring(recurring: pd.DataFrame, path: Path = RECURRING_PARQUET) -> Path:
     ensure_dirs()
-    recurring.to_parquet(path, index=False)
-    return path
+    return atomic_write_parquet(recurring, path)
 
 
 def write_reconciliation(frame: pd.DataFrame, path: Path = RECONCILE_PARQUET) -> Path:
     ensure_dirs()
-    frame.to_parquet(path, index=False)
-    return path
+    return atomic_write_parquet(frame, path)
+
+
+def write_ingest_manifest(frame: pd.DataFrame, path: Path = INGEST_MANIFEST) -> Path:
+    ensure_dirs()
+    history = frame
+    if path.exists():
+        try:
+            history = pd.concat([pd.read_parquet(path), frame], ignore_index=True)
+        except Exception:  # noqa: BLE001 — a bad manifest must not block ledger recovery
+            history = frame
+    return atomic_write_parquet(history, path)
+
+
+def write_transaction_sources(
+    frame: pd.DataFrame, path: Path = TRANSACTION_SOURCES_PARQUET
+) -> Path:
+    """Append distinct source-document links without losing earlier provenance."""
+    ensure_dirs()
+    history = frame
+    if path.exists():
+        try:
+            history = pd.concat([pd.read_parquet(path), frame], ignore_index=True).drop_duplicates()
+        except Exception:  # noqa: BLE001 — recovery can reconstruct links from the inbox
+            history = frame
+    return atomic_write_parquet(history, path)
 
 
 def rebuild_duckdb(
@@ -45,47 +79,50 @@ def rebuild_duckdb(
     db_path: Path = FINANCE_DB,
 ) -> Path:
     ensure_dirs()
-    if db_path.exists():
-        db_path.unlink()
-    con = duckdb.connect(str(db_path))
-    con.register("ledger_df", ledger)
-    con.register("recurring_df", recurring)
-    con.register("reconciliation_df", reconciliation)
-    con.execute("CREATE TABLE ledger AS SELECT * FROM ledger_df")
-    con.execute("CREATE TABLE recurring AS SELECT * FROM recurring_df")
-    con.execute("CREATE TABLE reconciliation AS SELECT * FROM reconciliation_df")
-    con.execute(
-        """
-        CREATE TABLE category_monthly AS
-        SELECT
-          strftime(CAST(posted_date AS DATE), '%Y-%m') AS month,
-          COALESCE(category, 'Uncategorized') AS category,
-          COALESCE(subcategory, '') AS subcategory,
-          SUM(amount) AS total,
-          COUNT(*) AS txn_count
-        FROM ledger
-        WHERE amount > 0
-        GROUP BY 1, 2, 3
-        ORDER BY 1, 2
-        """
-    )
-    con.execute(
-        """
-        CREATE TABLE merchant_monthly AS
-        SELECT
-          strftime(CAST(posted_date AS DATE), '%Y-%m') AS month,
-          COALESCE(canonical_merchant, normalized_merchant) AS merchant,
-          canonical_merchant IS NOT NULL AS is_canonical,
-          SUM(amount) AS total,
-          COUNT(*) AS txn_count
-        FROM ledger
-        WHERE amount > 0
-        GROUP BY 1, 2, 3
-        ORDER BY 1, 4 DESC
-        """
-    )
-    con.close()
-    return db_path
+
+    def build(path: Path) -> None:
+        con = duckdb.connect(str(path))
+        try:
+            con.register("ledger_df", ledger)
+            con.register("recurring_df", recurring)
+            con.register("reconciliation_df", reconciliation)
+            con.execute("CREATE TABLE ledger AS SELECT * FROM ledger_df")
+            con.execute("CREATE TABLE recurring AS SELECT * FROM recurring_df")
+            con.execute("CREATE TABLE reconciliation AS SELECT * FROM reconciliation_df")
+            con.execute(
+                """
+                CREATE TABLE category_monthly AS
+                SELECT
+                  strftime(CAST(posted_date AS DATE), '%Y-%m') AS month,
+                  COALESCE(category, 'Uncategorized') AS category,
+                  COALESCE(subcategory, '') AS subcategory,
+                  SUM(amount) AS total,
+                  COUNT(*) AS txn_count
+                FROM ledger
+                WHERE amount > 0
+                GROUP BY 1, 2, 3
+                ORDER BY 1, 2
+                """
+            )
+            con.execute(
+                """
+                CREATE TABLE merchant_monthly AS
+                SELECT
+                  strftime(CAST(posted_date AS DATE), '%Y-%m') AS month,
+                  COALESCE(canonical_merchant, normalized_merchant) AS merchant,
+                  canonical_merchant IS NOT NULL AS is_canonical,
+                  SUM(amount) AS total,
+                  COUNT(*) AS txn_count
+                FROM ledger
+                WHERE amount > 0
+                GROUP BY 1, 2, 3
+                ORDER BY 1, 4 DESC
+                """
+            )
+        finally:
+            con.close()
+
+    return atomic_build_file(db_path, build)
 
 
 def export_for_dashboard(
@@ -93,13 +130,19 @@ def export_for_dashboard(
     recurring: pd.DataFrame,
     reconciliation: pd.DataFrame,
     publish_path: Path = PUBLISH_PATH,
+    export_dir: Path = EXPORT_DIR,
 ) -> Path:
     """Write JSON/CSV artifacts the static dashboard consumes."""
     ensure_dirs()
     mode = "aggregates_only"
+    include_merchant_names = False
     if publish_path.exists():
         with publish_path.open() as f:
-            mode = (yaml.safe_load(f) or {}).get("mode", mode)
+            config = yaml.safe_load(f) or {}
+            mode = config.get("mode", mode)
+            include_merchant_names = bool(config.get("include_merchant_names", False))
+    if mode not in {"aggregates_only", "full"}:
+        raise ValueError(f"Unsupported publish mode: {mode}")
 
     category_monthly = (
         ledger.assign(
@@ -131,16 +174,6 @@ def export_for_dashboard(
         | (ledger["classified_by"] == "ai")
     ].copy()
 
-    out = EXPORT_DIR
-    category_monthly.to_csv(out / "category_monthly.csv", index=False)
-    recurring.to_csv(out / "recurring.csv", index=False)
-    reconciliation.to_csv(out / "reconciliation.csv", index=False)
-    merchant_totals.to_csv(out / "merchants.csv", index=False)
-    category_monthly.to_json(out / "category_monthly.json", orient="records", date_format="iso")
-    recurring.to_json(out / "recurring.json", orient="records", date_format="iso")
-    reconciliation.to_json(out / "reconciliation.json", orient="records", date_format="iso")
-    merchant_totals.to_json(out / "merchants.json", orient="records", date_format="iso")
-
     summary = {
         "mode": mode,
         "txn_count": int(len(ledger)),
@@ -157,14 +190,39 @@ def export_for_dashboard(
         if not recurring.empty and "is_recurring" in recurring.columns
         else 0,
     }
-    (out / "summary.json").write_text(json.dumps(summary, indent=2))
+    recurring_export = recurring.copy()
+    reconciliation_export = reconciliation.copy()
+    if not include_merchant_names:
+        if "normalized_merchant" in recurring_export.columns:
+            recurring_export["normalized_merchant"] = "Private recurring charge"
+        if "matched_merchant" in reconciliation_export.columns:
+            reconciliation_export["matched_merchant"] = None
+        if "bill" in reconciliation_export.columns:
+            reconciliation_export["bill"] = "Expected recurring bill"
+    def write_json(frame: pd.DataFrame, target: Path) -> None:
+        target.write_text(frame.to_json(orient="records", date_format="iso"))
 
-    if mode == "full":
-        ledger.to_csv(out / "ledger.csv", index=False)
-        ledger.to_json(out / "ledger.json", orient="records", date_format="iso")
-        uncategorized.to_csv(out / "uncategorized.csv", index=False)
+    def build(out: Path) -> None:
+        # Aggregate exports are an allowlist. They intentionally contain no
+        # transaction-level descriptions, identifiers, or local source paths.
+        atomic_write_csv(category_monthly, out / "category_monthly.csv")
+        write_json(category_monthly, out / "category_monthly.json")
+        atomic_write_csv(recurring_export, out / "recurring.csv")
+        write_json(recurring_export, out / "recurring.json")
+        atomic_write_csv(reconciliation_export, out / "reconciliation.csv")
+        write_json(reconciliation_export, out / "reconciliation.json")
+        if include_merchant_names:
+            atomic_write_csv(merchant_totals, out / "merchants.csv")
+            write_json(merchant_totals, out / "merchants.json")
+        else:
+            atomic_write_text(out / "merchants.json", "[]")
+        atomic_write_text(out / "summary.json", json.dumps(summary, indent=2))
 
-    # Kept local for the watchlist page even in aggregates_only preview builds
-    uncategorized.to_json(out / "uncategorized.json", orient="records", date_format="iso")
+        if mode == "full":
+            published_ledger = ledger.drop(columns=["source_file", "source_document_id"], errors="ignore")
+            atomic_write_csv(published_ledger, out / "ledger.csv")
+            write_json(published_ledger, out / "ledger.json")
+            atomic_write_csv(uncategorized, out / "uncategorized.csv")
+            write_json(uncategorized, out / "uncategorized.json")
 
-    return out
+    return atomic_replace_directory(export_dir, build)

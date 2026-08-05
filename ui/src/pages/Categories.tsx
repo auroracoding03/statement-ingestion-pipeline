@@ -84,7 +84,7 @@ export function Categories() {
                 <XAxis dataKey="month" tick={{ fontSize: 12 }} />
                 <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => compactMoney(Number(v))} />
                 <Tooltip
-                  formatter={(value: number) => money(value)}
+                  formatter={(value) => money(Number(value))}
                   contentStyle={{ fontSize: 13, borderRadius: 4 }}
                 />
                 <Line

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .base import finalize
+from .base import coerce_amount, finalize
 
 
 def parse_chase_csv(path: Path, card: str) -> pd.DataFrame:
@@ -24,7 +24,7 @@ def parse_chase_csv(path: Path, card: str) -> pd.DataFrame:
         if pd.isna(desc) or str(desc).strip() == "":
             continue
         # Chase amounts: purchases are typically negative; flip so spend is positive.
-        amount = float(row["Amount"])
+        amount = coerce_amount(row["Amount"])
         if amount < 0:
             amount = abs(amount)
         elif str(row.get("Type", "")).lower() in {"payment", "return", "adjustment"}:

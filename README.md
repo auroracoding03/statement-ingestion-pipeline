@@ -2,7 +2,7 @@
 
 Local-first credit-card statement ingestion, merchant canonicalization, classification, recurring-bill detection, and a finance dashboard.
 
-Raw statements, `rules.yaml`, and `merchants.yaml` stay on your machine. The published dashboard is a thin read-only consumer of exported aggregates (optionally line items) and can go to Cloudflare Pages behind Access.
+Raw statements, `rules.yaml`, and `merchants.yaml` stay on your machine. The published dashboard is a thin read-only consumer of explicitly allowlisted aggregates (optionally line items) and can go to Cloudflare Pages behind Access.
 
 ## Quick start
 
@@ -67,9 +67,9 @@ Precedence, first match wins:
 
 ## Transaction ids
 
-`txn_id` = sha256(`card|posted_date|amount|raw_description|seq`)[:16].
+`txn_id` = sha256(`card|posted_date|amount|raw_description|occurrence`)[:16].
 
-It is deliberately hashed from the *immutable* source text rather than a derived merchant field, so retuning normalization or canonicalization never churns ids or breaks dedup. `seq` is a within-group ordinal, so two genuinely identical same-day purchases stay two rows while a re-imported file still collapses.
+It is deliberately hashed from immutable source text rather than a derived merchant field, so retuning normalization or canonicalization never churns ids. Each statement file is fingerprinted by SHA-256 and recorded in `data/ingestion_manifest.parquet`; `data/transaction_sources.parquet` records every document-to-transaction link. Identical files are skipped. For distinct, overlapping exports, transactions are reconciled as a multiset: two genuine identical purchases survive, but a second statement containing the same two purchases does not double-count them. If any statement fails validation, the full batch is rejected and the existing ledger remains untouched.
 
 Ledgers written before this change are upgraded automatically on load, or explicitly:
 
@@ -81,8 +81,10 @@ fin migrate-ids   # rewrites ids, keeps categories, backs up to ledger.parquet.b
 
 In `config/publish.yaml`:
 
-- `aggregates_only` (default) — category totals, recurring, reconciliation, and merchant totals leave the machine
+- `aggregates_only` (default) — category totals and redacted recurring/reconciliation aggregates leave the machine
 - `full` — also includes line-item `ledger.json`
+
+Aggregate builds are created in a clean staging directory and include only an allowlisted set of artifacts. They never include raw descriptions, transaction IDs, source paths, or the review queue. Merchant and expected-bill names are redacted by default; set `include_merchant_names: true` only for a trusted audience.
 
 The same React codebase produces both builds. `npm run build:static` emits a read-only bundle into `dashboard/dist` that reads `./data/*.json` instead of the API, with every write control hidden.
 
@@ -113,13 +115,14 @@ fixtures/                # sample CSVs
 
 ## Concurrency
 
-`ledger.parquet` is read-modify-write, so both the CLI and the API take a `filelock` on `data/ledger.lock` before mutating. A UI action and a CLI run can safely overlap.
+`ledger.parquet` is read-modify-write, so both the CLI and the API take a `filelock` on `data/ledger.lock` before mutating. Ledger, derived Parquet tables, generated exports, DuckDB rebuilds, and curated YAML files are written through staged atomic replacement. A failed parser or interrupted generated-data write therefore leaves the prior valid version available.
 
 ## Tests
 
 ```bash
-pytest                          # pipeline, merchants, API
-cd ui && npm run typecheck      # UI
+pytest                          # pipeline, parser, privacy, and API coverage
+cd ui && npm run typecheck && npm run build && npm run build:static
+cd ui && npm audit --audit-level=moderate
 ```
 
 Tests never touch the real `config/` — `tests/conftest.py` redirects config paths to a temp copy unless a test opts in with the `real_config` marker.

@@ -66,6 +66,19 @@ def detect_recurring(ledger: pd.DataFrame, min_occurrences: int = 2) -> pd.DataF
                 "subcategory": top_sub.iloc[0] if len(top_sub) else None,
             }
         )
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "normalized_merchant",
+                "occurrences",
+                "avg_amount",
+                "std_amount",
+                "median_gap_days",
+                "is_recurring",
+                "category",
+                "subcategory",
+            ]
+        )
     return pd.DataFrame(rows).sort_values(
         by=["is_recurring", "avg_amount"], ascending=[False, False]
     ).reset_index(drop=True)

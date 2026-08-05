@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 import re
-import shutil
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 
 from src import pipeline
 from src.ai_suggest import ollama_available
+from src.atomic import atomic_copy_stream
 from src.api import jobs
 from src.api.schemas import ClassifyRequest, MerchantIn, ReviewDecision, RuleIn
 from src.classify import append_rule, delete_rule, load_rules
@@ -153,9 +154,11 @@ async def post_upload(card: str = Query("generic"), files: list[UploadFile] = ()
         if not name.lower().endswith((".csv", ".pdf")):
             raise HTTPException(status_code=400, detail=f"Unsupported file type: {upload.filename}")
         target = dest_dir / name
-        with target.open("wb") as f:
-            shutil.copyfileobj(upload.file, f)
-        written.append(f"{safe_card}/{name}")
+        if target.exists():
+            original = Path(name)
+            target = dest_dir / f"{original.stem}-{uuid.uuid4().hex[:8]}{original.suffix}"
+        atomic_copy_stream(target, upload.file)
+        written.append(f"{safe_card}/{target.name}")
 
     return {"card": safe_card, "written": written}
 

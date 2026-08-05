@@ -316,7 +316,7 @@ def run_all(
 
 
 def _sync_dashboard_data(dest=None) -> None:
-    """Copy export artifacts next to whichever static bundle will serve them."""
+    """Copy the freshly allowlisted export set next to the static bundle."""
     import shutil
 
     from src.paths import DASHBOARD
@@ -328,6 +328,12 @@ def _sync_dashboard_data(dest=None) -> None:
 
     for target in targets:
         target.mkdir(parents=True, exist_ok=True)
+        # Generated data must not retain a stale full-mode ledger when the
+        # user switches back to aggregates-only publishing.
+        for stale in target.glob("*.json"):
+            stale.unlink()
+        for stale in target.glob("*.csv"):
+            stale.unlink()
         for path in EXPORT_DIR.glob("*"):
             if path.is_file():
                 shutil.copy2(path, target / path.name)

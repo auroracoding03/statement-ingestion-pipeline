@@ -1,6 +1,9 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = fileURLToPath(new URL(".", import.meta.url));
 
 // Two builds from one codebase:
 //   default  -> ui/dist, served by FastAPI, full read/write against /api
@@ -14,7 +17,7 @@ export default defineConfig(({ mode }) => {
       __DATA_MODE__: JSON.stringify(isStatic ? "static" : "live"),
     },
     build: {
-      outDir: isStatic ? resolve(__dirname, "../dashboard/dist") : resolve(__dirname, "dist"),
+      outDir: isStatic ? resolve(root, "../dashboard/dist") : resolve(root, "dist"),
       emptyOutDir: true,
     },
     server: {

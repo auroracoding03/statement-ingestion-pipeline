@@ -12,19 +12,22 @@ import pandas as pd
 from filelock import FileLock
 
 from src.ai_suggest import propose_canonicals_for_clusters, suggest
+from src.atomic import atomic_write_parquet
 from src.classify import classify as apply_rules
-from src.extract import extract_all
+from src.extract import ExtractionError, extract_statements
 from src.merchants import canonicalize, cluster_unknowns
 from src.migrate import migrate_ledger, needs_migration
-from src.normalize import CLASSIFICATION_COLUMNS, LEDGER_COLUMNS, normalize
+from src.normalize import CLASSIFICATION_COLUMNS, LEDGER_COLUMNS, normalize, transaction_sources
 from src.paths import INBOX, LEDGER_LOCK, LEDGER_PARQUET, PROPOSALS_PARQUET, ensure_dirs
 from src.recurring import detect_recurring, reconcile
 from src.store import (
     export_for_dashboard,
     rebuild_duckdb,
     write_ledger,
+    write_ingest_manifest,
     write_reconciliation,
     write_recurring,
+    write_transaction_sources,
 )
 
 ALL_COLUMNS = LEDGER_COLUMNS + CLASSIFICATION_COLUMNS
@@ -61,15 +64,26 @@ def _ensure_columns(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def run_ingest() -> dict:
-    """Extract, normalize, canonicalize, and merge into the ledger."""
+    """Extract, validate, normalize, and atomically refresh the ledger."""
     ensure_dirs()
-    raw = extract_all(INBOX)
+    try:
+        extraction = extract_statements(INBOX)
+    except ExtractionError as exc:
+        # The prior ledger deliberately survives a failed batch. Keep the
+        # manifest so the UI/CLI can explain exactly which document failed.
+        with ledger_lock():
+            write_ingest_manifest(exc.manifest)
+        return {"error": "Statement parsing failed; ledger was not changed.", "details": exc.errors}
+
+    raw = extraction.frame
     if raw.empty:
         return {"ingested": 0, "total": 0, "message": "No statement files found."}
 
     frame = normalize(raw)
+    source_links = transaction_sources(raw)
 
     with ledger_lock():
+        prior = pd.DataFrame(columns=ALL_COLUMNS)
         if LEDGER_PARQUET.exists():
             prior = load_ledger()
             carry = ["txn_id", *CLASSIFICATION_COLUMNS, "canonical_merchant", "merchant_source"]
@@ -81,8 +95,12 @@ def run_ingest() -> dict:
         frame = _ensure_columns(frame)
         frame = canonicalize(frame)
         path = write_ledger(frame)
+        write_ingest_manifest(extraction.manifest)
+        write_transaction_sources(source_links)
 
-    return {"ingested": len(frame), "total": len(frame), "path": str(path)}
+    prior_ids = set(prior.get("txn_id", pd.Series(dtype=str)).dropna())
+    new_count = int((~frame["txn_id"].isin(prior_ids)).sum())
+    return {"ingested": new_count, "total": len(frame), "path": str(path)}
 
 
 def run_classify(with_ai: bool = False) -> dict:
@@ -103,7 +121,7 @@ def run_classify(with_ai: bool = False) -> dict:
             classified = suggest(classified)
             proposals = classified[classified["classified_by"] == "ai"]
             if not proposals.empty:
-                proposals.to_parquet(PROPOSALS_PARQUET, index=False)
+                atomic_write_parquet(proposals, PROPOSALS_PARQUET)
 
         combined = pd.concat([locked_rows, classified], ignore_index=True)
         combined = combined.drop_duplicates(subset=["txn_id"], keep="first")

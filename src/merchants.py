@@ -12,8 +12,10 @@ from pathlib import Path
 
 import pandas as pd
 import yaml
+from filelock import FileLock
 from rapidfuzz import fuzz
 
+from src.atomic import atomic_write_text
 from src import paths
 
 MERCHANT_SOURCES = ("alias", "ai", "manual", "none")
@@ -33,8 +35,8 @@ def load_merchants(path: Path | None = None) -> dict:
 
 
 def save_merchants(doc: dict, path: Path | None = None) -> None:
-    with _path(path).open("w") as f:
-        yaml.safe_dump(doc, f, sort_keys=False, allow_unicode=True)
+    target = _path(path)
+    atomic_write_text(target, yaml.safe_dump(doc, sort_keys=False, allow_unicode=True))
 
 
 def _compile_merchants(doc: dict) -> list[dict]:
@@ -239,45 +241,49 @@ def append_merchant(
     Pass either explicit `aliases` ({regex|exact}) or raw `members` strings from a
     fuzzy cluster, which get compiled into a single alternation regex.
     """
-    doc = load_merchants(path)
-    entries = doc.setdefault("merchants", [])
+    target = _path(path)
+    with FileLock(f"{target}.lock"):
+        doc = load_merchants(target)
+        entries = doc.setdefault("merchants", [])
 
-    new_aliases: list[dict] = list(aliases or [])
-    if members:
-        new_aliases.append({"regex": alias_regex_for(members)})
-    if not new_aliases:
-        raise ValueError("append_merchant requires aliases or members")
+        new_aliases: list[dict] = list(aliases or [])
+        if members:
+            new_aliases.append({"regex": alias_regex_for(members)})
+        if not new_aliases:
+            raise ValueError("append_merchant requires aliases or members")
 
-    for entry in entries:
-        if str(entry.get("canonical", "")).lower() == canonical.lower():
-            existing = entry.setdefault("aliases", [])
-            for alias in new_aliases:
-                if alias not in existing:
-                    existing.append(alias)
-            if category:
-                entry["category"] = category
-            if subcategory:
-                entry["subcategory"] = subcategory
-            save_merchants(doc, path)
-            return entry
+        for entry in entries:
+            if str(entry.get("canonical", "")).lower() == canonical.lower():
+                existing = entry.setdefault("aliases", [])
+                for alias in new_aliases:
+                    if alias not in existing:
+                        existing.append(alias)
+                if category:
+                    entry["category"] = category
+                if subcategory:
+                    entry["subcategory"] = subcategory
+                save_merchants(doc, target)
+                return entry
 
-    entry = {"canonical": canonical}
-    if category:
-        entry["category"] = category
-    if subcategory:
-        entry["subcategory"] = subcategory
-    entry["aliases"] = new_aliases
-    entries.insert(0, entry)
-    save_merchants(doc, path)
-    return entry
+        entry = {"canonical": canonical}
+        if category:
+            entry["category"] = category
+        if subcategory:
+            entry["subcategory"] = subcategory
+        entry["aliases"] = new_aliases
+        entries.insert(0, entry)
+        save_merchants(doc, target)
+        return entry
 
 
 def delete_merchant(canonical: str, path: Path | None = None) -> bool:
-    doc = load_merchants(path)
-    entries = doc.get("merchants") or []
-    remaining = [e for e in entries if str(e.get("canonical", "")).lower() != canonical.lower()]
-    if len(remaining) == len(entries):
-        return False
-    doc["merchants"] = remaining
-    save_merchants(doc, path)
-    return True
+    target = _path(path)
+    with FileLock(f"{target}.lock"):
+        doc = load_merchants(target)
+        entries = doc.get("merchants") or []
+        remaining = [e for e in entries if str(e.get("canonical", "")).lower() != canonical.lower()]
+        if len(remaining) == len(entries):
+            return False
+        doc["merchants"] = remaining
+        save_merchants(doc, target)
+        return True

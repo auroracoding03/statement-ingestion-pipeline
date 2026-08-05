@@ -108,6 +108,7 @@ def workspace(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setattr(pipeline_mod, "LEDGER_LOCK", data / "ledger.lock", raising=False)
     monkeypatch.setattr(pipeline_mod, "PROPOSALS_PARQUET", data / "proposals.parquet", raising=False)
     monkeypatch.setattr(api_app, "INBOX", tmp_path / "inbox", raising=False)
+    monkeypatch.setattr(api_app, "ensure_dirs", lambda: None)
 
     original_write = store_mod.write_ledger
     monkeypatch.setattr(
@@ -241,3 +242,23 @@ def test_classify_job_runs_to_completion(client: TestClient):
 
 def test_unknown_job_is_404(client: TestClient):
     assert client.get("/api/jobs/nope").status_code == 404
+
+
+def test_upload_never_overwrites_an_existing_source_document(client: TestClient, workspace: dict):
+    payload = b"Date,Description,Amount\n2026-01-01,Coffee,10.00\n"
+    first = client.post(
+        "/api/upload?card=generic",
+        files=[("files", ("statement.csv", payload, "text/csv"))],
+    )
+    second = client.post(
+        "/api/upload?card=generic",
+        files=[("files", ("statement.csv", payload, "text/csv"))],
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_name = first.json()["written"][0]
+    second_name = second.json()["written"][0]
+    assert first_name != second_name
+    assert (workspace["root"] / "inbox" / first_name).exists()
+    assert (workspace["root"] / "inbox" / second_name).exists()
