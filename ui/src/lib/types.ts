@@ -1,0 +1,120 @@
+export type ClassifiedBy = "rule" | "merchant" | "ai" | "manual" | null;
+export type MerchantSource = "alias" | "ai" | "manual" | "none";
+
+export interface Transaction {
+  txn_id: string;
+  card: string;
+  posted_date: string;
+  amount: number;
+  raw_description: string;
+  normalized_merchant: string;
+  canonical_merchant: string | null;
+  merchant_source: MerchantSource;
+  proposed_canonical: string | null;
+  source_file: string;
+  category: string | null;
+  subcategory: string | null;
+  classified_by: ClassifiedBy;
+  proposed_category: string | null;
+  proposed_subcategory: string | null;
+}
+
+export interface Counts {
+  rule: number;
+  merchant: number;
+  ai: number;
+  manual: number;
+  open: number;
+  total: number;
+}
+
+export interface Status {
+  ledger_exists: boolean;
+  counts: Partial<Counts>;
+  canonical_merchants: number;
+  unknown_merchants: number;
+  review_pending: number;
+  inbox_files: { card: string; name: string }[];
+  duckdb: boolean;
+  exports: boolean;
+  ollama_available: boolean;
+}
+
+export interface RecurringRow {
+  normalized_merchant: string;
+  occurrences: number;
+  avg_amount: number;
+  std_amount: number;
+  median_gap_days: number | null;
+  is_recurring: boolean;
+  category: string | null;
+  subcategory: string | null;
+}
+
+export interface ReconciliationRow {
+  bill: string;
+  status: "matched" | "missing" | "amount_mismatch";
+  expected_amount: number | null;
+  matched_merchant: string | null;
+  matched_avg: number | null;
+  last_seen: string | null;
+}
+
+export interface CategoryMonthly {
+  month: string;
+  category: string;
+  total: number;
+  txn_count: number;
+}
+
+export interface Alias {
+  regex?: string;
+  exact?: string;
+}
+
+export interface Merchant {
+  canonical: string;
+  category: string | null;
+  subcategory: string | null;
+  aliases: Alias[];
+  txn_count: number;
+  total_amount: number;
+}
+
+export interface UnknownCluster {
+  cluster_id: string;
+  members: string[];
+  representative: string;
+  sample_raw: string;
+  txn_count: number;
+  total_amount: number;
+  proposed_canonical: string | null;
+}
+
+export interface Rule {
+  index: number;
+  match: { merchant_regex?: string; merchant_canonical?: string; merchant_exact?: string };
+  category: string;
+  subcategory: string;
+}
+
+export interface Job {
+  id: string;
+  kind: string;
+  status: "pending" | "running" | "done" | "error";
+  result: unknown;
+  error: string | null;
+}
+
+/** Returned when a stage is kicked off; poll /api/jobs/{job_id} for the result. */
+export interface JobStart {
+  job_id: string;
+  kind: string;
+  status: string;
+}
+
+export interface ReviewQueue {
+  total: number;
+  items: Transaction[];
+  categories: string[];
+}

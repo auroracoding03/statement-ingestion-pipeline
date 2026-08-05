@@ -1,4 +1,4 @@
-"""Typer CLI: fin ingest | classify | review | build | publish | status"""
+"""Typer CLI: fin ingest | classify | review | build | merchants | serve | publish"""
 
 from __future__ import annotations
 
@@ -7,21 +7,10 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from src.ai_suggest import suggest
-from src.classify import classify as apply_rules
-from src.extract import extract_all
-from src.normalize import normalize
-from src.paths import (
-    EXPORT_DIR,
-    FINANCE_DB,
-    INBOX,
-    LEDGER_PARQUET,
-    PROPOSALS_PARQUET,
-    ensure_dirs,
-)
-from src.recurring import detect_recurring, reconcile
-from src.review import review as review_loop
-from src.store import export_for_dashboard, rebuild_duckdb, write_ledger, write_reconciliation, write_recurring
+from src import pipeline
+from src.merchants import append_merchant, load_merchants
+from src.paths import EXPORT_DIR, FINANCE_DB, INBOX, LEDGER_PARQUET
+from src.store import write_ledger
 
 app = typer.Typer(
     name="fin",
@@ -29,152 +18,230 @@ app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
 )
+merchants_app = typer.Typer(help="Inspect and curate canonical merchant identities.")
+app.add_typer(merchants_app, name="merchants")
 console = Console()
 
 
-def _load_ledger() -> pd.DataFrame:
-    if not LEDGER_PARQUET.exists():
+def _require_ledger() -> pd.DataFrame:
+    ledger = pipeline.load_ledger()
+    if ledger.empty:
         console.print("[red]No ledger yet. Run: fin ingest && fin classify[/red]")
         raise typer.Exit(code=1)
-    return pd.read_parquet(LEDGER_PARQUET)
+    return ledger
+
+
+def _print_counts(counts: dict) -> None:
+    console.print(
+        "[green]Classified[/green] "
+        f"rule={counts.get('rule', 0)}  merchant={counts.get('merchant', 0)}  "
+        f"ai_proposed={counts.get('ai', 0)}  manual={counts.get('manual', 0)}  "
+        f"open={counts.get('open', 0)}  total={counts.get('total', 0)}"
+    )
 
 
 @app.command()
 def ingest() -> None:
-    """Extract + normalize + dedup inbox statements into the ledger skeleton."""
-    ensure_dirs()
-    raw = extract_all(INBOX)
-    if raw.empty:
-        console.print("[yellow]Nothing ingested.[/yellow]")
+    """Extract, normalize, canonicalize, and dedup inbox statements."""
+    result = pipeline.run_ingest()
+    if not result.get("ingested"):
+        console.print(f"[yellow]{result.get('message', 'Nothing ingested.')}[/yellow]")
         raise typer.Exit(code=1)
-    frame = normalize(raw)
-    # Preserve prior classifications when txn_id matches
-    if LEDGER_PARQUET.exists():
-        prior = pd.read_parquet(LEDGER_PARQUET)
-        keep_cols = [
-            "txn_id",
-            "category",
-            "subcategory",
-            "classified_by",
-            "proposed_category",
-            "proposed_subcategory",
-        ]
-        existing = [c for c in keep_cols if c in prior.columns]
-        if len(existing) > 1:
-            frame = frame.merge(prior[existing], on="txn_id", how="left")
-    else:
-        frame["category"] = None
-        frame["subcategory"] = None
-        frame["classified_by"] = None
-        frame["proposed_category"] = None
-        frame["proposed_subcategory"] = None
-
-    path = write_ledger(frame)
-    console.print(f"[green]Ingested {len(frame)} unique transactions → {path}[/green]")
+    console.print(f"[green]Ingested {result['ingested']} unique transactions → {result['path']}[/green]")
 
 
 @app.command()
 def classify(
-    with_ai: bool = typer.Option(False, "--with-ai", help="Ask Ollama to propose categories for the unclassified tail"),
+    with_ai: bool = typer.Option(
+        False, "--with-ai", help="Ask Ollama to propose categories for the unclassified tail"
+    ),
 ) -> None:
-    """Apply rules.yaml; optionally propose AI categories for leftovers."""
-    ensure_dirs()
-    ledger = _load_ledger()
-    # Re-apply rules to everything not manually locked
-    locked = ledger["classified_by"].isin(["manual"])
-    unlocked = ledger[~locked].copy()
-    locked_rows = ledger[locked].copy()
-
-    classified = apply_rules(unlocked)
-    if with_ai:
-        classified = suggest(classified)
-        if PROPOSALS_PARQUET.parent.exists():
-            proposals = classified[classified["classified_by"] == "ai"]
-            proposals.to_parquet(PROPOSALS_PARQUET, index=False)
-
-    combined = pd.concat([locked_rows, classified], ignore_index=True)
-    # Drop accidental dupes if any
-    combined = combined.drop_duplicates(subset=["txn_id"], keep="first")
-    write_ledger(combined)
-
-    by_rule = int((combined["classified_by"] == "rule").sum())
-    by_ai = int((combined["classified_by"] == "ai").sum())
-    by_manual = int((combined["classified_by"] == "manual").sum())
-    open_count = int(combined["classified_by"].isna().sum() + (combined["classified_by"] == "").sum())
-    console.print(
-        f"[green]Classified[/green] rule={by_rule}  ai_proposed={by_ai}  "
-        f"manual={by_manual}  open={open_count}  total={len(combined)}"
-    )
+    """Apply merchants.yaml + rules.yaml; optionally propose AI categories."""
+    result = pipeline.run_classify(with_ai=with_ai)
+    if "error" in result:
+        console.print(f"[red]{result['error']}[/red]")
+        raise typer.Exit(code=1)
+    _print_counts(result)
 
 
 @app.command()
 def review() -> None:
     """Interactively confirm unclassified / AI-proposed rows; write new rules."""
-    ledger = _load_ledger()
-    updated = review_loop(ledger)
-    write_ledger(updated)
+    from src.review import review as review_loop
+
+    with pipeline.ledger_lock():
+        ledger = _require_ledger()
+        updated = review_loop(ledger)
+        write_ledger(updated)
     console.print(f"[green]Ledger updated → {LEDGER_PARQUET}[/green]")
 
 
 @app.command()
 def build() -> None:
-    """Detect recurring bills, reconcile expected bills, rebuild DuckDB + dashboard exports."""
-    ledger = _load_ledger()
-    recurring = detect_recurring(ledger)
-    reconciliation = reconcile(ledger)
-    write_recurring(recurring)
-    write_reconciliation(reconciliation)
-    db = rebuild_duckdb(ledger, recurring, reconciliation)
-    export_dir = export_for_dashboard(ledger, recurring, reconciliation)
+    """Detect recurring bills, reconcile expected bills, rebuild DuckDB + exports."""
+    result = pipeline.run_build()
+    if "error" in result:
+        console.print(f"[red]{result['error']}[/red]")
+        raise typer.Exit(code=1)
 
-    # Copy exports into dashboard/static for local preview / CF publish
-    _sync_dashboard_data(export_dir)
+    _sync_dashboard_data()
+    console.print(f"[green]DuckDB[/green] → {result['duckdb']}")
+    console.print(f"[green]Exports[/green] → {result['export_dir']}")
+    console.print(f"[green]Recurring candidates[/green]: {result['recurring_count']}")
 
-    console.print(f"[green]DuckDB[/green] → {db}")
-    console.print(f"[green]Exports[/green] → {export_dir}")
-    console.print(f"[green]Recurring candidates[/green]: {int(recurring['is_recurring'].sum()) if not recurring.empty else 0}")
-
-    if not reconciliation.empty:
+    rows = result.get("reconciliation") or []
+    if rows:
         table = Table(title="Expected bill reconciliation")
-        for col in reconciliation.columns:
+        for col in rows[0]:
             table.add_column(col)
-        for _, row in reconciliation.iterrows():
+        for row in rows:
             cells = []
-            for c in reconciliation.columns:
-                val = row[c]
-                if val is None or (isinstance(val, float) and pd.isna(val)) or pd.isna(val):
-                    cells.append("")
-                else:
-                    cells.append(str(val))
+            for col in rows[0]:
+                val = row.get(col)
+                cells.append("" if val is None or pd.isna(val) else str(val))
             table.add_row(*cells)
         console.print(table)
+
+
+@app.command("migrate-ids")
+def migrate_ids() -> None:
+    """Rebuild txn_ids from immutable source fields (one-shot upgrade)."""
+    from src.migrate import migrate_file
+
+    with pipeline.ledger_lock():
+        count, changed = migrate_file()
+    if count == 0:
+        console.print("[yellow]No ledger to migrate.[/yellow]")
+        return
+    if changed:
+        console.print(f"[green]Migrated {count} transactions[/green] (backup at ledger.parquet.bak)")
+    else:
+        console.print(f"[green]Ledger already current[/green] ({count} transactions)")
+
+
+@merchants_app.command("list")
+def merchants_list() -> None:
+    """Show curated canonical merchants and their alias counts."""
+    entries = load_merchants().get("merchants") or []
+    if not entries:
+        console.print("[yellow]No canonical merchants defined.[/yellow]")
+        return
+    table = Table(title=f"Canonical merchants ({len(entries)})")
+    table.add_column("Canonical")
+    table.add_column("Category")
+    table.add_column("Aliases", justify="right")
+    for entry in entries:
+        category = "/".join(filter(None, [entry.get("category"), entry.get("subcategory")]))
+        table.add_row(entry.get("canonical", ""), category or "—", str(len(entry.get("aliases") or [])))
+    console.print(table)
+
+
+@merchants_app.command("unknown")
+def merchants_unknown(
+    threshold: int = typer.Option(88, help="Fuzzy match threshold (0-100)"),
+    with_ai: bool = typer.Option(False, "--with-ai", help="Ask Ollama to propose brand names"),
+) -> None:
+    """List fuzzy clusters of merchants with no canonical identity."""
+    clusters = pipeline.unknown_merchant_clusters(threshold=threshold, with_ai=with_ai)
+    if not clusters:
+        console.print("[green]Every merchant has a canonical identity.[/green]")
+        return
+    table = Table(title=f"Unknown merchant clusters ({len(clusters)})")
+    table.add_column("Representative")
+    table.add_column("Variants", justify="right")
+    table.add_column("Txns", justify="right")
+    table.add_column("Total", justify="right")
+    table.add_column("AI proposal")
+    for cluster in clusters:
+        table.add_row(
+            cluster["representative"],
+            str(len(cluster["members"])),
+            str(cluster["txn_count"]),
+            f"{cluster['total_amount']:.2f}",
+            cluster.get("proposed_canonical") or "—",
+        )
+    console.print(table)
+
+
+@merchants_app.command("add")
+def merchants_add(
+    canonical: str = typer.Argument(..., help="Canonical brand name, e.g. Walmart"),
+    member: list[str] = typer.Option(
+        [], "--member", "-m", help="Normalized merchant variant to fold in (repeatable)"
+    ),
+    regex: str = typer.Option(None, "--regex", help="Explicit alias regex"),
+    category: str = typer.Option(None, "--category"),
+    subcategory: str = typer.Option(None, "--subcategory"),
+) -> None:
+    """Create or extend a canonical merchant, then restamp the ledger."""
+    if not member and not regex:
+        console.print("[red]Provide at least one --member or --regex.[/red]")
+        raise typer.Exit(code=1)
+
+    append_merchant(
+        canonical=canonical,
+        aliases=[{"regex": regex}] if regex else None,
+        members=list(member) or None,
+        category=category,
+        subcategory=subcategory,
+    )
+    result = pipeline.recanonicalize()
+    console.print(
+        f"[green]Saved[/green] {canonical} → {result.get('canonical', 0)}/{result.get('updated', 0)} "
+        "ledger rows now canonical"
+    )
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", help="Bind address (localhost only by default)"),
+    port: int = typer.Option(8787, help="Port"),
+    reload: bool = typer.Option(False, "--reload", help="Auto-reload on code changes"),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the UI in a browser"),
+) -> None:
+    """Run the local API + UI server."""
+    import threading
+    import webbrowser
+
+    import uvicorn
+
+    url = f"http://{host}:{port}"
+    console.print(f"[green]Serving[/green] {url}")
+    if open_browser and not reload:
+        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+
+    uvicorn.run("src.api.app:app", host=host, port=port, reload=reload, log_level="info")
 
 
 @app.command()
 def publish(
     dry_run: bool = typer.Option(False, "--dry-run", help="Build dashboard assets only; do not deploy"),
 ) -> None:
-    """Build static dashboard assets; optionally deploy via wrangler pages."""
+    """Build the static dashboard; optionally deploy via wrangler pages."""
     import shutil
     import subprocess
-    from src.paths import DASHBOARD, PUBLISH_PATH
+
     import yaml
+
+    from src.paths import DASHBOARD, PUBLISH_PATH
 
     if not LEDGER_PARQUET.exists():
         console.print("[red]Run fin build first.[/red]")
         raise typer.Exit(code=1)
 
-    # Ensure latest exports
     build()
 
     dashboard_build = DASHBOARD / "dist"
-    if dashboard_build.exists():
-        shutil.rmtree(dashboard_build)
-    shutil.copytree(DASHBOARD / "public", dashboard_build)
-    # data already synced into public/data by build()
+    if not dashboard_build.exists():
+        console.print(
+            "[yellow]No UI build found.[/yellow] Falling back to the plain static pages.\n"
+            "For the React dashboard run: cd ui && npm install && npm run build:static"
+        )
+        shutil.copytree(DASHBOARD / "public", dashboard_build)
+    else:
+        _sync_dashboard_data(dashboard_build / "data")
 
     console.print(f"[green]Static site ready[/green] → {dashboard_build}")
-
     if dry_run:
         console.print("[dim]Dry run — skipping Cloudflare deploy.[/dim]")
         return
@@ -201,7 +268,6 @@ def publish(
 @app.command()
 def status() -> None:
     """Show ledger / inbox / classification summary."""
-    ensure_dirs()
     from src.extract import iter_statement_files
 
     files = iter_statement_files(INBOX)
@@ -211,20 +277,26 @@ def status() -> None:
     if len(files) > 20:
         console.print(f"  … and {len(files) - 20} more")
 
-    if not LEDGER_PARQUET.exists():
+    ledger = pipeline.load_ledger()
+    if ledger.empty:
         console.print("Ledger: (none)")
         return
 
-    ledger = pd.read_parquet(LEDGER_PARQUET)
+    counts = pipeline.classification_counts(ledger)
     table = Table(title="Ledger status")
     table.add_column("Metric")
     table.add_column("Value", justify="right")
-    table.add_row("Transactions", str(len(ledger)))
-    table.add_row("Rule classified", str(int((ledger.get("classified_by") == "rule").sum())))
-    table.add_row("AI proposed", str(int((ledger.get("classified_by") == "ai").sum())))
-    table.add_row("Manual", str(int((ledger.get("classified_by") == "manual").sum())))
-    open_n = int(ledger["classified_by"].isna().sum()) if "classified_by" in ledger.columns else 0
-    table.add_row("Open", str(open_n))
+    table.add_row("Transactions", str(counts["total"]))
+    table.add_row("Rule classified", str(counts["rule"]))
+    table.add_row("Merchant default", str(counts["merchant"]))
+    table.add_row("AI proposed", str(counts["ai"]))
+    table.add_row("Manual", str(counts["manual"]))
+    table.add_row("Open", str(counts["open"]))
+    table.add_row("Canonical merchants", str(int(ledger["canonical_merchant"].notna().sum())))
+    table.add_row(
+        "Unknown merchants",
+        str(int(ledger.loc[ledger["canonical_merchant"].isna(), "normalized_merchant"].nunique())),
+    )
     table.add_row("DuckDB", "yes" if FINANCE_DB.exists() else "no")
     table.add_row("Exports", "yes" if EXPORT_DIR.exists() else "no")
     console.print(table)
@@ -243,15 +315,22 @@ def run_all(
     build()
 
 
-def _sync_dashboard_data(export_dir) -> None:
+def _sync_dashboard_data(dest=None) -> None:
+    """Copy export artifacts next to whichever static bundle will serve them."""
     import shutil
+
     from src.paths import DASHBOARD
 
-    dest = DASHBOARD / "public" / "data"
-    dest.mkdir(parents=True, exist_ok=True)
-    for path in export_dir.glob("*"):
-        if path.is_file():
-            shutil.copy2(path, dest / path.name)
+    targets = [dest] if dest is not None else [DASHBOARD / "public" / "data"]
+    dist_data = DASHBOARD / "dist" / "data"
+    if dest is None and (DASHBOARD / "dist").exists():
+        targets.append(dist_data)
+
+    for target in targets:
+        target.mkdir(parents=True, exist_ok=True)
+        for path in EXPORT_DIR.glob("*"):
+            if path.is_file():
+                shutil.copy2(path, target / path.name)
 
 
 if __name__ == "__main__":

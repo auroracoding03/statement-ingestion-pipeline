@@ -69,6 +69,21 @@ def rebuild_duckdb(
         ORDER BY 1, 2
         """
     )
+    con.execute(
+        """
+        CREATE TABLE merchant_monthly AS
+        SELECT
+          strftime(CAST(posted_date AS DATE), '%Y-%m') AS month,
+          COALESCE(canonical_merchant, normalized_merchant) AS merchant,
+          canonical_merchant IS NOT NULL AS is_canonical,
+          SUM(amount) AS total,
+          COUNT(*) AS txn_count
+        FROM ledger
+        WHERE amount > 0
+        GROUP BY 1, 2, 3
+        ORDER BY 1, 4 DESC
+        """
+    )
     con.close()
     return db_path
 
@@ -98,6 +113,17 @@ def export_for_dashboard(
         .sort_values(["month", "category"])
     )
 
+    merchant_totals = (
+        ledger.assign(
+            merchant=lambda d: d["canonical_merchant"].fillna(d["normalized_merchant"]),
+            canonical=lambda d: d["canonical_merchant"].notna(),
+        )
+        .loc[lambda d: d["amount"] > 0]
+        .groupby(["merchant", "canonical"], as_index=False)
+        .agg(total=("amount", "sum"), txn_count=("amount", "count"))
+        .sort_values("total", ascending=False)
+    )
+
     uncategorized = ledger[
         ledger["classified_by"].isna()
         | (ledger["category"].isna())
@@ -109,27 +135,36 @@ def export_for_dashboard(
     category_monthly.to_csv(out / "category_monthly.csv", index=False)
     recurring.to_csv(out / "recurring.csv", index=False)
     reconciliation.to_csv(out / "reconciliation.csv", index=False)
+    merchant_totals.to_csv(out / "merchants.csv", index=False)
     category_monthly.to_json(out / "category_monthly.json", orient="records", date_format="iso")
     recurring.to_json(out / "recurring.json", orient="records", date_format="iso")
     reconciliation.to_json(out / "reconciliation.json", orient="records", date_format="iso")
+    merchant_totals.to_json(out / "merchants.json", orient="records", date_format="iso")
+
+    summary = {
+        "mode": mode,
+        "txn_count": int(len(ledger)),
+        "uncategorized_count": int(len(uncategorized)),
+        "canonical_count": int(ledger["canonical_merchant"].notna().sum())
+        if "canonical_merchant" in ledger.columns
+        else 0,
+        "unknown_merchant_count": int(
+            ledger.loc[ledger["canonical_merchant"].isna(), "normalized_merchant"].nunique()
+        )
+        if "canonical_merchant" in ledger.columns
+        else 0,
+        "recurring_count": int(recurring["is_recurring"].sum())
+        if not recurring.empty and "is_recurring" in recurring.columns
+        else 0,
+    }
+    (out / "summary.json").write_text(json.dumps(summary, indent=2))
 
     if mode == "full":
         ledger.to_csv(out / "ledger.csv", index=False)
         ledger.to_json(out / "ledger.json", orient="records", date_format="iso")
         uncategorized.to_csv(out / "uncategorized.csv", index=False)
-        uncategorized.to_json(out / "uncategorized.json", orient="records", date_format="iso")
-    else:
-        # aggregates_only: publish only a count of uncategorized, not line items
-        summary = {
-            "mode": mode,
-            "txn_count": int(len(ledger)),
-            "uncategorized_count": int(len(uncategorized)),
-            "recurring_count": int(len(recurring[recurring.get("is_recurring") == True]))  # noqa: E712
-            if not recurring.empty and "is_recurring" in recurring.columns
-            else 0,
-        }
-        (out / "summary.json").write_text(json.dumps(summary, indent=2))
-        # Still export uncategorized locally for the watchlist page when building full local preview
-        uncategorized.to_json(out / "uncategorized.json", orient="records", date_format="iso")
+
+    # Kept local for the watchlist page even in aggregates_only preview builds
+    uncategorized.to_json(out / "uncategorized.json", orient="records", date_format="iso")
 
     return out

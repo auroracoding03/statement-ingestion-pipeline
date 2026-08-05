@@ -20,6 +20,12 @@ data/**
 .env.*
 !.env.example
 
+# UI (source is tracked; build output is not)
+ui/node_modules/
+ui/dist/
+ui/tsconfig.tsbuildinfo
+ui/*.tsbuildinfo
+
 # Node / dashboard
 dashboard/node_modules/
 dashboard/.evidence/

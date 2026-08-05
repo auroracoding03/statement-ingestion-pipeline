@@ -1,9 +1,12 @@
 from pathlib import Path
 
 import pandas as pd
+import pytest
+import yaml
 
-from src.normalize import make_txn_id, normalize, normalize_merchant
 from src.classify import classify
+from src.migrate import migrate_ledger, needs_migration
+from src.normalize import make_txn_id, normalize, normalize_merchant
 from src.recurring import detect_recurring
 
 
@@ -13,13 +16,99 @@ def test_normalize_merchant_strips_noise():
 
 
 def test_txn_id_stable():
-    a = make_txn_id("chase", "2026-01-06", 12.47, "CHICK FIL A")
-    b = make_txn_id("chase", "2026-01-06", 12.47, "CHICK FIL A")
+    a = make_txn_id("chase", "2026-01-06", 12.47, "CHICK-FIL-A #1 ATLANTA GA")
+    b = make_txn_id("chase", "2026-01-06", 12.47, "CHICK-FIL-A #1 ATLANTA GA")
     assert a == b
     assert len(a) == 16
 
 
+def test_txn_id_survives_normalization_changes(monkeypatch):
+    """The whole point of hashing raw text: retuning normalization must not churn ids."""
+    raw = pd.DataFrame(
+        [
+            {
+                "posted_date": "2026-01-06",
+                "amount": 12.47,
+                "raw_description": "CHICK-FIL-A #01234 ATLANTA GA",
+                "card": "chase",
+                "source_file": "x.csv",
+            }
+        ]
+    )
+    before = normalize(raw)["txn_id"].tolist()
+
+    monkeypatch.setattr("src.normalize.normalize_merchant", lambda s: "COMPLETELY DIFFERENT")
+    after = normalize(raw)["txn_id"].tolist()
+
+    assert before == after
+
+
+def test_identical_repeat_purchases_are_not_deduped():
+    """Two identical same-day purchases are distinct transactions, not a re-import."""
+    raw = pd.DataFrame(
+        [
+            {
+                "posted_date": "2026-01-06",
+                "amount": 4.25,
+                "raw_description": "COFFEE CART",
+                "card": "chase",
+                "source_file": "x.csv",
+            }
+        ]
+        * 2
+    )
+    out = normalize(raw)
+    assert len(out) == 2
+    assert out["txn_id"].nunique() == 2
+
+
+def test_reimport_of_same_file_dedupes():
+    row = {
+        "posted_date": "2026-01-06",
+        "amount": 4.25,
+        "raw_description": "COFFEE CART",
+        "card": "chase",
+        "source_file": "x.csv",
+    }
+    first = normalize(pd.DataFrame([row]))
+    second = normalize(pd.DataFrame([row]))
+    assert first["txn_id"].tolist() == second["txn_id"].tolist()
+
+
+def test_normalize_emits_merchant_columns():
+    raw = pd.DataFrame(
+        [
+            {
+                "posted_date": "2026-01-06",
+                "amount": 12.47,
+                "raw_description": "WAL-MART #1234",
+                "card": "chase",
+                "source_file": "x.csv",
+            }
+        ]
+    )
+    out = normalize(raw)
+    for column in ("canonical_merchant", "merchant_source", "proposed_canonical"):
+        assert column in out.columns
+    assert out.iloc[0]["merchant_source"] == "none"
+
+
 def test_classify_applies_rules(tmp_path: Path):
+    rules = tmp_path / "rules.yaml"
+    rules.write_text(
+        yaml.safe_dump(
+            {
+                "categories": ["Food"],
+                "rules": [
+                    {
+                        "match": {"merchant_regex": "(?i)chick[- ]?fil[- ]?a"},
+                        "category": "Food",
+                        "subcategory": "FastFood",
+                    }
+                ],
+            }
+        )
+    )
     frame = pd.DataFrame(
         [
             {
@@ -29,6 +118,7 @@ def test_classify_applies_rules(tmp_path: Path):
                 "amount": 12.47,
                 "raw_description": "CHICK-FIL-A #1",
                 "normalized_merchant": "CHICK-FIL-A",
+                "canonical_merchant": None,
                 "source_file": "x",
             },
             {
@@ -38,11 +128,12 @@ def test_classify_applies_rules(tmp_path: Path):
                 "amount": 6.75,
                 "raw_description": "LOCAL COFFEE ROASTERS",
                 "normalized_merchant": "LOCAL COFFEE ROASTERS",
+                "canonical_merchant": None,
                 "source_file": "x",
             },
         ]
     )
-    out = classify(frame)
+    out = classify(frame, rules_path=rules)
     chick = out[out["txn_id"] == "a"].iloc[0]
     assert chick["category"] == "Food"
     assert chick["classified_by"] == "rule"
@@ -66,7 +157,6 @@ def test_detect_recurring_flags_monthly():
                 "source_file": "x",
             }
         )
-    # one-off
     rows.append(
         {
             "txn_id": "once",
@@ -83,3 +173,35 @@ def test_detect_recurring_flags_monthly():
     recurring = detect_recurring(pd.DataFrame(rows), min_occurrences=2)
     rocket = recurring[recurring["normalized_merchant"] == "ROCKET MORTGAGE AUTOPAY"].iloc[0]
     assert bool(rocket["is_recurring"]) is True
+
+
+def test_migrate_ledger_rebuilds_ids_and_keeps_categories():
+    legacy = pd.DataFrame(
+        [
+            {
+                "txn_id": "stale-id",
+                "card": "chase",
+                "posted_date": "2026-01-06",
+                "amount": 12.47,
+                "raw_description": "CHICK-FIL-A #01234",
+                "normalized_merchant": "CHICK-FIL-A",
+                "source_file": "x.csv",
+                "category": "Food",
+                "subcategory": "FastFood",
+                "classified_by": "manual",
+            }
+        ]
+    )
+    assert needs_migration(legacy) is True
+
+    migrated = migrate_ledger(legacy)
+    assert migrated.iloc[0]["txn_id"] != "stale-id"
+    assert migrated.iloc[0]["category"] == "Food"
+    assert migrated.iloc[0]["classified_by"] == "manual"
+    assert "canonical_merchant" in migrated.columns
+    assert needs_migration(migrated) is False
+
+
+@pytest.mark.parametrize("frame", [pd.DataFrame(), pd.DataFrame(columns=["txn_id"])])
+def test_migrate_handles_empty(frame: pd.DataFrame):
+    assert needs_migration(frame) is False
