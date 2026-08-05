@@ -1,0 +1,69 @@
+# Ordered classification rules. First match wins.
+# AI suggestions never write here — only human-confirmed review entries do.
+
+categories:
+  - Housing
+  - Utilities
+  - Food
+  - Travel
+  - Entertainment
+  - Shopping
+  - Health
+  - Transport
+  - Subscriptions
+  - Personal
+  - Transfers
+  - Fees
+  - Income
+  - Uncategorized
+
+rules:
+  - match:
+      merchant_regex: "(?i)chick[- ]?fil[- ]?a|mcdonald'?s|wendy'?s|taco bell|chipotle|starbucks|dunkin"
+    category: Food
+    subcategory: FastFood
+
+  - match:
+      merchant_regex: "(?i)\\b(uber|lyft)\\b"
+    category: Transport
+    subcategory: Rideshare
+
+  - match:
+      merchant_regex: "(?i)shell|exxon|chevron|bp\\b|circle k|speedway|costco gas"
+    category: Transport
+    subcategory: Gas
+
+  - match:
+      merchant_regex: "(?i)netflix|spotify|hulu|disney\\+|apple\\.com/bill|youtube premium|amazon prime"
+    category: Subscriptions
+    subcategory: Streaming
+
+  - match:
+      merchant_regex: "(?i)amazon\\.com|amzn|walmart|target|costco"
+    category: Shopping
+    subcategory: Retail
+
+  - match:
+      merchant_regex: "(?i)duke energy|dominion|pg&e|coned|florida power|fpl|georgia power"
+    category: Utilities
+    subcategory: Electric
+
+  - match:
+      merchant_regex: "(?i)comcast|xfinity|verizon|at&t|t-mobile|spectrum"
+    category: Utilities
+    subcategory: InternetPhone
+
+  - match:
+      merchant_regex: "(?i)mortgage|wells fargo home|rocket mortgage|quicken loans|pennymac"
+    category: Housing
+    subcategory: Mortgage
+
+  - match:
+      merchant_regex: "(?i)payment thank you|autopay|online payment|credit card payment"
+    category: Transfers
+    subcategory: CardPayment
+
+  - match:
+      merchant_regex: "(?i)interest charge|late fee|annual fee|foreign transaction fee"
+    category: Fees
+    subcategory: CardFee

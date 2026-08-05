@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Categories — Finance Ledger</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="brand">Finance Ledger</div>
+    <nav>
+      <a href="./index.html">Overview</a>
+      <a href="./recurring.html">Recurring</a>
+      <a href="./categories.html" aria-current="page">Categories</a>
+      <a href="./uncategorized.html">Uncategorized</a>
+    </nav>
+  </header>
+  <main>
+    <section class="hero">
+      <h1>Spend by category</h1>
+      <p class="lede">Monthly totals derived from the canonical ledger.</p>
+    </section>
+    <section>
+      <div class="table-wrap">
+        <table id="cat-table">
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th>Category</th>
+              <th>Subcategory</th>
+              <th>Total</th>
+              <th>Txns</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script type="module">
+    import { loadJSON, money } from "./app.js";
+    const rows = await loadJSON("./data/category_monthly.json").catch(() => []);
+    const tbody = document.querySelector("#cat-table tbody");
+    for (const row of rows) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${row.month ?? ""}</td>
+        <td>${row.category ?? ""}</td>
+        <td>${row.subcategory ?? ""}</td>
+        <td>${money(row.total)}</td>
+        <td>${row.txn_count ?? ""}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+  </script>
+</body>
+</html>

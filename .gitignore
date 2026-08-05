@@ -1,0 +1,36 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+
+# Local data (immutable inputs + derived outputs)
+inbox/**
+!inbox/.gitkeep
+data/**
+!data/.gitkeep
+
+# Secrets / local overrides
+.env
+.env.*
+!.env.example
+
+# Node / dashboard
+dashboard/node_modules/
+dashboard/.evidence/
+dashboard/build/
+dashboard/dist/
+dashboard/static/
+dashboard/public/data/**
+!dashboard/public/data/.gitkeep
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

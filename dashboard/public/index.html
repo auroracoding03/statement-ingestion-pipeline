@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Finance Ledger</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="brand">Finance Ledger</div>
+    <nav>
+      <a href="./index.html" aria-current="page">Overview</a>
+      <a href="./recurring.html">Recurring</a>
+      <a href="./categories.html">Categories</a>
+      <a href="./uncategorized.html">Uncategorized</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h1>Monthly finance overview</h1>
+      <p class="lede">Recurring bills, category spend, and classification coverage from your local ledger.</p>
+    </section>
+
+    <section class="metrics" id="metrics">
+      <article><span class="label">Transactions</span><strong id="txn-count">—</strong></article>
+      <article><span class="label">Uncategorized</span><strong id="uncat-count">—</strong></article>
+      <article><span class="label">Recurring</span><strong id="recurring-count">—</strong></article>
+      <article><span class="label">Publish mode</span><strong id="publish-mode">—</strong></article>
+    </section>
+
+    <section>
+      <h2>Expected bill reconciliation</h2>
+      <div class="table-wrap">
+        <table id="recon-table">
+          <thead>
+            <tr>
+              <th>Bill</th>
+              <th>Status</th>
+              <th>Expected</th>
+              <th>Matched merchant</th>
+              <th>Avg</th>
+              <th>Last seen</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="./app.js"></script>
+  <script type="module">
+    import { loadJSON, money } from "./app.js";
+
+    const summary = await loadJSON("./data/summary.json").catch(() => null);
+    const recon = await loadJSON("./data/reconciliation.json").catch(() => []);
+    const recurring = await loadJSON("./data/recurring.json").catch(() => []);
+
+    document.getElementById("txn-count").textContent = summary?.txn_count ?? "—";
+    document.getElementById("uncat-count").textContent = summary?.uncategorized_count ?? "—";
+    document.getElementById("recurring-count").textContent =
+      summary?.recurring_count ?? recurring.filter((r) => r.is_recurring).length;
+    document.getElementById("publish-mode").textContent = summary?.mode ?? "full";
+
+    const tbody = document.querySelector("#recon-table tbody");
+    for (const row of recon) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${row.bill ?? ""}</td>
+        <td><span class="status status-${row.status}">${row.status ?? ""}</span></td>
+        <td>${row.expected_amount != null ? money(row.expected_amount) : "—"}</td>
+        <td>${row.matched_merchant ?? "—"}</td>
+        <td>${row.matched_avg != null ? money(row.matched_avg) : "—"}</td>
+        <td>${row.last_seen ?? "—"}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+  </script>
+</body>
+</html>

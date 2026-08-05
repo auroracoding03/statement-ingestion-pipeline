@@ -1,0 +1,1 @@
+"""Statement ingestion pipeline package."""
