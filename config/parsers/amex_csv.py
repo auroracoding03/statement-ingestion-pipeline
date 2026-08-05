@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .base import finalize
+from .base import coerce_amount, finalize
 
 
 def parse_amex_csv(path: Path, card: str) -> pd.DataFrame:
@@ -23,7 +23,7 @@ def parse_amex_csv(path: Path, card: str) -> pd.DataFrame:
         desc = row[desc_col]
         if pd.isna(desc) or str(desc).strip() == "":
             continue
-        amount = float(str(row[amount_col]).replace(",", ""))
+        amount = coerce_amount(row[amount_col])
         # Amex: charges positive; payments often negative — keep spend positive.
         if amount < 0:
             # payment / credit

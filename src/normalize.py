@@ -27,6 +27,8 @@ LEDGER_COLUMNS = [
     "merchant_source",
     "proposed_canonical",
     "source_file",
+    "source_document_id",
+    "source_occurrence",
 ]
 
 CLASSIFICATION_COLUMNS = [
@@ -75,31 +77,77 @@ def empty_ledger() -> pd.DataFrame:
     return pd.DataFrame(columns=LEDGER_COLUMNS)
 
 
-def normalize(raw: pd.DataFrame) -> pd.DataFrame:
-    if raw.empty:
-        return empty_ledger()
+IDENTITY_COLUMNS = ["card", "posted_date", "amount", "raw_description"]
 
+
+def _with_transaction_occurrences(raw: pd.DataFrame) -> pd.DataFrame:
+    """Assign deterministic ids while reconciling overlapping documents.
+
+    Identical transaction fingerprints are reconciled as a multiset. Each
+    document may contribute its first, second, etc. occurrence of a fingerprint;
+    the ledger keeps one row for each occurrence number across all documents.
+    Thus repeated real purchases within one statement survive, while an
+    overlapping export containing the same occurrences does not double-count.
+    """
     frame = raw.copy()
     frame["raw_description"] = frame["raw_description"].astype(str).str.strip()
-    frame["normalized_merchant"] = frame["raw_description"].map(normalize_merchant)
+    if frame["amount"].isna().any():
+        raise ValueError("Cannot normalize a transaction with a missing amount")
+    if "source_document_id" not in frame.columns:
+        frame["source_document_id"] = None
+    if "source_file" not in frame.columns:
+        frame["source_file"] = ""
+    if "source_row" not in frame.columns:
+        frame["source_row"] = range(len(frame))
 
-    # Ordinal within each identical (card, date, amount, description) group so that
-    # true repeat purchases survive dedup while re-imports still collapse.
-    frame["_seq"] = frame.groupby(
-        ["card", "posted_date", "amount", "raw_description"]
-    ).cumcount()
+    # A legacy input without a hash still has stable per-file occurrence semantics.
+    frame["_document_key"] = frame["source_document_id"].fillna("").astype(str)
+    frame.loc[frame["_document_key"] == "", "_document_key"] = (
+        "legacy:" + frame.loc[frame["_document_key"] == "", "source_file"].astype(str)
+    )
+    frame["_source_row"] = pd.to_numeric(frame["source_row"], errors="coerce").fillna(0).astype(int)
+    frame = frame.sort_values([*IDENTITY_COLUMNS, "_document_key", "_source_row"], kind="stable")
+    frame["source_occurrence"] = frame.groupby([*IDENTITY_COLUMNS, "_document_key"]).cumcount()
 
     frame["txn_id"] = [
-        make_txn_id(c, d, a, desc, seq)
-        for c, d, a, desc, seq in zip(
+        make_txn_id(c, d, a, desc, occurrence)
+        for c, d, a, desc, occurrence in zip(
             frame["card"],
             frame["posted_date"],
             frame["amount"],
             frame["raw_description"],
-            frame["_seq"],
+            frame["source_occurrence"],
             strict=True,
         )
     ]
+    return frame.drop(columns=["_document_key", "_source_row"], errors="ignore")
+
+
+def assign_transaction_ids(raw: pd.DataFrame) -> pd.DataFrame:
+    """Return one logical transaction per fingerprint occurrence."""
+    frame = _with_transaction_occurrences(raw)
+    # Different documents may be overlapping snapshots of the same card account.
+    # Keep the maximum per-document multiplicity for each immutable fingerprint.
+    frame["_source_sort"] = frame["source_document_id"].fillna("").astype(str)
+    frame = frame.sort_values([*IDENTITY_COLUMNS, "source_occurrence", "_source_sort", "source_row"], kind="stable")
+    return frame.drop(columns="_source_sort").drop_duplicates(
+        subset=[*IDENTITY_COLUMNS, "source_occurrence"], keep="first"
+    )
+
+
+def transaction_sources(raw: pd.DataFrame) -> pd.DataFrame:
+    """Return the document-to-logical-transaction provenance mapping."""
+    frame = _with_transaction_occurrences(raw)
+    columns = ["txn_id", "source_document_id", "source_file", "source_row", "source_occurrence"]
+    return frame[columns].drop_duplicates().reset_index(drop=True)
+
+
+def normalize(raw: pd.DataFrame) -> pd.DataFrame:
+    if raw.empty:
+        return empty_ledger()
+
+    frame = assign_transaction_ids(raw)
+    frame["normalized_merchant"] = frame["raw_description"].map(normalize_merchant)
 
     for column in ("canonical_merchant", "merchant_source", "proposed_canonical"):
         if column not in frame.columns:

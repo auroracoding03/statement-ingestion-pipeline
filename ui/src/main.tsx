@@ -1,9 +1,9 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { Layout } from "./components/Layout";
 import { canWrite } from "./lib/dataSource";
+import { useHashPath } from "./lib/router";
 import { Categories } from "./pages/Categories";
 import { Merchants } from "./pages/Merchants";
 import { Overview } from "./pages/Overview";
@@ -13,21 +13,23 @@ import { Rules } from "./pages/Rules";
 import { Transactions } from "./pages/Transactions";
 import "./styles.css";
 
+function App() {
+  const path = useHashPath();
+  const page = {
+    "/": <Overview />,
+    "/transactions": <Transactions />,
+    "/categories": <Categories />,
+    "/recurring": <Recurring />,
+    "/merchants": <Merchants />,
+    "/review": canWrite ? <Review /> : <Overview />,
+    "/rules": canWrite ? <Rules /> : <Overview />,
+  }[path] ?? <Overview />;
+
+  return <Layout>{page}</Layout>;
+}
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <HashRouter>
-      <Routes>
-        <Route element={<Layout />}>
-          <Route index element={<Overview />} />
-          <Route path="transactions" element={<Transactions />} />
-          <Route path="categories" element={<Categories />} />
-          <Route path="recurring" element={<Recurring />} />
-          <Route path="merchants" element={<Merchants />} />
-          {canWrite && <Route path="review" element={<Review />} />}
-          {canWrite && <Route path="rules" element={<Rules />} />}
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Route>
-      </Routes>
-    </HashRouter>
+    <App />
   </React.StrictMode>,
 );

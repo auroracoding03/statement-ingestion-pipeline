@@ -4,6 +4,10 @@
 
 mode: aggregates_only
 
+# Merchant and expected-bill names can reveal private information. Keep them
+# redacted in aggregate dashboards unless the recipient is explicitly trusted.
+include_merchant_names: false
+
 # Cloudflare Pages project name (used by `fin publish` when wrangler is available)
 cloudflare:
   project_name: statement-ingestion-dashboard

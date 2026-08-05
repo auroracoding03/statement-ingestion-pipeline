@@ -1,4 +1,3 @@
-import { Link } from "react-router-dom";
 import {
   Bar,
   BarChart,
@@ -13,6 +12,7 @@ import {
 import { ErrorNote, Loading, Metric, PageHeader, StatusPill } from "../components/ui";
 import { api, canWrite } from "../lib/dataSource";
 import { compactMoney, money, shortDate } from "../lib/format";
+import { hashHref } from "../lib/router";
 import { useAsync } from "../lib/useAsync";
 
 export function Overview() {
@@ -41,7 +41,7 @@ export function Overview() {
             label="Needs review"
             value={
               canWrite && status.data.review_pending > 0 ? (
-                <Link to="/review">{status.data.review_pending}</Link>
+                <a href={hashHref("/review")}>{status.data.review_pending}</a>
               ) : (
                 status.data.review_pending
               )
@@ -66,7 +66,7 @@ export function Overview() {
               <XAxis dataKey="month" tick={{ fontSize: 12 }} />
               <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => compactMoney(Number(v))} />
               <Tooltip
-                formatter={(value: number, name: string) => [money(value), name]}
+                formatter={(value, name) => [money(Number(value)), String(name ?? "")]}
                 contentStyle={{ fontSize: 13, borderRadius: 4 }}
               />
               <Legend wrapperStyle={{ fontSize: 12 }} />

@@ -16,7 +16,9 @@ from pathlib import Path
 
 import pandas as pd
 import yaml
+from filelock import FileLock
 
+from src.atomic import atomic_write_text
 from src import paths
 from src.merchants import merchant_defaults
 
@@ -35,8 +37,8 @@ def load_rules(path: Path | None = None) -> dict:
 
 
 def save_rules(data: dict, path: Path | None = None) -> None:
-    with _path(path).open("w") as f:
-        yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
+    target = _path(path)
+    atomic_write_text(target, yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
 
 
 def _compile_rules(rules_doc: dict) -> list[dict]:
@@ -134,29 +136,33 @@ def append_rule(
     if not merchant_regex and not merchant_canonical:
         raise ValueError("append_rule requires merchant_regex or merchant_canonical")
 
-    doc = load_rules(rules_path)
-    rules = doc.setdefault("rules", [])
-    match = (
-        {"merchant_canonical": merchant_canonical}
-        if merchant_canonical
-        else {"merchant_regex": merchant_regex}
-    )
-    rule = {"match": match, "category": category, "subcategory": subcategory}
-    rules.insert(0, rule)
+    target = _path(rules_path)
+    with FileLock(f"{target}.lock"):
+        doc = load_rules(target)
+        rules = doc.setdefault("rules", [])
+        match = (
+            {"merchant_canonical": merchant_canonical}
+            if merchant_canonical
+            else {"merchant_regex": merchant_regex}
+        )
+        rule = {"match": match, "category": category, "subcategory": subcategory}
+        rules.insert(0, rule)
 
-    cats = doc.setdefault("categories", [])
-    if category not in cats:
-        cats.append(category)
-    save_rules(doc, rules_path)
-    return rule
+        cats = doc.setdefault("categories", [])
+        if category not in cats:
+            cats.append(category)
+        save_rules(doc, target)
+        return rule
 
 
 def delete_rule(index: int, rules_path: Path | None = None) -> bool:
-    doc = load_rules(rules_path)
-    rules = doc.get("rules") or []
-    if index < 0 or index >= len(rules):
-        return False
-    rules.pop(index)
-    doc["rules"] = rules
-    save_rules(doc, rules_path)
-    return True
+    target = _path(rules_path)
+    with FileLock(f"{target}.lock"):
+        doc = load_rules(target)
+        rules = doc.get("rules") or []
+        if index < 0 or index >= len(rules):
+            return False
+        rules.pop(index)
+        doc["rules"] = rules
+        save_rules(doc, target)
+        return True
