@@ -1,0 +1,11 @@
+# Controls what leaves the machine when building / publishing the dashboard.
+# full            — include line-item transactions
+# aggregates_only — category totals + recurring summary only
+
+mode: aggregates_only
+
+# Cloudflare Pages project name (used by `fin publish` when wrangler is available)
+cloudflare:
+  project_name: statement-ingestion-dashboard
+  # Set true once Cloudflare Access is configured on the Pages project
+  access_required: true

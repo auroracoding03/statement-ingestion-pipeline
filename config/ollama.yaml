@@ -1,0 +1,4 @@
+# Optional Ollama settings for unclassified-tail suggestions.
+model: llama3.2
+host: http://127.0.0.1:11434
+temperature: 0.1

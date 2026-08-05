@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Recurring — Finance Ledger</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="brand">Finance Ledger</div>
+    <nav>
+      <a href="./index.html">Overview</a>
+      <a href="./recurring.html" aria-current="page">Recurring</a>
+      <a href="./categories.html">Categories</a>
+      <a href="./uncategorized.html">Uncategorized</a>
+    </nav>
+  </header>
+  <main>
+    <section class="hero">
+      <h1>Recurring merchants</h1>
+      <p class="lede">Detected from roughly constant amounts on a monthly cadence.</p>
+    </section>
+    <section>
+      <div class="table-wrap">
+        <table id="recurring-table">
+          <thead>
+            <tr>
+              <th>Merchant</th>
+              <th>Recurring?</th>
+              <th>Occurrences</th>
+              <th>Avg</th>
+              <th>Std</th>
+              <th>Median gap (days)</th>
+              <th>Category</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script type="module">
+    import { loadJSON, money } from "./app.js";
+    const rows = await loadJSON("./data/recurring.json").catch(() => []);
+    const tbody = document.querySelector("#recurring-table tbody");
+    for (const row of rows) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${row.normalized_merchant ?? ""}</td>
+        <td>${row.is_recurring ? "yes" : "no"}</td>
+        <td>${row.occurrences ?? ""}</td>
+        <td>${money(row.avg_amount)}</td>
+        <td>${money(row.std_amount)}</td>
+        <td>${row.median_gap_days ?? "—"}</td>
+        <td>${[row.category, row.subcategory].filter(Boolean).join(" / ") || "—"}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+  </script>
+</body>
+</html>

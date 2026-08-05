@@ -1,0 +1,31 @@
+# Expected recurring bills (from your monthly expense spreadsheet).
+# Used to reconcile detected recurring merchants against known obligations.
+
+bills:
+  - name: Mortgage 1
+    category: Housing
+    subcategory: Mortgage
+    expected_amount: null  # fill in when known, e.g. 2100.00
+    merchant_regex: "(?i)mortgage|wells fargo home|rocket mortgage"
+    cadence: monthly
+
+  - name: Mortgage 2
+    category: Housing
+    subcategory: Mortgage
+    expected_amount: null
+    merchant_regex: "(?i)pennymac|second mortgage"
+    cadence: monthly
+
+  - name: Electric
+    category: Utilities
+    subcategory: Electric
+    expected_amount: null
+    merchant_regex: "(?i)duke energy|dominion|pg&e|fpl|georgia power"
+    cadence: monthly
+
+  - name: Internet
+    category: Utilities
+    subcategory: InternetPhone
+    expected_amount: null
+    merchant_regex: "(?i)comcast|xfinity|spectrum|verizon fios"
+    cadence: monthly

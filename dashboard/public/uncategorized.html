@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Uncategorized — Finance Ledger</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="brand">Finance Ledger</div>
+    <nav>
+      <a href="./index.html">Overview</a>
+      <a href="./recurring.html">Recurring</a>
+      <a href="./categories.html">Categories</a>
+      <a href="./uncategorized.html" aria-current="page">Uncategorized</a>
+    </nav>
+  </header>
+  <main>
+    <section class="hero">
+      <h1>Uncategorized watchlist</h1>
+      <p class="lede">Open or AI-proposed transactions. Confirm them with <code>fin review</code> to grow rules.yaml.</p>
+    </section>
+    <section>
+      <div class="table-wrap">
+        <table id="uncat-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Card</th>
+              <th>Merchant</th>
+              <th>Amount</th>
+              <th>Status</th>
+              <th>Proposal</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p id="empty-note" class="muted" hidden>No uncategorized line items in the published export (aggregates_only mode may omit them).</p>
+    </section>
+  </main>
+  <script type="module">
+    import { loadJSON, money } from "./app.js";
+    const rows = await loadJSON("./data/uncategorized.json").catch(() => []);
+    const tbody = document.querySelector("#uncat-table tbody");
+    if (!rows.length) {
+      document.getElementById("empty-note").hidden = false;
+    }
+    for (const row of rows) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${row.posted_date ?? ""}</td>
+        <td>${row.card ?? ""}</td>
+        <td>${row.normalized_merchant ?? row.raw_description ?? ""}</td>
+        <td>${money(row.amount)}</td>
+        <td>${row.classified_by ?? "open"}</td>
+        <td>${row.proposed_category ? `${row.proposed_category} / ${row.proposed_subcategory || ""}` : "—"}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+  </script>
+</body>
+</html>
