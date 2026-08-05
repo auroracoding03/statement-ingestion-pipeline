@@ -25,12 +25,24 @@ def guard_real_config(tmp_path, monkeypatch, request):
     config = tmp_path / "_guard_config"
     config.mkdir(exist_ok=True)
 
-    for name in ("RULES_PATH", "MERCHANTS_PATH", "EXPECTED_RECURRING_PATH", "PUBLISH_PATH"):
+    for name in (
+        "RULES_PATH",
+        "MERCHANTS_PATH",
+        "EXPECTED_RECURRING_PATH",
+        "PUBLISH_PATH",
+        "MANUAL_OBLIGATIONS_PATH",
+    ):
         original = getattr(paths, name)
         target = config / original.name
         if original.exists():
             target.write_text(original.read_text())
         monkeypatch.setattr(paths, name, target)
+
+    # Occurrence confirmations live under data/; keep them out of the real tree.
+    data = tmp_path / "_guard_data"
+    data.mkdir(exist_ok=True)
+    monkeypatch.setattr(paths, "OBLIGATION_OCCURRENCES_PATH", data / "manual_obligation_occurrences.json")
+    monkeypatch.setattr(paths, "OBLIGATIONS_LOCK", data / "manual_obligations.lock")
 
 
 def pytest_configure(config):

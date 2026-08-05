@@ -118,3 +118,40 @@ export interface ReviewQueue {
   items: Transaction[];
   categories: string[];
 }
+
+export interface Obligation {
+  id: string;
+  name: string;
+  category: string;
+  subcategory: string;
+  expected_amount_cents: number;
+  due_day: number;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ObligationStatus = "expected" | "overdue" | "paid" | "skipped";
+
+export interface MonthlyObligation {
+  obligation_id: string;
+  name: string;
+  category: string;
+  subcategory: string;
+  expected_amount_cents: number;
+  actual_amount_cents: number | null;
+  due_date: string;
+  paid_date: string | null;
+  status: ObligationStatus;
+  amount_changed: boolean;
+  note: string;
+}
+
+export interface ObligationMonth {
+  month: string;
+  expected_total_cents: number;
+  paid_total_cents: number;
+  outstanding_total_cents: number;
+  overdue_count: number;
+  items: MonthlyObligation[];
+}

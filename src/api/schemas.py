@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from datetime import date
+from typing import Literal
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class ClassifyRequest(BaseModel):
@@ -36,3 +39,30 @@ class RuleIn(BaseModel):
     merchant_canonical: str | None = None
     category: str
     subcategory: str = ""
+
+
+class ObligationIn(BaseModel):
+    name: str
+    category: str
+    subcategory: str = ""
+    expected_amount_cents: int
+    due_day: int
+
+
+class ObligationOccurrenceIn(BaseModel):
+    status: Literal["paid", "skipped"]
+    actual_amount_cents: int | None = None
+    paid_date: date | None = None
+    note: str = ""
+
+    @model_validator(mode="after")
+    def check_status_fields(self) -> ObligationOccurrenceIn:
+        if self.status == "paid":
+            if self.actual_amount_cents is None or self.actual_amount_cents <= 0:
+                raise ValueError("paid requires a positive actual_amount_cents")
+            if self.paid_date is None:
+                raise ValueError("paid requires paid_date")
+        else:
+            self.actual_amount_cents = None
+            self.paid_date = None
+        return self

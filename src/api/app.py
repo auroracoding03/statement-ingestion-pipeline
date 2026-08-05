@@ -22,10 +22,28 @@ from fastapi.staticfiles import StaticFiles
 from src import pipeline
 from src.ai_suggest import ollama_available
 from src.api import jobs
-from src.api.schemas import ClassifyRequest, MerchantIn, ReviewDecision, RuleIn
+from src.api.schemas import (
+    ClassifyRequest,
+    MerchantIn,
+    ObligationIn,
+    ObligationOccurrenceIn,
+    ReviewDecision,
+    RuleIn,
+)
 from src.classify import append_rule, delete_rule, load_rules
 from src.extract import iter_statement_files
 from src.merchants import append_merchant, delete_merchant, load_merchants
+from src.obligations import ObligationError
+from src.obligations import (
+    clear_occurrence,
+    create_obligation,
+    deactivate_obligation,
+    load_obligations,
+    monthly_obligations,
+    paid_category_monthly,
+    update_obligation,
+    upsert_occurrence,
+)
 from src.paths import DASHBOARD, EXPORT_DIR, FINANCE_DB, INBOX, UI, ensure_dirs
 from src.review import needs_review
 
@@ -277,20 +295,110 @@ def get_reconciliation() -> list[dict]:
 
 @app.get("/api/categories/monthly")
 def get_categories_monthly() -> list[dict]:
+    """Statement spend plus manually confirmed obligation payments (local only)."""
     ledger = pipeline.load_ledger()
-    if ledger.empty:
-        return []
-    frame = (
-        ledger.assign(
-            month=lambda d: pd.to_datetime(d["posted_date"]).dt.strftime("%Y-%m"),
-            category=lambda d: d["category"].fillna("Uncategorized"),
+    frames: list[pd.DataFrame] = []
+
+    if not ledger.empty:
+        frames.append(
+            ledger.assign(
+                month=lambda d: pd.to_datetime(d["posted_date"]).dt.strftime("%Y-%m"),
+                category=lambda d: d["category"].fillna("Uncategorized"),
+            )
+            .loc[lambda d: d["amount"] > 0]
+            .groupby(["month", "category"], as_index=False)
+            .agg(total=("amount", "sum"), txn_count=("amount", "count"))
         )
-        .loc[lambda d: d["amount"] > 0]
+
+    try:
+        paid = paid_category_monthly()
+    except ObligationError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if not paid.empty:
+        frames.append(paid)
+
+    if not frames:
+        return []
+
+    combined = (
+        pd.concat(frames, ignore_index=True)
         .groupby(["month", "category"], as_index=False)
-        .agg(total=("amount", "sum"), txn_count=("amount", "count"))
+        .agg(total=("total", "sum"), txn_count=("txn_count", "sum"))
         .sort_values(["month", "category"])
     )
-    return _records(frame)
+    return _records(combined)
+
+
+# --------------------------------------------------------------------------- manual obligations
+
+
+def _obligation_http(exc: ObligationError) -> HTTPException:
+    detail = str(exc)
+    code = 404 if detail.startswith("Unknown obligation_id") else 400
+    return HTTPException(status_code=code, detail=detail)
+
+
+@app.get("/api/obligations")
+def get_obligations(active_only: bool = True) -> dict:
+    items = load_obligations()
+    if active_only:
+        items = [o for o in items if o.get("active", True)]
+    return {"total": len(items), "items": items}
+
+
+@app.post("/api/obligations")
+def post_obligation(body: ObligationIn) -> dict:
+    try:
+        entry = create_obligation(body.model_dump())
+    except ObligationError as exc:
+        raise _obligation_http(exc) from exc
+    return {"obligation": entry}
+
+
+@app.put("/api/obligations/{obligation_id}")
+def put_obligation(obligation_id: str, body: ObligationIn) -> dict:
+    try:
+        entry = update_obligation(obligation_id, body.model_dump())
+    except ObligationError as exc:
+        raise _obligation_http(exc) from exc
+    return {"obligation": entry}
+
+
+@app.delete("/api/obligations/{obligation_id}")
+def delete_obligation(obligation_id: str) -> dict:
+    """Deactivate a definition; historical confirmations are preserved."""
+    try:
+        entry = deactivate_obligation(obligation_id)
+    except ObligationError as exc:
+        raise _obligation_http(exc) from exc
+    return {"obligation": entry}
+
+
+@app.get("/api/obligation-months/{month}")
+def get_obligation_month(month: str) -> dict:
+    try:
+        return monthly_obligations(month)
+    except ObligationError as exc:
+        raise _obligation_http(exc) from exc
+
+
+@app.put("/api/obligation-months/{month}/{obligation_id}")
+def put_obligation_month(month: str, obligation_id: str, body: ObligationOccurrenceIn) -> dict:
+    try:
+        record = upsert_occurrence(obligation_id, month, body.model_dump())
+    except ObligationError as exc:
+        raise _obligation_http(exc) from exc
+    return {"occurrence": record}
+
+
+@app.delete("/api/obligation-months/{month}/{obligation_id}")
+def delete_obligation_month(month: str, obligation_id: str) -> dict:
+    """Reset this month's confirmation back to expected."""
+    try:
+        cleared = clear_occurrence(obligation_id, month)
+    except ObligationError as exc:
+        raise _obligation_http(exc) from exc
+    return {"cleared": cleared, "month": month, "obligation_id": obligation_id}
 
 
 # --------------------------------------------------------------------------- merchants

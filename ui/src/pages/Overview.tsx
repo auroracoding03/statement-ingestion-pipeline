@@ -34,7 +34,7 @@ export function Overview() {
 
       {status.data && (
         <div className="metrics">
-          <Metric label="Transactions" value={status.data.counts.total ?? 0} />
+          <Metric label="Statement transactions" value={status.data.counts.total ?? 0} />
           <Metric label="Canonical merchants" value={status.data.canonical_merchants} />
           <Metric label="Unknown merchants" value={status.data.unknown_merchants} />
           <Metric

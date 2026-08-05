@@ -56,6 +56,20 @@ fin merchants unknown --with-ai
 fin merchants add "Local Coffee Roasters" -m "LOCAL COFFEE ROASTERS DOWNTOWN" --category Food
 ```
 
+## Manual obligations
+
+Predictable monthly expenses that never appear on a credit-card statement (mortgages paid from checking, insurance drafts, etc.) live on the local **Obligations** page — not in the ledger.
+
+- Definitions are stored in `config/manual_obligations.yaml`.
+- Month-by-month confirmations are stored in `data/manual_obligation_occurrences.json`.
+- **Expected amounts never count as spending.** Only a manually confirmed `paid` occurrence does.
+- Confirmed payments are merged into local category totals (`GET /api/categories/monthly`) so Overview and Categories reflect them.
+- They are **not** written into `ledger.parquet`, Transactions, recurring detection, DuckDB, or the static Cloudflare export.
+- Do **not** re-enter expenses that already appear on an imported card statement — that would double-count.
+- V1 supports **monthly** cadence only (due day 1–28).
+
+`config/expected_recurring.yaml` remains the statement-reconciliation watchlist and is unrelated to this feature.
+
 ## Classification model
 
 Precedence, first match wins:
@@ -100,13 +114,15 @@ Put Cloudflare Access in front of the Pages project before sharing the URL.
 inbox/<card>/*.csv|pdf   # immutable inputs (gitignored)
 config/rules.yaml        # durable classification asset
 config/merchants.yaml    # durable canonical merchant asset
+config/manual_obligations.yaml  # local non-card monthly obligations
 config/expected_recurring.yaml
 config/publish.yaml      # full | aggregates_only
 config/parsers/          # per-issuer CSV/PDF parsers
 src/                     # extract → normalize → canonicalize → classify → ai → review → recurring → store
+src/obligations.py       # manual obligation definitions + confirmations
 src/api/                 # FastAPI app behind fin serve
 ui/                      # Vite + React UI (live and static builds)
-data/                    # ledger.parquet, finance.duckdb, export/ (gitignored)
+data/                    # ledger.parquet, obligation occurrences, export/ (gitignored)
 dashboard/dist/          # static publish artifact (gitignored)
 fixtures/                # sample CSVs
 ```

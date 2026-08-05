@@ -101,6 +101,11 @@ def workspace(tmp_path: Path, monkeypatch) -> Path:
     # classify/merchants resolve these lazily off the paths module
     monkeypatch.setattr(paths_mod, "RULES_PATH", rules_path)
     monkeypatch.setattr(paths_mod, "MERCHANTS_PATH", merchants_path)
+    monkeypatch.setattr(paths_mod, "MANUAL_OBLIGATIONS_PATH", config / "manual_obligations.yaml")
+    (config / "manual_obligations.yaml").write_text("version: 1\nobligations: []\n")
+    monkeypatch.setattr(paths_mod, "OBLIGATION_OCCURRENCES_PATH", data / "manual_obligation_occurrences.json")
+    monkeypatch.setattr(paths_mod, "OBLIGATIONS_LOCK", data / "manual_obligations.lock")
+    monkeypatch.setattr(paths_mod, "DATA", data)
 
     # These were bound into module namespaces at import time
     for module in (pipeline_mod, store_mod, api_app):
@@ -241,3 +246,123 @@ def test_classify_job_runs_to_completion(client: TestClient):
 
 def test_unknown_job_is_404(client: TestClient):
     assert client.get("/api/jobs/nope").status_code == 404
+
+
+def test_obligation_crud_and_unknown_id(client: TestClient):
+    created = client.post(
+        "/api/obligations",
+        json={
+            "name": "Mortgage 1",
+            "category": "Housing",
+            "subcategory": "Mortgage",
+            "expected_amount_cents": 210000,
+            "due_day": 1,
+        },
+    )
+    assert created.status_code == 200
+    oid = created.json()["obligation"]["id"]
+
+    listed = client.get("/api/obligations").json()
+    assert listed["total"] == 1
+    assert listed["items"][0]["name"] == "Mortgage 1"
+
+    updated = client.put(
+        f"/api/obligations/{oid}",
+        json={
+            "name": "Mortgage 1 Primary",
+            "category": "Housing",
+            "subcategory": "Mortgage",
+            "expected_amount_cents": 215000,
+            "due_day": 1,
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["obligation"]["name"] == "Mortgage 1 Primary"
+    assert updated.json()["obligation"]["id"] == oid
+
+    assert client.delete("/api/obligations/does-not-exist").status_code == 404
+    assert client.put(
+        "/api/obligations/does-not-exist",
+        json={
+            "name": "x",
+            "category": "Housing",
+            "expected_amount_cents": 100,
+            "due_day": 1,
+        },
+    ).status_code == 404
+
+    deactivated = client.delete(f"/api/obligations/{oid}")
+    assert deactivated.status_code == 200
+    assert deactivated.json()["obligation"]["active"] is False
+    assert client.get("/api/obligations").json()["total"] == 0
+    assert client.get("/api/obligations?active_only=false").json()["total"] == 1
+
+
+def test_obligation_month_confirm_reset_and_category_totals(client: TestClient, workspace: dict):
+    ledger_path = workspace["root"] / "data" / "ledger.parquet"
+    before = ledger_path.read_bytes()
+
+    oid = client.post(
+        "/api/obligations",
+        json={
+            "name": "Mortgage 1",
+            "category": "Housing",
+            "subcategory": "Mortgage",
+            "expected_amount_cents": 210000,
+            "due_day": 1,
+        },
+    ).json()["obligation"]["id"]
+
+    month = client.get("/api/obligation-months/2026-08").json()
+    assert month["items"][0]["status"] in ("expected", "overdue")
+    assert month["expected_total_cents"] == 210000
+    assert month["paid_total_cents"] == 0
+
+    # Expected / overdue must not inflate category totals
+    cats_before_pay = { (r["month"], r["category"]): r["total"] for r in client.get("/api/categories/monthly").json() }
+    assert ("2026-08", "Housing") not in cats_before_pay
+
+    paid = client.put(
+        f"/api/obligation-months/2026-08/{oid}",
+        json={"status": "paid", "actual_amount_cents": 210000, "paid_date": "2026-08-01"},
+    )
+    assert paid.status_code == 200
+
+    cats = client.get("/api/categories/monthly").json()
+    housing_aug = next(r for r in cats if r["month"] == "2026-08" and r["category"] == "Housing")
+    assert housing_aug["total"] == 2100.0
+    assert housing_aug["txn_count"] == 1
+
+    # Skipped replaces paid and must drop out of category totals
+    skipped = client.put(
+        f"/api/obligation-months/2026-08/{oid}",
+        json={"status": "skipped"},
+    )
+    assert skipped.status_code == 200
+    cats_skipped = {
+        (r["month"], r["category"]): r["total"] for r in client.get("/api/categories/monthly").json()
+    }
+    assert ("2026-08", "Housing") not in cats_skipped
+
+    # Re-pay then reset
+    client.put(
+        f"/api/obligation-months/2026-08/{oid}",
+        json={"status": "paid", "actual_amount_cents": 210000, "paid_date": "2026-08-01"},
+    )
+    reset = client.delete(f"/api/obligation-months/2026-08/{oid}")
+    assert reset.status_code == 200
+    assert reset.json()["cleared"] is True
+    cats_reset = {
+        (r["month"], r["category"]): r["total"] for r in client.get("/api/categories/monthly").json()
+    }
+    assert ("2026-08", "Housing") not in cats_reset
+
+    assert ledger_path.read_bytes() == before
+
+
+def test_obligation_confirm_unknown_id_is_404(client: TestClient):
+    r = client.put(
+        "/api/obligation-months/2026-08/nope",
+        json={"status": "paid", "actual_amount_cents": 100, "paid_date": "2026-08-01"},
+    )
+    assert r.status_code == 404

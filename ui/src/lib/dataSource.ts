@@ -12,6 +12,8 @@ import type {
   Job,
   JobStart,
   Merchant,
+  Obligation,
+  ObligationMonth,
   ReconciliationRow,
   RecurringRow,
   ReviewQueue,
@@ -149,6 +151,81 @@ export const api = {
   async rules(): Promise<{ categories: string[]; rules: Rule[] }> {
     if (!canWrite) return { categories: [], rules: [] };
     return req<{ categories: string[]; rules: Rule[] }>("/api/rules");
+  },
+
+  obligations(activeOnly = true) {
+    if (!canWrite) writeGuard();
+    return req<{ total: number; items: Obligation[] }>(
+      `/api/obligations?active_only=${activeOnly}`,
+    );
+  },
+
+  createObligation(body: {
+    name: string;
+    category: string;
+    subcategory?: string;
+    expected_amount_cents: number;
+    due_day: number;
+  }) {
+    if (!canWrite) writeGuard();
+    return req<{ obligation: Obligation }>("/api/obligations", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  },
+
+  updateObligation(
+    id: string,
+    body: {
+      name: string;
+      category: string;
+      subcategory?: string;
+      expected_amount_cents: number;
+      due_day: number;
+    },
+  ) {
+    if (!canWrite) writeGuard();
+    return req<{ obligation: Obligation }>(`/api/obligations/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+  },
+
+  deactivateObligation(id: string) {
+    if (!canWrite) writeGuard();
+    return req<{ obligation: Obligation }>(`/api/obligations/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  },
+
+  obligationMonth(month: string) {
+    if (!canWrite) writeGuard();
+    return req<ObligationMonth>(`/api/obligation-months/${encodeURIComponent(month)}`);
+  },
+
+  confirmObligation(
+    month: string,
+    obligationId: string,
+    body: {
+      status: "paid" | "skipped";
+      actual_amount_cents?: number | null;
+      paid_date?: string | null;
+      note?: string;
+    },
+  ) {
+    if (!canWrite) writeGuard();
+    return req<{ occurrence: unknown }>(
+      `/api/obligation-months/${encodeURIComponent(month)}/${encodeURIComponent(obligationId)}`,
+      { method: "PUT", body: JSON.stringify(body) },
+    );
+  },
+
+  resetObligation(month: string, obligationId: string) {
+    if (!canWrite) writeGuard();
+    return req<{ cleared: boolean }>(
+      `/api/obligation-months/${encodeURIComponent(month)}/${encodeURIComponent(obligationId)}`,
+      { method: "DELETE" },
+    );
   },
 
   // ---------------------------------------------------------------- mutations
