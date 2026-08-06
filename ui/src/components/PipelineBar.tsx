@@ -124,8 +124,10 @@ export function PipelineBar() {
                 }}
               >
                 <option>American Express</option>
+                <option>Bank of America</option>
                 <option>Capital One</option>
                 <option>Chase</option>
+                <option>Wells Fargo</option>
                 <option>Generic</option>
               </select>
             </label>
@@ -141,6 +143,12 @@ export function PipelineBar() {
                 <span className="product-options" aria-label="Suggested American Express products">
                   <button type="button" onClick={() => setProduct("Platinum")}>Platinum</button>
                   <button type="button" onClick={() => setProduct("Delta Amex Gold")}>Delta Amex Gold</button>
+                </span>
+              )}
+              {issuer === "Bank of America" && (
+                <span className="product-options" aria-label="Suggested Bank of America products">
+                  <button type="button" onClick={() => setProduct("Regular")}>Regular</button>
+                  <button type="button" onClick={() => setProduct("Air France")}>Air France</button>
                 </span>
               )}
             </label>

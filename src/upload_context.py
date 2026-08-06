@@ -14,6 +14,10 @@ _ISSUER_ALIASES = {
     "amex": "American Express",
     "american express": "American Express",
     "capital one": "Capital One",
+    "bank of america": "Bank of America",
+    "boa": "Bank of America",
+    "wells fargo": "Wells Fargo",
+    "wf": "Wells Fargo",
     "chase": "Chase",
     "generic": "Generic",
 }
