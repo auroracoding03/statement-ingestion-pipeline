@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 import pdfplumber
 import pandas as pd
@@ -40,7 +41,7 @@ def _parse_line(line: str) -> dict | None:
     }
 
 
-def parse_generic_pdf(path: Path, card: str) -> pd.DataFrame:
+def parse_generic_pdf(path: Path, card: str, metadata: dict[str, Any] | None = None) -> pd.DataFrame:
     rows: list[dict] = []
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
@@ -67,4 +68,4 @@ def parse_generic_pdf(path: Path, card: str) -> pd.DataFrame:
     if rows:
         frame = pd.DataFrame(rows).drop_duplicates()
         rows = frame.to_dict(orient="records")
-    return finalize(rows, card=card, source_file=str(path))
+    return finalize(rows, card=card, source_file=str(path), metadata=metadata)

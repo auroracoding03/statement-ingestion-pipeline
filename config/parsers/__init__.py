@@ -45,7 +45,10 @@ PARSER_REGISTRY = {
 
 def resolve_parser(issuer: str, suffix: str):
     key = (issuer or "generic").lower().replace(" ", "").replace("-", "")
-    entry = PARSER_REGISTRY.get(key) or PARSER_REGISTRY["generic"]
+    if key.startswith(("amex", "americanexpress")):
+        entry = PARSER_REGISTRY["amex"]
+    else:
+        entry = PARSER_REGISTRY.get(key) or PARSER_REGISTRY["generic"]
     parser = entry.get(suffix.lower())
     if parser is None:
         raise ValueError(f"No parser for issuer={issuer!r} suffix={suffix!r}")

@@ -415,7 +415,7 @@ def _parse_pages(pages: Iterable[Any], card: str, source_file: str) -> pd.DataFr
     return finalize(rows, card=card, source_file=source_file, metadata=metadata)
 
 
-def parse_capital_one_pdf(path: Path, card: str) -> pd.DataFrame:
+def parse_capital_one_pdf(path: Path, card: str, metadata: dict[str, Any] | None = None) -> pd.DataFrame:
     """Parse a native-text Capital One consumer credit-card statement."""
     with pdfplumber.open(path) as pdf:
         return _parse_pages(pdf.pages, card=card, source_file=str(path))

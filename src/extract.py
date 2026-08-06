@@ -13,6 +13,7 @@ from rich.console import Console
 from config.parsers import resolve_parser
 from config.parsers.base import empty_frame
 from src.paths import INBOX
+from src.upload_context import read_upload_context
 
 console = Console()
 SUPPORTED = {".csv", ".pdf"}
@@ -112,7 +113,7 @@ def extract_statements(inbox: Path = INBOX) -> ExtractionResult:
             seen_documents.add(doc_id)
             parser = resolve_parser(card, path.suffix.lower())
             parser_name = getattr(parser, "__name__", "parser")
-            frame = parser(path, card=card)
+            frame = parser(path, card=card, metadata=read_upload_context(path))
             frame = frame.copy()
             frame["source_document_id"] = doc_id
             frame["source_file"] = relative

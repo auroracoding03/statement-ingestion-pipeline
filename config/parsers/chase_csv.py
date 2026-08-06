@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
 from .base import coerce_amount, finalize
 
 
-def parse_chase_csv(path: Path, card: str) -> pd.DataFrame:
+def parse_chase_csv(path: Path, card: str, metadata: dict[str, Any] | None = None) -> pd.DataFrame:
     frame = pd.read_csv(path)
     # Chase exports commonly: Transaction Date, Post Date, Description, Category, Type, Amount, Memo
     date_col = "Post Date" if "Post Date" in frame.columns else "Transaction Date"
@@ -36,4 +37,4 @@ def parse_chase_csv(path: Path, card: str) -> pd.DataFrame:
                 "raw_description": desc,
             }
         )
-    return finalize(rows, card=card, source_file=str(path))
+    return finalize(rows, card=card, source_file=str(path), metadata=metadata)
