@@ -40,7 +40,15 @@ def migrate_ledger(ledger: pd.DataFrame) -> pd.DataFrame:
     if "normalized_merchant" not in out.columns:
         out["normalized_merchant"] = out["raw_description"].map(normalize_merchant)
 
-    for column in ("canonical_merchant", "merchant_source", "proposed_canonical", "source_document_id"):
+    for column in (
+        "card_issuer",
+        "card_product",
+        "cardholder",
+        "canonical_merchant",
+        "merchant_source",
+        "proposed_canonical",
+        "source_document_id",
+    ):
         if column not in out.columns:
             out[column] = None
     if "source_occurrence" not in out.columns:

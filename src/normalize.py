@@ -19,6 +19,9 @@ import pandas as pd
 LEDGER_COLUMNS = [
     "txn_id",
     "card",
+    "card_issuer",
+    "card_product",
+    "cardholder",
     "posted_date",
     "amount",
     "raw_description",
@@ -149,7 +152,14 @@ def normalize(raw: pd.DataFrame) -> pd.DataFrame:
     frame = assign_transaction_ids(raw)
     frame["normalized_merchant"] = frame["raw_description"].map(normalize_merchant)
 
-    for column in ("canonical_merchant", "merchant_source", "proposed_canonical"):
+    for column in (
+        "card_issuer",
+        "card_product",
+        "cardholder",
+        "canonical_merchant",
+        "merchant_source",
+        "proposed_canonical",
+    ):
         if column not in frame.columns:
             frame[column] = None
     frame["merchant_source"] = frame["merchant_source"].fillna("none")

@@ -8,6 +8,7 @@ Layout convention for inbox/:
 from __future__ import annotations
 
 from .amex_csv import parse_amex_csv
+from .capital_one_pdf import parse_capital_one_pdf
 from .chase_csv import parse_chase_csv
 from .generic_csv import parse_generic_csv
 from .generic_pdf import parse_generic_pdf
@@ -29,6 +30,15 @@ PARSER_REGISTRY = {
     "generic": {
         ".csv": parse_generic_csv,
         ".pdf": parse_generic_pdf,
+    },
+    "capitalone": {
+        ".pdf": parse_capital_one_pdf,
+    },
+    "capital1": {
+        ".pdf": parse_capital_one_pdf,
+    },
+    "cof": {
+        ".pdf": parse_capital_one_pdf,
     },
 }
 
