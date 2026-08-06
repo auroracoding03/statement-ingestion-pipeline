@@ -245,6 +245,23 @@ select {
   width: 100%;
 }
 
+.product-options {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.product-options button {
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.22rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+
 .small {
   font-size: 0.82rem;
 }
