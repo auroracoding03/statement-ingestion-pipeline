@@ -8,6 +8,7 @@ __pycache__/
 .ruff_cache/
 dist/
 build/
+packaging/*.spec.bak
 
 # Local data (immutable inputs + derived outputs)
 inbox/**

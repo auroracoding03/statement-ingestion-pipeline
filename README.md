@@ -4,6 +4,39 @@ Local-first credit-card statement ingestion, merchant canonicalization, classifi
 
 Raw statements, `rules.yaml`, and `merchants.yaml` stay on your machine. The published dashboard is a thin read-only consumer of explicitly allowlisted aggregates (optionally line items) and can go to Cloudflare Pages behind Access.
 
+## Windows installation
+
+For normal desktop use, download `StatementPipelineSetup.exe` from the release,
+run it, and click **Install**. Launch **Statement Pipeline** from the Start menu;
+it opens the local dashboard in your default browser. Python, Node.js, and a
+terminal are not required on the installed machine.
+
+The current unsigned installer may show a Windows SmartScreen reputation prompt.
+Choose **More info** then **Run anyway** only when you downloaded the installer
+from a release you trust.
+
+Your statements, configuration, and local database are stored in
+`%LOCALAPPDATA%\Statement Pipeline`, not in the program-installation folder.
+Upgrades and normal uninstalls preserve this folder. Back it up if you want a
+copy of your financial history; delete it manually only if you intend to erase
+that data permanently.
+
+### Building an installer
+
+Windows release builds must be created on Windows. Install Python 3.11+, Node
+22.12+, and Inno Setup 6, then run:
+
+```powershell
+.\packaging\build-windows.ps1
+```
+
+The installer is written to `dist\installer\StatementPipelineSetup.exe`.
+
+After installation, select **Check for updates** in the app header to download
+and silently install a newer GitHub Release. The app verifies the release's
+SHA-256 checksum before updating, closes, installs the replacement in place,
+and restarts. Your data under `%LOCALAPPDATA%\Statement Pipeline` is retained.
+
 ## Quick start
 
 ```bash

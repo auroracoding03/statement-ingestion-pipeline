@@ -29,9 +29,11 @@ from src.extract import iter_statement_files
 from src.merchants import append_merchant, delete_merchant, load_merchants
 from src.paths import DASHBOARD, EXPORT_DIR, FINANCE_DB, INBOX, UI, ensure_dirs
 from src.review import needs_review
+from src.updater import UpdateError, check_for_update, install_latest_update
 from src.upload_context import card_key, normalize_issuer, normalize_product, write_upload_context
+from src.version import APP_VERSION
 
-app = FastAPI(title="Statement Ingestion Pipeline", version="0.2.0")
+app = FastAPI(title="Statement Ingestion Pipeline", version=APP_VERSION)
 
 # Vite dev server talks to this API cross-origin during development.
 app.add_middleware(
@@ -100,6 +102,25 @@ def get_status() -> dict:
         "exports": EXPORT_DIR.exists(),
         "ollama_available": ollama_available(),
     }
+
+
+# --------------------------------------------------------------------------- updates
+
+
+@app.get("/api/updates")
+def get_updates() -> dict:
+    try:
+        return check_for_update()
+    except UpdateError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/api/updates/install")
+def post_install_update() -> dict:
+    try:
+        return install_latest_update()
+    except UpdateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 # --------------------------------------------------------------------------- jobs

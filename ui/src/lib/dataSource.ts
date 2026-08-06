@@ -68,6 +68,15 @@ interface StaticSummary {
   recurring_count: number;
 }
 
+export interface UpdateStatus {
+  supported: boolean;
+  current_version: string;
+  update_available: boolean;
+  latest_version?: string;
+  release_url?: string;
+  message: string;
+}
+
 export const api = {
   async status(): Promise<Status> {
     if (canWrite) return req<Status>("/api/status");
@@ -151,6 +160,18 @@ export const api = {
     return req<{ categories: string[]; rules: Rule[] }>("/api/rules");
   },
 
+  async updates(): Promise<UpdateStatus> {
+    if (!canWrite) {
+      return {
+        supported: false,
+        current_version: "",
+        update_available: false,
+        message: "Updates are available in the installed Windows application.",
+      };
+    }
+    return req<UpdateStatus>("/api/updates");
+  },
+
   // ---------------------------------------------------------------- mutations
 
   submitReview(
@@ -209,6 +230,11 @@ export const api = {
   startBuild() {
     if (!canWrite) writeGuard();
     return req<JobStart>("/api/build", { method: "POST" });
+  },
+
+  installUpdate() {
+    if (!canWrite) writeGuard();
+    return req<{ message: string }>("/api/updates/install", { method: "POST" });
   },
 
   job(id: string) {
