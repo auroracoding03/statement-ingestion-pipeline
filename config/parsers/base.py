@@ -13,6 +13,9 @@ RAW_COLUMNS = [
     "amount",
     "raw_description",
     "card",
+    "card_issuer",
+    "card_product",
+    "cardholder",
     "source_file",
 ]
 
@@ -60,12 +63,28 @@ def coerce_date(value: Any) -> datetime.date:
     return parsed.date()
 
 
-def finalize(rows: list[dict], card: str, source_file: str) -> pd.DataFrame:
+def finalize(
+    rows: list[dict],
+    card: str,
+    source_file: str,
+    metadata: dict[str, Any] | None = None,
+) -> pd.DataFrame:
+    """Validate parsed rows and add statement-level metadata.
+
+    Parsers may supply metadata per row (for example, a supplementary-card
+    holder) or once for the whole statement through ``metadata``. Keeping these
+    fields in the raw parser contract makes them available to every downstream
+    ledger, review, and export stage.
+    """
     if not rows:
         frame = empty_frame()
         return frame
     frame = pd.DataFrame(rows)
     frame["card"] = card
+    metadata = metadata or {}
+    for column in ("card_issuer", "card_product", "cardholder"):
+        if column not in frame.columns:
+            frame[column] = metadata.get(column)
     frame["source_file"] = source_file
     try:
         frame["posted_date"] = frame["posted_date"].map(coerce_date)
