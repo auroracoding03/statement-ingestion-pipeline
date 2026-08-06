@@ -1,8 +1,34 @@
 from __future__ import annotations
 
+import sys
 from unittest.mock import Mock
 
 import src.desktop as desktop
+
+
+def test_ensure_stdio_replaces_missing_streams(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+
+    desktop._ensure_stdio()
+
+    assert sys.stdout is not None
+    assert sys.stderr is not None
+    assert callable(getattr(sys.stdout, "isatty", None))
+    assert callable(getattr(sys.stderr, "isatty", None))
+
+
+def test_ensure_stdio_allows_uvicorn_logging_config(monkeypatch) -> None:
+    """Reproduce the PyInstaller windowed crash path and prove the fix."""
+    from logging.config import dictConfig
+
+    from uvicorn.config import LOGGING_CONFIG
+
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    desktop._ensure_stdio()
+
+    dictConfig(LOGGING_CONFIG)
 
 
 def test_desktop_launcher_opens_existing_server(monkeypatch) -> None:

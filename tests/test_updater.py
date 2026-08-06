@@ -23,7 +23,7 @@ def test_check_for_update_reports_newer_release(monkeypatch) -> None:
         updater,
         "_latest_release",
         lambda: {
-            "latest_version": "0.2.2",
+            "latest_version": "0.2.3",
             "installer_url": "https://example.test/installer.exe",
             "checksum_url": "https://example.test/installer.sha256",
             "release_url": "https://example.test/release",
@@ -34,7 +34,7 @@ def test_check_for_update_reports_newer_release(monkeypatch) -> None:
 
     assert result["supported"] is True
     assert result["update_available"] is True
-    assert result["latest_version"] == "0.2.2"
+    assert result["latest_version"] == "0.2.3"
 
 
 def test_install_update_verifies_checksum_before_launching(tmp_path: Path, monkeypatch) -> None:
@@ -44,7 +44,7 @@ def test_install_update_verifies_checksum_before_launching(tmp_path: Path, monke
         updater,
         "_latest_release",
         lambda: {
-            "latest_version": "0.2.2",
+            "latest_version": "0.2.3",
             "installer_url": "https://example.test/installer.exe",
             "checksum_url": "https://example.test/installer.sha256",
             "release_url": "https://example.test/release",
@@ -56,13 +56,13 @@ def test_install_update_verifies_checksum_before_launching(tmp_path: Path, monke
 
     launch = Mock()
     monkeypatch.setattr(updater, "_download", download)
-    monkeypatch.setattr(updater, "_expected_checksum", lambda _url: updater._file_checksum(tmp_path / "updates" / "StatementPipelineSetup-0.2.2.exe"))
+    monkeypatch.setattr(updater, "_expected_checksum", lambda _url: updater._file_checksum(tmp_path / "updates" / "StatementPipelineSetup-0.2.3.exe"))
     monkeypatch.setattr(updater, "_launch_installer", launch)
 
     result = updater.install_latest_update()
 
     assert "restart" in result["message"]
-    launch.assert_called_once_with(tmp_path / "updates" / "StatementPipelineSetup-0.2.2.exe")
+    launch.assert_called_once_with(tmp_path / "updates" / "StatementPipelineSetup-0.2.3.exe")
 
 
 def test_install_update_rejects_bad_checksum(tmp_path: Path, monkeypatch) -> None:
@@ -72,7 +72,7 @@ def test_install_update_rejects_bad_checksum(tmp_path: Path, monkeypatch) -> Non
         updater,
         "_latest_release",
         lambda: {
-            "latest_version": "0.2.2",
+            "latest_version": "0.2.3",
             "installer_url": "https://example.test/installer.exe",
             "checksum_url": "https://example.test/installer.sha256",
             "release_url": "https://example.test/release",
@@ -86,5 +86,5 @@ def test_install_update_rejects_bad_checksum(tmp_path: Path, monkeypatch) -> Non
     with pytest.raises(updater.UpdateError, match="checksum did not match"):
         updater.install_latest_update()
 
-    assert not (tmp_path / "updates" / "StatementPipelineSetup-0.2.2.exe").exists()
+    assert not (tmp_path / "updates" / "StatementPipelineSetup-0.2.3.exe").exists()
     launch.assert_not_called()
