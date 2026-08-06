@@ -208,6 +208,54 @@ select {
   color: var(--bad);
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgba(28, 25, 22, 0.4);
+}
+
+.upload-modal {
+  width: min(29rem, 100%);
+  padding: 1.35rem;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) * 2);
+  background: var(--card);
+  box-shadow: 0 16px 48px rgba(28, 25, 22, 0.24);
+}
+
+.upload-modal h2 {
+  margin: 0;
+  font-family: var(--font-display);
+}
+
+.upload-modal label {
+  display: grid;
+  gap: 0.3rem;
+  margin-top: 0.9rem;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.upload-modal label input,
+.upload-modal label select {
+  width: 100%;
+}
+
+.small {
+  font-size: 0.82rem;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1.2rem;
+}
+
 /* -------------------------------------------------------------- structure */
 
 main {

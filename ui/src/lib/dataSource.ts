@@ -215,11 +215,13 @@ export const api = {
     return req<Job>(`/api/jobs/${id}`);
   },
 
-  async upload(card: string, files: FileList) {
+  async upload(issuer: string, product: string, files: Iterable<File>) {
     if (!canWrite) writeGuard();
     const form = new FormData();
     Array.from(files).forEach((f) => form.append("files", f));
-    const res = await fetch(`/api/upload?card=${encodeURIComponent(card)}`, {
+    const params = new URLSearchParams({ issuer });
+    if (product.trim()) params.set("product", product.trim());
+    const res = await fetch(`/api/upload?${params.toString()}`, {
       method: "POST",
       body: form,
     });

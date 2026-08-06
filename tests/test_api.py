@@ -12,6 +12,7 @@ import src.paths as paths_mod
 import src.pipeline as pipeline_mod
 import src.store as store_mod
 from src.normalize import make_txn_id
+from src.upload_context import sidecar_path
 
 
 @pytest.fixture
@@ -262,3 +263,17 @@ def test_upload_never_overwrites_an_existing_source_document(client: TestClient,
     assert first_name != second_name
     assert (workspace["root"] / "inbox" / first_name).exists()
     assert (workspace["root"] / "inbox" / second_name).exists()
+
+
+def test_amex_upload_persists_selected_parser_context(client: TestClient, workspace: dict):
+    payload = b"Date,Description,Card Member,Account #,Amount\n2026-01-01,Coffee,ALEX EXAMPLE,,10.00\n"
+    response = client.post(
+        "/api/upload?issuer=American%20Express&product=Platinum",
+        files=[("files", ("statement.csv", payload, "text/csv"))],
+    )
+
+    assert response.status_code == 200
+    assert response.json()["card"] == "americanexpress-platinum"
+    statement = workspace["root"] / "inbox" / response.json()["written"][0]
+    assert statement.exists()
+    assert sidecar_path(statement).read_text() == '{"card_issuer": "American Express", "card_product": "Platinum"}\n'

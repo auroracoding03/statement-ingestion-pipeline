@@ -29,6 +29,7 @@ from src.extract import iter_statement_files
 from src.merchants import append_merchant, delete_merchant, load_merchants
 from src.paths import DASHBOARD, EXPORT_DIR, FINANCE_DB, INBOX, UI, ensure_dirs
 from src.review import needs_review
+from src.upload_context import card_key, normalize_issuer, normalize_product, write_upload_context
 
 app = FastAPI(title="Statement Ingestion Pipeline", version="0.2.0")
 
@@ -142,9 +143,25 @@ def get_job(job_id: str) -> dict:
 
 
 @app.post("/api/upload")
-async def post_upload(card: str = Query("generic"), files: list[UploadFile] = ()) -> dict:
+async def post_upload(
+    card: str = Query("generic"),
+    issuer: str | None = Query(None),
+    product: str | None = Query(None),
+    files: list[UploadFile] = (),
+) -> dict:
     ensure_dirs()
-    safe_card = SAFE_NAME.sub("-", card).strip("-").lower() or "generic"
+    try:
+        selected_issuer = normalize_issuer(issuer) if issuer else None
+        selected_product = normalize_product(product)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if selected_issuer == "American Express" and not selected_product:
+        raise HTTPException(status_code=422, detail="American Express uploads require a card product")
+    safe_card = (
+        card_key(selected_issuer, selected_product)
+        if selected_issuer and selected_issuer != "Generic"
+        else SAFE_NAME.sub("-", card).strip("-").lower() or "generic"
+    )
     dest_dir = INBOX / safe_card
     dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -157,6 +174,8 @@ async def post_upload(card: str = Query("generic"), files: list[UploadFile] = ()
         if target.exists():
             original = Path(name)
             target = dest_dir / f"{original.stem}-{uuid.uuid4().hex[:8]}{original.suffix}"
+        if selected_issuer:
+            write_upload_context(target, issuer=selected_issuer, product=selected_product)
         atomic_copy_stream(target, upload.file)
         written.append(f"{safe_card}/{target.name}")
 

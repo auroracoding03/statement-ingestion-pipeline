@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -21,7 +22,7 @@ def _find_col(columns: list[str], aliases: set[str]) -> str | None:
     return None
 
 
-def parse_generic_csv(path: Path, card: str) -> pd.DataFrame:
+def parse_generic_csv(path: Path, card: str, metadata: dict[str, Any] | None = None) -> pd.DataFrame:
     frame = pd.read_csv(path)
     date_col = _find_col(list(frame.columns), DATE_ALIASES)
     desc_col = _find_col(list(frame.columns), DESC_ALIASES)
@@ -57,4 +58,4 @@ def parse_generic_csv(path: Path, card: str) -> pd.DataFrame:
                 "raw_description": desc,
             }
         )
-    return finalize(rows, card=card, source_file=str(path))
+    return finalize(rows, card=card, source_file=str(path), metadata=metadata)

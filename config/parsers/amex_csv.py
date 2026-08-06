@@ -3,13 +3,28 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
 from .base import coerce_amount, finalize
 
 
-def parse_amex_csv(path: Path, card: str) -> pd.DataFrame:
+def _cardholder(value: Any) -> str | None:
+    if pd.isna(value) or not str(value).strip():
+        return None
+    text = " ".join(str(value).split())
+    return text.title() if text.isupper() else text
+
+
+def parse_amex_csv(path: Path, card: str, metadata: dict[str, Any] | None = None) -> pd.DataFrame:
+    """Parse an Amex export using issuer/product selected at upload time."""
+    metadata = dict(metadata or {})
+    if metadata.get("card_issuer") != "American Express":
+        raise ValueError("Amex CSV requires an American Express upload selection")
+    if not metadata.get("card_product"):
+        raise ValueError("Amex CSV requires a card product selected at upload")
+
     frame = pd.read_csv(path)
     # Common Amex headers: Date, Description, Amount  (or Extended Details)
     date_col = "Date" if "Date" in frame.columns else None
@@ -33,6 +48,7 @@ def parse_amex_csv(path: Path, card: str) -> pd.DataFrame:
                 "posted_date": row[date_col],
                 "amount": amount,
                 "raw_description": desc,
+                "cardholder": _cardholder(row.get("Card Member")),
             }
         )
-    return finalize(rows, card=card, source_file=str(path))
+    return finalize(rows, card=card, source_file=str(path), metadata=metadata)
