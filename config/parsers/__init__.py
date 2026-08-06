@@ -8,11 +8,13 @@ Layout convention for inbox/:
 from __future__ import annotations
 
 from .amex_csv import parse_amex_csv
+from .bank_of_america import parse_bank_of_america_placeholder
 from .capital_one_pdf import parse_capital_one_pdf
 from .chase_csv import parse_chase_csv
 from .chase_pdf import parse_chase_pdf
 from .generic_csv import parse_generic_csv
 from .generic_pdf import parse_generic_pdf
+from .wells_fargo_pdf import parse_wells_fargo_pdf
 
 # Keys are lowercase folder / issuer names under inbox/
 PARSER_REGISTRY = {
@@ -41,6 +43,20 @@ PARSER_REGISTRY = {
     "cof": {
         ".pdf": parse_capital_one_pdf,
     },
+    "wellsfargo": {
+        ".pdf": parse_wells_fargo_pdf,
+    },
+    "wf": {
+        ".pdf": parse_wells_fargo_pdf,
+    },
+    "bankofamerica": {
+        ".csv": parse_bank_of_america_placeholder,
+        ".pdf": parse_bank_of_america_placeholder,
+    },
+    "boa": {
+        ".csv": parse_bank_of_america_placeholder,
+        ".pdf": parse_bank_of_america_placeholder,
+    },
 }
 
 
@@ -50,6 +66,10 @@ def resolve_parser(issuer: str, suffix: str):
         entry = PARSER_REGISTRY["amex"]
     elif key.startswith("chase"):
         entry = PARSER_REGISTRY["chase"]
+    elif key.startswith(("wellsfargo", "wf")):
+        entry = PARSER_REGISTRY["wellsfargo"]
+    elif key.startswith(("bankofamerica", "boa")):
+        entry = PARSER_REGISTRY["bankofamerica"]
     else:
         entry = PARSER_REGISTRY.get(key) or PARSER_REGISTRY["generic"]
     parser = entry.get(suffix.lower())
