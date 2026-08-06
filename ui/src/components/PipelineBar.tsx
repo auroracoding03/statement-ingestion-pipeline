@@ -137,6 +137,12 @@ export function PipelineBar() {
                 onChange={(e) => setProduct(e.target.value)}
                 placeholder="e.g. Platinum"
               />
+              {issuer === "American Express" && (
+                <span className="product-options" aria-label="Suggested American Express products">
+                  <button type="button" onClick={() => setProduct("Platinum")}>Platinum</button>
+                  <button type="button" onClick={() => setProduct("Delta Amex Gold")}>Delta Amex Gold</button>
+                </span>
+              )}
             </label>
             <p className="muted small">{pendingFiles.length} file{pendingFiles.length === 1 ? "" : "s"} selected</p>
             <div className="modal-actions">

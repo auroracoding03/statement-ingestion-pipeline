@@ -10,6 +10,7 @@ from __future__ import annotations
 from .amex_csv import parse_amex_csv
 from .capital_one_pdf import parse_capital_one_pdf
 from .chase_csv import parse_chase_csv
+from .chase_pdf import parse_chase_pdf
 from .generic_csv import parse_generic_csv
 from .generic_pdf import parse_generic_pdf
 
@@ -17,7 +18,7 @@ from .generic_pdf import parse_generic_pdf
 PARSER_REGISTRY = {
     "chase": {
         ".csv": parse_chase_csv,
-        ".pdf": parse_generic_pdf,
+        ".pdf": parse_chase_pdf,
     },
     "amex": {
         ".csv": parse_amex_csv,
@@ -47,6 +48,8 @@ def resolve_parser(issuer: str, suffix: str):
     key = (issuer or "generic").lower().replace(" ", "").replace("-", "")
     if key.startswith(("amex", "americanexpress")):
         entry = PARSER_REGISTRY["amex"]
+    elif key.startswith("chase"):
+        entry = PARSER_REGISTRY["chase"]
     else:
         entry = PARSER_REGISTRY.get(key) or PARSER_REGISTRY["generic"]
     parser = entry.get(suffix.lower())
