@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import socket
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -17,6 +18,19 @@ from src.paths import ensure_dirs
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("STATEMENT_PIPELINE_PORT", "8787"))
+
+
+def _ensure_stdio() -> None:
+    """Give windowed PyInstaller builds usable stdio streams.
+
+    ``console=False`` leaves ``sys.stdout`` / ``sys.stderr`` as ``None`` on
+    Windows. Uvicorn's colourized logging formatters call ``.isatty()`` during
+    setup and crash with ``Unable to configure formatter 'default'``.
+    """
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
 
 
 def _server_is_running(port: int) -> bool:
@@ -41,6 +55,7 @@ def _available_port(preferred_port: int) -> int:
 
 def main() -> None:
     """Open the existing app, or start one local-only server and open it."""
+    _ensure_stdio()
     if _server_is_running(PORT):
         webbrowser.open(f"http://{HOST}:{PORT}")
         return
