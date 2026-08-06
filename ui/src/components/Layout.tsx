@@ -1,6 +1,6 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
-import { canWrite } from "../lib/dataSource";
+import { api, canWrite } from "../lib/dataSource";
 import { hashHref, useHashPath } from "../lib/router";
 import { PipelineBar } from "./PipelineBar";
 
@@ -16,6 +16,33 @@ const LINKS = [
 
 export function Layout({ children }: { children: ReactNode }) {
   const path = useHashPath();
+  const [updateMessage, setUpdateMessage] = useState("");
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+
+  async function checkForUpdates() {
+    setCheckingUpdate(true);
+    try {
+      const update = await api.updates();
+      if (!update.update_available) {
+        setUpdateMessage(update.message);
+        return;
+      }
+      const confirmed = window.confirm(
+        `Version ${update.latest_version} is ready. Download and install it now? The app will restart.`,
+      );
+      if (!confirmed) {
+        setUpdateMessage(`Version ${update.latest_version} is ready to install.`);
+        return;
+      }
+      const result = await api.installUpdate();
+      setUpdateMessage(result.message);
+    } catch (error) {
+      setUpdateMessage(error instanceof Error ? error.message : "Could not check for updates.");
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }
+
   return (
     <div className="app">
       <header className="site-header">
@@ -34,6 +61,14 @@ export function Layout({ children }: { children: ReactNode }) {
             </a>
           ))}
         </nav>
+        {canWrite && (
+          <div className="update-control">
+            <button className="btn subtle small" onClick={checkForUpdates} disabled={checkingUpdate}>
+              {checkingUpdate ? "Checking…" : "Check for updates"}
+            </button>
+            {updateMessage && <span className="update-message">{updateMessage}</span>}
+          </div>
+        )}
       </header>
 
       {canWrite && <PipelineBar />}

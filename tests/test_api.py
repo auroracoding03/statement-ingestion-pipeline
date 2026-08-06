@@ -138,6 +138,13 @@ def test_status_reports_counts(client: TestClient):
     assert body["counts"]["total"] == 2
 
 
+def test_updates_are_exposed_without_network_access(client: TestClient):
+    r = client.get("/api/updates")
+
+    assert r.status_code == 200
+    assert r.json()["supported"] is False
+
+
 def test_transactions_search_and_filter(client: TestClient):
     r = client.get("/api/transactions?q=coffee")
     assert r.status_code == 200

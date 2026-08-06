@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   python:
     runs-on: ubuntu-latest
@@ -33,3 +36,36 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm run build:static
+
+  windows-package:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress --yes
+      - name: Build Windows installer
+        shell: pwsh
+        run: ./packaging/build-windows.ps1
+      - name: Generate checksum
+        shell: pwsh
+        run: Get-FileHash dist/installer/StatementPipelineSetup.exe -Algorithm SHA256 | ForEach-Object { "{0}  {1}" -f $_.Hash.ToLower(), $_.Path.Split('\\')[-1] } | Set-Content dist/installer/StatementPipelineSetup.exe.sha256
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: StatementPipelineSetup
+          path: dist/installer/
+      - name: Publish installer
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/installer/*

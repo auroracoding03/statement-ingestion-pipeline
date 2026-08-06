@@ -105,6 +105,18 @@ a {
   border-bottom-color: var(--accent);
 }
 
+.update-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.update-message {
+  max-width: 22rem;
+}
+
 /* ----------------------------------------------------------- pipeline bar */
 
 .pipeline-bar {

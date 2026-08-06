@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "statement-ingestion-pipeline"
-version = "0.2.0"
+version = "0.2.1"
 description = "Local-first credit card statement ingestion, classification, and finance ledger"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -28,6 +28,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+package = ["pyinstaller>=6.11"]
 
 [project.scripts]
 fin = "src.cli:app"
