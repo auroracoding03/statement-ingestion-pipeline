@@ -276,6 +276,11 @@ export const api = {
     return req<unknown>("/api/rules", { method: "POST", body: JSON.stringify(body) });
   },
 
+  updateRule(index: number, body: { category: string; subcategory?: string }) {
+    if (!canWrite) writeGuard();
+    return req<unknown>(`/api/rules/${index}`, { method: "PATCH", body: JSON.stringify(body) });
+  },
+
   deleteRule(index: number) {
     if (!canWrite) writeGuard();
     return req<unknown>(`/api/rules/${index}`, { method: "DELETE" });

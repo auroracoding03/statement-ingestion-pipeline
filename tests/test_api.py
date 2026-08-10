@@ -313,6 +313,32 @@ def test_rules_add_and_delete(client: TestClient):
     assert client.delete("/api/rules/999").status_code == 404
 
 
+def test_rules_patch_category_and_subcategory(client: TestClient):
+    created = client.post(
+        "/api/rules",
+        json={"merchant_canonical": "GA Natural Gas", "category": "Utilities"},
+    )
+    assert created.status_code == 200
+
+    patched = client.patch(
+        "/api/rules/0",
+        json={"category": "Utilities", "subcategory": "NaturalGas"},
+    )
+    assert patched.status_code == 200
+    body = patched.json()["rule"]
+    assert body["index"] == 0
+    assert body["category"] == "Utilities"
+    assert body["subcategory"] == "NaturalGas"
+    assert body["match"]["merchant_canonical"] == "GA Natural Gas"
+
+    listed = client.get("/api/rules").json()
+    assert listed["rules"][0]["subcategory"] == "NaturalGas"
+    assert "NaturalGas" in listed["subcategories"]["Utilities"]
+
+    assert client.patch("/api/rules/999", json={"category": "Utilities"}).status_code == 404
+    assert client.delete("/api/rules/0").status_code == 200
+
+
 def test_rule_requires_a_matcher(client: TestClient):
     r = client.post("/api/rules", json={"category": "Food"})
     assert r.status_code == 400

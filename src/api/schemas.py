@@ -39,6 +39,11 @@ class RuleIn(BaseModel):
     subcategory: str = ""
 
 
+class RuleUpdate(BaseModel):
+    category: str = Field(min_length=1, max_length=80)
+    subcategory: str = ""
+
+
 class CategoryIn(BaseModel):
     category: str = Field(min_length=1, max_length=80)
 

@@ -30,6 +30,7 @@ from src.api.schemas import (
     MerchantIn,
     ReviewDecision,
     RuleIn,
+    RuleUpdate,
     SubcategoryIn,
     TagIn,
     UploadCommitRequest,
@@ -42,6 +43,7 @@ from src.classify import (
     list_subcategories,
     load_rules,
     rule_pattern_from_merchant,
+    update_rule,
 )
 from src.extract import iter_statement_files
 from src.merchants import append_merchant, delete_merchant, load_merchants
@@ -582,6 +584,17 @@ def remove_rule(index: int) -> dict:
     if not delete_rule(index):
         raise HTTPException(status_code=404, detail="Unknown rule index")
     return {"deleted": index}
+
+
+@app.patch("/api/rules/{index}")
+def patch_rule(index: int, body: RuleUpdate) -> dict:
+    try:
+        rule = update_rule(index, category=body.category, subcategory=body.subcategory)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Unknown rule index")
+    return {"rule": {"index": index, **rule}}
 
 
 @app.post("/api/categories")
