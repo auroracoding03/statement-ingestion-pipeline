@@ -75,10 +75,10 @@ def test_launch_installer_uses_bounded_handoff_before_relaunch(tmp_path: Path, m
     assert "force-stop" in script
     assert "Stop-Process -Id $targetId -Force" in script
     assert "install-start" in script
-    assert "relaunch-ok" in script
+    assert "relaunch-delegated-to-installer" in script
+    assert "relaunch-ok" not in script
     assert "/VERYSILENT" in script
     assert json.dumps(str(installer)) in script
-    assert json.dumps(str(installed_exe)) in script
     assert json.dumps(str(tmp_path / "updates" / "update.log")) in script
     assert "cmd.exe" not in command
     timer.start.assert_called_once_with()
@@ -178,7 +178,7 @@ def test_handoff_force_stops_snapshot_survivor_before_install(tmp_path: Path) ->
         assert "handoff-start" in log_text
         assert "force-stop" in log_text
         assert "install-ok" in log_text
-        assert "relaunch-ok" in log_text
+        assert "relaunch-delegated-to-installer" in log_text
         assert "handoff-error" not in log_text
     finally:
         if sleeper.poll() is None:
