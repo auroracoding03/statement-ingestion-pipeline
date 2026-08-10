@@ -4,35 +4,68 @@ import { Empty, ErrorNote, Loading, PageHeader } from "../components/ui";
 import { api } from "../lib/dataSource";
 import { money, shortDate } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
-import type { Transaction } from "../lib/types";
+import type { ContextTag, TagKind, Transaction } from "../lib/types";
 
 /**
  * Keyboard-first review queue. Throughput matters more than chrome here:
  * number keys pick a category, Enter accepts, s skips, u undoes the last save.
+ * Tags are secondary (mouse) so they do not steal the keyboard flow.
  */
 export function Review() {
   const { data, loading, error, reload } = useAsync(() => api.reviewQueue(), []);
+  const tagsState = useAsync(() => api.tags(), []);
   const [index, setIndex] = useState(0);
   const [subcategory, setSubcategory] = useState("");
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [createRule, setCreateRule] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [done, setDone] = useState<string[]>([]);
+  const [newTagLabel, setNewTagLabel] = useState("");
+  const [newTagKind, setNewTagKind] = useState<TagKind>("trip");
 
   const items = useMemo(() => data?.items ?? [], [data]);
   const categories = data?.categories ?? [];
+  const subcategories = data?.subcategories ?? {};
+  const tagCatalog: ContextTag[] = tagsState.data?.items ?? [];
   const current: Transaction | undefined = items[index];
 
   const proposal = current?.proposed_category ?? null;
 
   useEffect(() => {
-    setSubcategory(current?.proposed_subcategory ?? "");
+    const proposed = current?.proposed_subcategory ?? "";
+    const proposedCat = current?.proposed_category ?? "";
+    setSubcategory(proposed && proposedCat ? `${proposedCat}::${proposed}` : "");
+    setSelectedTags(current?.tags ?? []);
     setSaveError(null);
-  }, [current?.txn_id, current?.proposed_subcategory]);
+  }, [current?.txn_id, current?.proposed_category, current?.proposed_subcategory, current?.tags]);
 
   const advance = useCallback(() => {
     setIndex((i) => Math.min(i + 1, items.length));
   }, [items.length]);
+
+  const resolveSubcategory = useCallback(
+    (category: string) => {
+      // Select values are "Primary::Subcategory" so names can repeat across primaries.
+      if (subcategory.includes("::")) {
+        const [pickedCategory, ...rest] = subcategory.split("::");
+        const pickedSub = rest.join("::");
+        if (pickedCategory === category && pickedSub) return pickedSub;
+        return "";
+      }
+      const allowed = subcategories[category] ?? [];
+      if (subcategory && allowed.includes(subcategory)) return subcategory;
+      if (
+        proposal === category &&
+        current?.proposed_subcategory &&
+        subcategory === current.proposed_subcategory
+      ) {
+        return subcategory;
+      }
+      return "";
+    },
+    [current?.proposed_subcategory, proposal, subcategory, subcategories],
+  );
 
   const save = useCallback(
     async (category: string) => {
@@ -42,7 +75,8 @@ export function Review() {
       try {
         await api.submitReview(current.txn_id, {
           category,
-          subcategory,
+          subcategory: resolveSubcategory(category),
+          tags: selectedTags,
           create_rule: createRule,
           rule_scope: "auto",
         });
@@ -54,8 +88,29 @@ export function Review() {
         setSaving(false);
       }
     },
-    [advance, createRule, current, saving, subcategory],
+    [advance, createRule, current, resolveSubcategory, saving, selectedTags],
   );
+
+  function toggleTag(tagId: string) {
+    setSelectedTags((currentTags) =>
+      currentTags.includes(tagId) ? currentTags.filter((id) => id !== tagId) : [...currentTags, tagId],
+    );
+  }
+
+  async function createTag() {
+    if (!newTagLabel.trim()) return;
+    setSaveError(null);
+    try {
+      const result = await api.createTag({ label: newTagLabel.trim(), kind: newTagKind });
+      setSelectedTags((currentTags) =>
+        currentTags.includes(result.tag.id) ? currentTags : [...currentTags, result.tag.id],
+      );
+      setNewTagLabel("");
+      tagsState.reload();
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+    }
+  }
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -114,7 +169,7 @@ export function Review() {
     <>
       <PageHeader
         title="Review queue"
-        lede={`${remaining} of ${items.length} remaining. Confirmations become reusable rules.`}
+        lede={`${remaining} of ${items.length} remaining. Confirmations become reusable rules. Tags are optional context.`}
       />
 
       <div className="progress">
@@ -164,13 +219,71 @@ export function Review() {
             ))}
           </div>
 
+          <div className="tag-picker">
+            <p className="muted">Context tags (optional)</p>
+            <div className="tag-chip-row">
+              {tagCatalog.map((tag) => {
+                const active = selectedTags.includes(tag.id);
+                return (
+                  <button
+                    key={tag.id}
+                    type="button"
+                    className={`tag-chip ${active ? "active" : ""}`}
+                    onClick={() => toggleTag(tag.id)}
+                    disabled={saving}
+                  >
+                    {tag.label}
+                    <span className="tag-kind">{tag.kind}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="toolbar" style={{ marginTop: "0.6rem", marginBottom: 0 }}>
+              <input
+                type="text"
+                placeholder="New tag (e.g. London-Paris)"
+                value={newTagLabel}
+                onChange={(e) => setNewTagLabel(e.target.value)}
+              />
+              <select value={newTagKind} onChange={(e) => setNewTagKind(e.target.value as TagKind)}>
+                <option value="trip">Trip</option>
+                <option value="occasion">Occasion</option>
+                <option value="other">Other</option>
+              </select>
+              <button className="btn subtle" type="button" onClick={() => void createTag()} disabled={saving}>
+                Create tag
+              </button>
+            </div>
+          </div>
+
           <div className="review-actions">
-            <input
-              type="text"
-              placeholder="Subcategory (optional)"
+            <select
               value={subcategory}
               onChange={(e) => setSubcategory(e.target.value)}
-            />
+              aria-label="Subcategory"
+            >
+              <option value="">Subcategory (optional)</option>
+              {categories.map((category) => {
+                const options = [...(subcategories[category] ?? [])];
+                if (
+                  proposal === category &&
+                  current.proposed_subcategory &&
+                  !options.includes(current.proposed_subcategory)
+                ) {
+                  options.push(current.proposed_subcategory);
+                }
+                if (options.length === 0) return null;
+                return (
+                  <optgroup key={category} label={category}>
+                    {options.map((sub) => (
+                      <option key={`${category}::${sub}`} value={`${category}::${sub}`}>
+                        {sub}
+                      </option>
+                    ))}
+                  </optgroup>
+                );
+              })}
+            </select>
             <label className="checkbox">
               <input
                 type="checkbox"

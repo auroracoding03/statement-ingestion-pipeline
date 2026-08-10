@@ -1,5 +1,12 @@
 export type ClassifiedBy = "rule" | "merchant" | "ai" | "manual" | null;
 export type MerchantSource = "alias" | "ai" | "manual" | "none";
+export type TagKind = "occasion" | "trip" | "other";
+
+export interface ContextTag {
+  id: string;
+  label: string;
+  kind: TagKind;
+}
 
 export interface Transaction {
   txn_id: string;
@@ -14,6 +21,7 @@ export interface Transaction {
   source_file: string;
   category: string | null;
   subcategory: string | null;
+  tags: string[];
   classified_by: ClassifiedBy;
   proposed_category: string | null;
   proposed_subcategory: string | null;
@@ -117,4 +125,5 @@ export interface ReviewQueue {
   total: number;
   items: Transaction[];
   categories: string[];
+  subcategories: Record<string, string[]>;
 }

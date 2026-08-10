@@ -17,6 +17,40 @@ categories:
   - Income
   - Uncategorized
 
+# Managed vocabulary of subcategories per primary. Keep strings consistent.
+subcategories:
+  Housing:
+    - Mortgage
+  Utilities:
+    - Electric
+    - InternetPhone
+  Food:
+    - FastFood
+    - Groceries
+    - Restaurant
+    - Coffee
+  Travel:
+    - Lodging
+    - Transit
+  Entertainment: []
+  Shopping:
+    - Retail
+    - Warehouse
+  Health: []
+  Transport:
+    - Gas
+    - Rideshare
+  Subscriptions:
+    - Streaming
+    - Fitness
+  Personal: []
+  Transfers:
+    - CardPayment
+  Fees:
+    - CardFee
+  Income: []
+  Uncategorized: []
+
 rules:
   - match:
       merchant_regex: "(?i)chick[- ]?fil[- ]?a|mcdonald'?s|wendy'?s|taco bell|chipotle|starbucks|dunkin"

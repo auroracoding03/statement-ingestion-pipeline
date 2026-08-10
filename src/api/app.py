@@ -24,13 +24,30 @@ from src import pipeline
 from src.ai_suggest import ollama_available
 from src.atomic import atomic_copy_stream
 from src.api import jobs
-from src.api.schemas import ClassifyRequest, MerchantIn, ReviewDecision, RuleIn, UploadCommitRequest
-from src.classify import append_rule, delete_rule, load_rules
+from src.api.schemas import (
+    CategoryIn,
+    ClassifyRequest,
+    MerchantIn,
+    ReviewDecision,
+    RuleIn,
+    SubcategoryIn,
+    TagIn,
+    UploadCommitRequest,
+)
+from src.classify import (
+    append_category,
+    append_rule,
+    append_subcategory,
+    delete_rule,
+    list_subcategories,
+    load_rules,
+)
 from src.extract import iter_statement_files
 from src.merchants import append_merchant, delete_merchant, load_merchants
 from src.paths import DASHBOARD, EXPORT_DIR, FINANCE_DB, INBOX, PENDING_UPLOADS, UI, ensure_dirs
 from src.review import needs_review
 from src.statement_identity import detect_statement_identity
+from src.tags import create_tag, delete_tag, list_tags, normalize_tag_ids
 from src.updater import UpdateError, check_for_update, install_latest_update
 from src.upload_context import card_key, normalize_issuer, normalize_product, write_upload_context
 from src.version import APP_VERSION
@@ -58,6 +75,15 @@ def _jsonable(value: Any) -> Any:
         return value.isoformat()
     if value is pd.NaT:
         return None
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    if hasattr(value, "tolist") and not isinstance(value, (str, bytes)):
+        try:
+            as_list = value.tolist()
+            if isinstance(as_list, list):
+                return [_jsonable(v) for v in as_list]
+        except (TypeError, ValueError):
+            pass
     if hasattr(value, "item") and not isinstance(value, (str, bytes)):
         try:
             return value.item()
@@ -299,6 +325,7 @@ async def post_upload(
 def get_transactions(
     q: str | None = None,
     category: str | None = None,
+    tag: str | None = None,
     card: str | None = None,
     merchant: str | None = None,
     unclassified: bool = False,
@@ -310,6 +337,13 @@ def get_transactions(
         return {"total": 0, "items": []}
 
     frame = ledger
+    if "tags" not in frame.columns:
+        frame = frame.copy()
+        frame["tags"] = [[] for _ in range(len(frame))]
+    else:
+        frame = frame.copy()
+        frame["tags"] = frame["tags"].apply(normalize_tag_ids)
+
     if q:
         needle = q.lower()
         haystack = (
@@ -322,6 +356,8 @@ def get_transactions(
         frame = frame[haystack.str.contains(re.escape(needle), na=False)]
     if category:
         frame = frame[frame["category"].fillna("Uncategorized") == category]
+    if tag:
+        frame = frame[frame["tags"].apply(lambda values: tag in values)]
     if card:
         frame = frame[frame["card"] == card]
     if merchant:
@@ -341,7 +377,7 @@ def get_transactions(
 def get_review_queue(limit: int = Query(100, le=1000)) -> dict:
     ledger = pipeline.load_ledger()
     if ledger.empty:
-        return {"total": 0, "items": [], "categories": []}
+        return {"total": 0, "items": [], "categories": [], "subcategories": {}}
 
     pending = ledger[ledger.apply(needs_review, axis=1)].sort_values("amount", ascending=False)
     categories = load_rules().get("categories") or []
@@ -349,6 +385,7 @@ def get_review_queue(limit: int = Query(100, le=1000)) -> dict:
         "total": int(len(pending)),
         "items": _records(pending.head(limit)),
         "categories": categories,
+        "subcategories": list_subcategories(),
     }
 
 
@@ -361,10 +398,16 @@ def post_review(txn_id: str, body: ReviewDecision) -> dict:
     row = match.iloc[0]
 
     result = pipeline.apply_review_decision(
-        txn_id, category=body.category, subcategory=body.subcategory
+        txn_id,
+        category=body.category,
+        subcategory=body.subcategory,
+        tags=body.tags,
     )
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
+
+    if body.subcategory.strip():
+        append_subcategory(body.category, body.subcategory)
 
     rule = None
     if body.create_rule and body.rule_scope != "none":
@@ -517,6 +560,7 @@ def get_rules() -> dict:
     doc = load_rules()
     return {
         "categories": doc.get("categories") or [],
+        "subcategories": list_subcategories(),
         "rules": [{"index": i, **r} for i, r in enumerate(doc.get("rules") or [])],
     }
 
@@ -539,6 +583,65 @@ def remove_rule(index: int) -> dict:
     if not delete_rule(index):
         raise HTTPException(status_code=404, detail="Unknown rule index")
     return {"deleted": index}
+
+
+@app.post("/api/categories")
+def post_category(body: CategoryIn) -> dict:
+    ensure_dirs()
+    try:
+        categories = append_category(body.category)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"categories": categories, "subcategories": list_subcategories()}
+
+
+@app.post("/api/subcategories")
+def post_subcategory(body: SubcategoryIn) -> dict:
+    ensure_dirs()
+    try:
+        subcategories = append_subcategory(body.category, body.subcategory)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"subcategories": subcategories}
+
+
+# --------------------------------------------------------------------------- tags
+
+
+def _tag_in_use(tag_id: str) -> bool:
+    ledger = pipeline.load_ledger()
+    if ledger.empty or "tags" not in ledger.columns:
+        return False
+    return bool(ledger["tags"].apply(lambda values: tag_id in normalize_tag_ids(values)).any())
+
+
+@app.get("/api/tags")
+def get_tags() -> dict:
+    ensure_dirs()
+    return {"total": len(list_tags()), "items": list_tags()}
+
+
+@app.post("/api/tags")
+def post_tag(body: TagIn) -> dict:
+    ensure_dirs()
+    try:
+        entry = create_tag(label=body.label, kind=body.kind, tag_id=body.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"tag": entry}
+
+
+@app.delete("/api/tags/{tag_id}")
+def remove_tag(tag_id: str) -> dict:
+    ensure_dirs()
+    if _tag_in_use(tag_id):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Tag {tag_id!r} is still used on ledger transactions.",
+        )
+    if not delete_tag(tag_id):
+        raise HTTPException(status_code=404, detail="Unknown tag")
+    return {"deleted": tag_id}
 
 
 # --------------------------------------------------------------------------- static UI

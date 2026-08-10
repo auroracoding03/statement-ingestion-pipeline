@@ -12,6 +12,7 @@ class ClassifyRequest(BaseModel):
 class ReviewDecision(BaseModel):
     category: str
     subcategory: str = ""
+    tags: list[str] = Field(default_factory=list)
     create_rule: bool = True
     # When the merchant has a canonical identity, prefer a canonical rule over a regex
     rule_scope: str = Field(default="auto", pattern="^(auto|canonical|regex|none)$")
@@ -36,6 +37,21 @@ class RuleIn(BaseModel):
     merchant_canonical: str | None = None
     category: str
     subcategory: str = ""
+
+
+class CategoryIn(BaseModel):
+    category: str = Field(min_length=1, max_length=80)
+
+
+class SubcategoryIn(BaseModel):
+    category: str = Field(min_length=1, max_length=80)
+    subcategory: str = Field(min_length=1, max_length=80)
+
+
+class TagIn(BaseModel):
+    label: str = Field(min_length=1, max_length=80)
+    kind: str = Field(default="other", pattern="^(occasion|trip|other)$")
+    id: str | None = Field(default=None, max_length=80)
 
 
 class UploadCommitItem(BaseModel):

@@ -9,6 +9,7 @@
  */
 import type {
   CategoryMonthly,
+  ContextTag,
   Job,
   JobStart,
   Merchant,
@@ -160,14 +161,23 @@ export const api = {
   async reviewQueue(): Promise<ReviewQueue> {
     if (!canWrite) {
       const items = await staticJSON<Transaction[]>("uncategorized", []);
-      return { total: items.length, items, categories: [] };
+      return { total: items.length, items, categories: [], subcategories: {} };
     }
     return req<ReviewQueue>("/api/review/queue");
   },
 
-  async rules(): Promise<{ categories: string[]; rules: Rule[] }> {
-    if (!canWrite) return { categories: [], rules: [] };
-    return req<{ categories: string[]; rules: Rule[] }>("/api/rules");
+  async rules(): Promise<{
+    categories: string[];
+    subcategories: Record<string, string[]>;
+    rules: Rule[];
+  }> {
+    if (!canWrite) return { categories: [], subcategories: {}, rules: [] };
+    return req<{ categories: string[]; subcategories: Record<string, string[]>; rules: Rule[] }>("/api/rules");
+  },
+
+  async tags(): Promise<{ total: number; items: ContextTag[] }> {
+    if (!canWrite) return { total: 0, items: [] };
+    return req<{ total: number; items: ContextTag[] }>("/api/tags");
   },
 
   async updates(): Promise<UpdateStatus> {
@@ -201,10 +211,42 @@ export const api = {
 
   submitReview(
     txnId: string,
-    body: { category: string; subcategory?: string; create_rule?: boolean; rule_scope?: string },
+    body: {
+      category: string;
+      subcategory?: string;
+      tags?: string[];
+      create_rule?: boolean;
+      rule_scope?: string;
+    },
   ) {
     if (!canWrite) writeGuard();
     return req<unknown>(`/api/review/${txnId}`, { method: "POST", body: JSON.stringify(body) });
+  },
+
+  createTag(body: { label: string; kind?: string; id?: string }) {
+    if (!canWrite) writeGuard();
+    return req<{ tag: ContextTag }>("/api/tags", { method: "POST", body: JSON.stringify(body) });
+  },
+
+  deleteTag(tagId: string) {
+    if (!canWrite) writeGuard();
+    return req<unknown>(`/api/tags/${encodeURIComponent(tagId)}`, { method: "DELETE" });
+  },
+
+  addCategory(category: string) {
+    if (!canWrite) writeGuard();
+    return req<{ categories: string[]; subcategories: Record<string, string[]> }>("/api/categories", {
+      method: "POST",
+      body: JSON.stringify({ category }),
+    });
+  },
+
+  addSubcategory(category: string, subcategory: string) {
+    if (!canWrite) writeGuard();
+    return req<{ subcategories: Record<string, string[]> }>("/api/subcategories", {
+      method: "POST",
+      body: JSON.stringify({ category, subcategory }),
+    });
   },
 
   saveMerchant(body: {

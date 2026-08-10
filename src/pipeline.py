@@ -60,6 +60,10 @@ def _ensure_columns(frame: pd.DataFrame) -> pd.DataFrame:
     for column in ALL_COLUMNS:
         if column not in out.columns:
             out[column] = None
+    if "tags" in out.columns:
+        from src.tags import normalize_tag_ids
+
+        out["tags"] = out["tags"].apply(normalize_tag_ids)
     return out[ALL_COLUMNS]
 
 
@@ -182,8 +186,11 @@ def apply_review_decision(
     *,
     category: str,
     subcategory: str = "",
+    tags: list[str] | None = None,
 ) -> dict:
     """Record a human classification decision on one transaction."""
+    from src.tags import normalize_tag_ids
+
     with ledger_lock():
         ledger = load_ledger()
         match = ledger["txn_id"] == txn_id
@@ -191,11 +198,20 @@ def apply_review_decision(
             return {"error": f"Unknown txn_id {txn_id}"}
         ledger.loc[match, "category"] = category
         ledger.loc[match, "subcategory"] = subcategory
+        if tags is not None:
+            normalized = normalize_tag_ids(tags)
+            # Assign list into object-dtype cells row-wise.
+            for idx in ledger.index[match]:
+                ledger.at[idx, "tags"] = list(normalized)
         ledger.loc[match, "classified_by"] = "manual"
         ledger.loc[match, "proposed_category"] = None
         ledger.loc[match, "proposed_subcategory"] = None
         write_ledger(_ensure_columns(ledger))
-    return {"txn_id": txn_id, "category": category, "subcategory": subcategory}
+    result = {"txn_id": txn_id, "category": category, "subcategory": subcategory}
+    if tags is not None:
+        result["tags"] = normalize_tag_ids(tags)
+    return result
+
 
 
 def set_canonical_for_merchants(members: list[str], canonical: str) -> int:

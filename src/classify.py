@@ -79,12 +79,18 @@ def _match_rule(rule: dict, *, canonical: str, merchant: str, raw: str) -> bool:
 
 def classify(frame: pd.DataFrame, rules_path: Path | None = None) -> pd.DataFrame:
     out = frame.copy()
-    for column in ("category", "subcategory", "classified_by", "proposed_category", "proposed_subcategory"):
+    for column in ("category", "subcategory", "tags", "classified_by", "proposed_category", "proposed_subcategory"):
         if column not in out.columns:
-            out[column] = None
+            out[column] = None if column != "tags" else [[] for _ in range(len(out))] if len(out) else []
 
     if out.empty:
+        if "tags" not in out.columns:
+            out["tags"] = []
         return out
+
+    from src.tags import normalize_tag_ids
+
+    out["tags"] = out["tags"].apply(normalize_tag_ids)
 
     rules = _compile_rules(load_rules(rules_path))
     defaults = merchant_defaults()
@@ -145,14 +151,98 @@ def append_rule(
             if merchant_canonical
             else {"merchant_regex": merchant_regex}
         )
-        rule = {"match": match, "category": category, "subcategory": subcategory}
+        cleaned_sub = " ".join((subcategory or "").split()).strip()
+        rule = {"match": match, "category": category, "subcategory": cleaned_sub}
         rules.insert(0, rule)
 
         cats = doc.setdefault("categories", [])
         if category not in cats:
             cats.append(category)
+        _ensure_subcategory(doc, category, cleaned_sub)
         save_rules(doc, target)
         return rule
+
+
+def append_category(category: str, rules_path: Path | None = None) -> list[str]:
+    """Add a primary spend category to the vocabulary list."""
+    cleaned = " ".join(category.split()).strip()
+    if not cleaned:
+        raise ValueError("Category name is required")
+    target = _path(rules_path)
+    with FileLock(f"{target}.lock"):
+        doc = load_rules(target)
+        cats = doc.setdefault("categories", [])
+        if cleaned not in cats:
+            cats.append(cleaned)
+        subs = doc.setdefault("subcategories", {})
+        if not isinstance(subs, dict):
+            doc["subcategories"] = {}
+            subs = doc["subcategories"]
+        subs.setdefault(cleaned, [])
+        save_rules(doc, target)
+        return list(cats)
+
+
+def list_subcategories(rules_path: Path | None = None) -> dict[str, list[str]]:
+    """Return ``{primary: [subcategory, ...]}`` from the managed vocabulary."""
+    doc = load_rules(rules_path)
+    raw = doc.get("subcategories") or {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, list[str]] = {}
+    for category, values in raw.items():
+        key = str(category).strip()
+        if not key:
+            continue
+        items: list[str] = []
+        if isinstance(values, list):
+            for value in values:
+                text = " ".join(str(value).split()).strip()
+                if text and text not in items:
+                    items.append(text)
+        out[key] = items
+    # Ensure every declared primary appears, even with an empty list.
+    for category in doc.get("categories") or []:
+        out.setdefault(str(category), [])
+    return out
+
+
+def _ensure_subcategory(doc: dict, category: str, subcategory: str) -> None:
+    if not category or not subcategory:
+        return
+    subs = doc.setdefault("subcategories", {})
+    if not isinstance(subs, dict):
+        doc["subcategories"] = {}
+        subs = doc["subcategories"]
+    bucket = subs.setdefault(category, [])
+    if not isinstance(bucket, list):
+        bucket = []
+        subs[category] = bucket
+    if subcategory not in bucket:
+        bucket.append(subcategory)
+
+
+def append_subcategory(
+    category: str,
+    subcategory: str,
+    rules_path: Path | None = None,
+) -> dict[str, list[str]]:
+    """Register a subcategory under a primary category."""
+    cleaned_category = " ".join(category.split()).strip()
+    cleaned_sub = " ".join(subcategory.split()).strip()
+    if not cleaned_category:
+        raise ValueError("Category name is required")
+    if not cleaned_sub:
+        raise ValueError("Subcategory name is required")
+    target = _path(rules_path)
+    with FileLock(f"{target}.lock"):
+        doc = load_rules(target)
+        cats = doc.setdefault("categories", [])
+        if cleaned_category not in cats:
+            cats.append(cleaned_category)
+        _ensure_subcategory(doc, cleaned_category, cleaned_sub)
+        save_rules(doc, target)
+        return list_subcategories(target)
 
 
 def delete_rule(index: int, rules_path: Path | None = None) -> bool:
