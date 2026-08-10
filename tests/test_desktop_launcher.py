@@ -43,6 +43,27 @@ def test_desktop_launcher_uses_native_webview(monkeypatch) -> None:
     lock.release.assert_called_once_with()
 
 
+def test_server_ready_uses_lightweight_health_probe(monkeypatch) -> None:
+    opened: list[str] = []
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def fake_urlopen(url: str, timeout: float = 0):
+        opened.append(url)
+        assert timeout == desktop.READY_PROBE_TIMEOUT_SECONDS
+        return _Response()
+
+    monkeypatch.setattr(desktop.urllib.request, "urlopen", fake_urlopen)
+
+    assert desktop._server_ready("http://127.0.0.1:8787") is True
+    assert opened == ["http://127.0.0.1:8787/api/health"]
+
+
 def test_ensure_stdio_replaces_missing_streams(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdout", None)
     monkeypatch.setattr(sys, "stderr", None)

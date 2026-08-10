@@ -81,6 +81,12 @@ def _records(frame: pd.DataFrame) -> list[dict]:
 # --------------------------------------------------------------------------- status
 
 
+@app.get("/api/health")
+def get_health() -> dict:
+    """Lightweight liveness probe for the desktop launcher readiness wait."""
+    return {"ok": True, "version": APP_VERSION}
+
+
 @app.get("/api/status")
 def get_status() -> dict:
     ledger = pipeline.load_ledger()
