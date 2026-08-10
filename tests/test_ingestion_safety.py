@@ -102,6 +102,20 @@ def test_identical_document_bytes_are_not_parsed_twice(tmp_path: Path):
     assert set(result.manifest["status"]) == {"parsed", "duplicate_document"}
 
 
+def test_underscore_inbox_dirs_are_ignored(tmp_path: Path):
+    inbox = tmp_path / "inbox"
+    (inbox / "generic").mkdir(parents=True)
+    (inbox / "_quarantine").mkdir(parents=True)
+    (inbox / "generic" / "ok.csv").write_text("Date,Description,Amount\n2026-01-01,Coffee,10.00\n")
+    (inbox / "_quarantine" / "bad.csv").write_text("Date,Description\n2026-01-02,Broken\n")
+
+    result = extract_statements(inbox)
+
+    assert len(result.frame) == 1
+    assert result.manifest["status"].tolist() == ["parsed"]
+    assert Path(result.manifest.iloc[0]["source_file"]).as_posix() == "generic/ok.csv"
+
+
 def test_parser_failure_does_not_replace_existing_ledger(tmp_path: Path, monkeypatch):
     inbox = tmp_path / "inbox"
     card_dir = inbox / "generic"

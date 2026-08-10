@@ -40,6 +40,8 @@ def iter_statement_files(inbox: Path = INBOX) -> list[tuple[str, Path]]:
     if not inbox.exists():
         return found
     for card_dir in sorted(p for p in inbox.iterdir() if p.is_dir()):
+        if card_dir.name.startswith("_"):
+            continue
         for path in sorted(card_dir.rglob("*")):
             if path.is_file() and path.suffix.lower() in SUPPORTED:
                 found.append((card_dir.name, path))

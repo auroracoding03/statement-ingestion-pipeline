@@ -20,7 +20,11 @@ export function PipelineBar() {
       if (!started.job_id) throw new Error("Server did not return a job id");
       const job = await waitForJob(started.job_id);
       if (job.status === "error") {
-        setError(job.error ?? "Job failed");
+        const details = Array.isArray((job.result as { details?: unknown } | null)?.details)
+          ? ((job.result as { details: string[] }).details as string[])
+          : [];
+        const detailText = details.length ? ` ${details.join(" | ")}` : "";
+        setError(`${job.error ?? "Job failed"}${detailText}`);
       } else {
         setMessage(summarize(stage, job.result));
         window.dispatchEvent(new CustomEvent("ledger-changed"));
@@ -64,7 +68,16 @@ export function PipelineBar() {
 
 function summarize(stage: string, result: unknown): string {
   const r = (result ?? {}) as Record<string, number | string>;
-  if (stage === "ingest") return `Ingested ${r.ingested ?? 0} transactions`;
+  if (stage === "ingest") {
+    const ingested = Number(r.ingested ?? 0);
+    const total = Number(r.total ?? 0);
+    if (typeof r.message === "string" && r.message.trim()) return r.message;
+    if (ingested === 0 && total > 0) {
+      return `No new transactions (${total} already in ledger)`;
+    }
+    if (ingested === 0) return "Ingested 0 transactions";
+    return `Ingested ${ingested} new transactions (${total} total in ledger)`;
+  }
   if (stage.startsWith("classify")) {
     return `rule ${r.rule ?? 0} · merchant ${r.merchant ?? 0} · ai ${r.ai ?? 0} · manual ${r.manual ?? 0} · open ${r.open ?? 0}`;
   }
