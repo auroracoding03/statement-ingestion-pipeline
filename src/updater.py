@@ -21,6 +21,9 @@ from src.version import APP_VERSION, INSTALLER_NAME, RELEASE_REPOSITORY
 GITHUB_API = f"https://api.github.com/repos/{RELEASE_REPOSITORY}/releases/latest"
 CHECKSUM_NAME = f"{INSTALLER_NAME}.sha256"
 VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
+PROCESS_NAME = "StatementPipeline"
+GRACEFUL_EXIT_SECONDS = 8
+FORCE_STOP_WAIT_SECONDS = 15
 
 
 class UpdateError(RuntimeError):
@@ -142,24 +145,80 @@ def _installed_executable() -> Path:
     return Path(sys.executable).resolve()
 
 
-def _installer_command(installer: Path, installed_exe: Path, pid: int) -> list[str]:
-    """Wait for the live app to exit, then install and relaunch.
+def _update_log_path() -> Path:
+    return USER_DATA_ROOT / "updates" / "update.log"
 
-    The previous flow started the installer (and relaunch) while this process
-    still held the single-instance lock, so the replacement exe reported
-    "Statement Pipeline is already running."  Waiting on ``pid`` first makes
-    the lock available before the new process starts.
+
+def _installer_command(
+    installer: Path,
+    installed_exe: Path,
+    *,
+    log_path: Path,
+    process_name: str = PROCESS_NAME,
+    graceful_seconds: int = GRACEFUL_EXIT_SECONDS,
+    force_wait_seconds: int = FORCE_STOP_WAIT_SECONDS,
+) -> list[str]:
+    """Snapshot live app PIDs, stop survivors, then install and relaunch once.
+
+    The previous waiter only watched the updating PID. If that process failed to
+    exit (or a failed duplicate already existed), the replacement exe hit the
+    single-instance lock and reported "already running." Snapshotting every
+    pre-install app PID keeps the wait bounded and avoids later matching the
+    newly launched version by process name.
     """
     installer_literal = json.dumps(str(installer))
     exe_literal = json.dumps(str(installed_exe))
-    script = (
-        f"while (Get-Process -Id {int(pid)} -ErrorAction SilentlyContinue) "
-        f"{{ Start-Sleep -Milliseconds 400 }}; "
-        f"$p = Start-Process -FilePath {installer_literal} "
-        f"-ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru -Wait; "
-        f"if ($p.ExitCode -ne 0) {{ exit $p.ExitCode }}; "
-        f"Start-Process -FilePath {exe_literal}"
-    )
+    log_literal = json.dumps(str(log_path))
+    process_literal = json.dumps(process_name)
+    script = f"""
+$ErrorActionPreference = 'Stop'
+$logPath = {log_literal}
+function Write-UpdateLog([string]$Message) {{
+  $line = '{{0:u}} {{1}}' -f (Get-Date).ToUniversalTime(), $Message
+  Add-Content -LiteralPath $logPath -Value $line
+}}
+try {{
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $logPath) | Out-Null
+  Write-UpdateLog 'handoff-start'
+  $targets = @(Get-Process -Name {process_literal} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
+  Write-UpdateLog ('snapshot-pids ' + (($targets | ForEach-Object {{ $_ }}) -join ','))
+  $deadline = (Get-Date).AddSeconds({int(graceful_seconds)})
+  while ((Get-Date) -lt $deadline) {{
+    $alive = @($targets | Where-Object {{ Get-Process -Id $_ -ErrorAction SilentlyContinue }})
+    if ($alive.Count -eq 0) {{ break }}
+    Start-Sleep -Milliseconds 400
+  }}
+  $survivors = @($targets | Where-Object {{ Get-Process -Id $_ -ErrorAction SilentlyContinue }})
+  if ($survivors.Count -gt 0) {{
+    Write-UpdateLog ('force-stop ' + ($survivors -join ','))
+    foreach ($targetId in $survivors) {{
+      Stop-Process -Id $targetId -Force -ErrorAction SilentlyContinue
+    }}
+    $forceDeadline = (Get-Date).AddSeconds({int(force_wait_seconds)})
+    while ((Get-Date) -lt $forceDeadline) {{
+      $alive = @($survivors | Where-Object {{ Get-Process -Id $_ -ErrorAction SilentlyContinue }})
+      if ($alive.Count -eq 0) {{ break }}
+      Start-Sleep -Milliseconds 400
+    }}
+    $stillAlive = @($survivors | Where-Object {{ Get-Process -Id $_ -ErrorAction SilentlyContinue }})
+    if ($stillAlive.Count -gt 0) {{
+      throw ('Unable to stop process(es): ' + ($stillAlive -join ','))
+    }}
+  }}
+  Write-UpdateLog 'install-start'
+  $p = Start-Process -FilePath {installer_literal} -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru -Wait
+  if ($null -eq $p) {{ throw 'Installer process failed to start.' }}
+  if ($p.ExitCode -ne 0) {{
+    throw ('Installer exited with code ' + $p.ExitCode)
+  }}
+  Write-UpdateLog 'install-ok'
+  Start-Process -FilePath {exe_literal}
+  Write-UpdateLog 'relaunch-ok'
+}} catch {{
+  Write-UpdateLog ('handoff-error ' + $_.Exception.Message)
+  exit 1
+}}
+"""
     return [
         "powershell.exe",
         "-NoProfile",
@@ -173,14 +232,16 @@ def _installer_command(installer: Path, installed_exe: Path, pid: int) -> list[s
 def _launch_installer(installer: Path) -> None:
     """Run the in-place installer after this process has exited."""
     installed_exe = _installed_executable()
+    log_path = _update_log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     subprocess.Popen(
-        _installer_command(installer, installed_exe, os.getpid()),
+        _installer_command(installer, installed_exe, log_path=log_path),
         close_fds=True,
         creationflags=flags,
     )
     # Hard-exit so the waiter observes this PID disappearing promptly. The
-    # detached PowerShell script holds the install + relaunch sequence.
+    # detached PowerShell script remains authoritative if graceful exit fails.
     threading.Timer(0.75, lambda: os._exit(0)).start()
 
 
