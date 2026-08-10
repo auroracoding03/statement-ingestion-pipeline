@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -40,8 +41,8 @@ def test_check_for_update_reports_newer_release(monkeypatch) -> None:
     assert result["latest_version"] == FUTURE_VERSION
 
 
-def test_launch_installer_tokenizes_paths_with_spaces(monkeypatch) -> None:
-    installer = Path(r"C:\Users\Ada Lovelace\AppData\Local\Statement Pipeline\updates\StatementPipelineSetup-0.2.4.exe")
+def test_launch_installer_waits_for_current_process_before_relaunch(monkeypatch) -> None:
+    installer = Path(r"C:\Users\Ada Lovelace\AppData\Local\Statement Pipeline\updates\StatementPipelineSetup-0.2.6.exe")
     installed_exe = Path(r"C:\Users\Ada Lovelace\AppData\Local\Programs\Statement Pipeline\StatementPipeline.exe")
     popen = Mock()
     timer = Mock()
@@ -49,26 +50,24 @@ def test_launch_installer_tokenizes_paths_with_spaces(monkeypatch) -> None:
     monkeypatch.setattr(updater, "_installed_executable", lambda: installed_exe)
     monkeypatch.setattr(updater.subprocess, "Popen", popen)
     monkeypatch.setattr(updater.threading, "Timer", lambda *_args: timer)
+    monkeypatch.setattr(updater.os, "getpid", lambda: 4242)
 
     updater._launch_installer(installer)
 
-    assert popen.call_args.args[0] == [
-        "cmd.exe",
-        "/d",
-        "/c",
-        "start",
-        "",
-        "/wait",
-        str(installer),
-        "/VERYSILENT",
-        "/SUPPRESSMSGBOXES",
-        "/NORESTART",
-        "&&",
-        "start",
-        "",
-        str(installed_exe),
+    command = popen.call_args.args[0]
+    assert command[:5] == [
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
     ]
-    assert "/s" not in popen.call_args.args[0]
+    script = command[5]
+    assert "Get-Process -Id 4242" in script
+    assert "/VERYSILENT" in script
+    assert json.dumps(str(installer)) in script
+    assert json.dumps(str(installed_exe)) in script
+    assert "cmd.exe" not in command
     timer.start.assert_called_once_with()
 
 
