@@ -41,6 +41,7 @@ from src.classify import (
     delete_rule,
     list_subcategories,
     load_rules,
+    rule_pattern_from_merchant,
 )
 from src.extract import iter_statement_files
 from src.merchants import append_merchant, delete_merchant, load_merchants
@@ -421,10 +422,8 @@ def post_review(txn_id: str, body: ReviewDecision) -> dict:
                 subcategory=body.subcategory,
             )
         else:
-            tokens = [re.escape(t) for t in str(row["normalized_merchant"]).split() if t]
-            pattern = "(?i)" + r"\s+".join(tokens) if tokens else "(?i)."
             rule = append_rule(
-                merchant_regex=pattern,
+                merchant_regex=rule_pattern_from_merchant(row["normalized_merchant"]),
                 category=body.category,
                 subcategory=body.subcategory,
             )

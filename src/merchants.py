@@ -30,7 +30,7 @@ def load_merchants(path: Path | None = None) -> dict:
     target = _path(path)
     if not target.exists():
         return {"merchants": []}
-    with target.open() as f:
+    with target.open(encoding="utf-8") as f:
         return yaml.safe_load(f) or {"merchants": []}
 
 

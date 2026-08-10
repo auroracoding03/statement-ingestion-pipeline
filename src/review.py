@@ -2,25 +2,16 @@
 
 from __future__ import annotations
 
-import re
-
 import pandas as pd
 from rich.console import Console
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
-from src.classify import append_rule, load_rules
+from src.classify import append_rule, load_rules, rule_pattern_from_merchant
 
 console = Console()
 
 FINAL_SOURCES = ("rule", "manual", "merchant")
-
-
-def _escape_regex(merchant: str) -> str:
-    tokens = [re.escape(t) for t in merchant.split() if t]
-    if not tokens:
-        return "(?i)."
-    return "(?i)" + r"\s+".join(tokens)
 
 
 def needs_review(row: pd.Series) -> bool:
@@ -99,7 +90,7 @@ def review(frame: pd.DataFrame) -> pd.DataFrame:
                 console.print(f"[green]Rule saved[/green] canonical={canonical} → {category}/{subcategory}\n")
             else:
                 append_rule(
-                    merchant_regex=_escape_regex(str(row["normalized_merchant"])),
+                    merchant_regex=rule_pattern_from_merchant(str(row["normalized_merchant"])),
                     category=category,
                     subcategory=subcategory,
                 )
