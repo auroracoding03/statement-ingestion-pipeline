@@ -79,25 +79,98 @@ def _product(text: str, issuer: str) -> str | None:
     return None
 
 
+# Multi-word brands are strong. Short tokens like "chase" are weak because they
+# also appear as merchants inside other issuers' statements.
+_PDF_ISSUERS: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    ("American Express", (r"\bamerican express\b",), "strong"),
+    ("Bank of America", (r"\bbank of america\b",), "strong"),
+    ("Capital One", (r"\bcapital one\b",), "strong"),
+    ("Wells Fargo", (r"\bwells fargo\b",), "strong"),
+    ("Chase", (r"\bchase\b",), "weak"),
+)
+
+_FILENAME_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("American Express", ("americanexpress", "amex")),
+    ("Bank of America", ("bankofamerica", "boa")),
+    ("Capital One", ("capitalone", "capital1")),
+    ("Wells Fargo", ("wellsfargo",)),
+    ("Chase", ("chase",)),
+)
+
+
+def _issuer_hits(text: str) -> list[tuple[str, str]]:
+    """Return ``(issuer, strength)`` pairs found in ``text``."""
+    lower = text.lower()
+    hits: list[tuple[str, str]] = []
+    for issuer, patterns, strength in _PDF_ISSUERS:
+        if any(re.search(pattern, lower) for pattern in patterns):
+            hits.append((issuer, strength))
+    return hits
+
+
+def _choose_issuer(hits: list[tuple[str, str]]) -> str | None:
+    if not hits:
+        return None
+    strong = [issuer for issuer, strength in hits if strength == "strong"]
+    if len(strong) == 1:
+        return strong[0]
+    if len(strong) > 1:
+        return None
+    weak = [issuer for issuer, strength in hits if strength == "weak"]
+    if len(weak) == 1:
+        return weak[0]
+    return None
+
+
+def _filename_issuer(path: Path) -> str | None:
+    stem = re.sub(r"[^a-z0-9]+", "", path.stem.lower())
+    matches = [
+        issuer
+        for issuer, tokens in _FILENAME_HINTS
+        if any(stem == token or stem.startswith(token) for token in tokens)
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
 def _pdf_identity(path: Path) -> StatementIdentity:
     try:
         with pdfplumber.open(path) as pdf:
-            text = "\n".join((page.extract_text() or "") for page in pdf.pages[:3])
+            pages = [(page.extract_text() or "") for page in pdf.pages[:3]]
     except Exception:  # noqa: BLE001 — user-facing detection, not statement parsing
         return _manual("This PDF could not be read automatically. Select its issuer to continue.")
-    lower = text.lower()
-    candidates = [
-        ("American Express", ("american express", "member since")),
-        ("Bank of America", ("bank of america",)),
-        ("Capital One", ("capital one",)),
-        ("Chase", ("chase",)),
-        ("Wells Fargo", ("wells fargo",)),
-    ]
-    matches = [issuer for issuer, markers in candidates if any(marker in lower for marker in markers)]
-    if len(matches) != 1:
+
+    header = pages[0] if pages else ""
+    body = "\n".join(pages)
+    if not body.strip():
+        filename_issuer = _filename_issuer(path)
+        if filename_issuer:
+            return _detected(
+                filename_issuer,
+                None,
+                f"Detected {filename_issuer} from the filename because the PDF had no extractable text.",
+            )
+        return _manual("This PDF has no extractable text. Select its issuer to continue.")
+
+    issuer = _choose_issuer(_issuer_hits(header))
+    source = "the statement header"
+    if issuer is None:
+        # Ignore weak tokens in later pages — merchant lines often include "CHASE".
+        strong_body = [(name, strength) for name, strength in _issuer_hits(body) if strength == "strong"]
+        issuer = _choose_issuer(strong_body)
+        source = "the statement text"
+    if issuer is None:
+        filename_issuer = _filename_issuer(path)
+        if filename_issuer:
+            return _detected(
+                filename_issuer,
+                _product(body, filename_issuer),
+                f"Detected {filename_issuer} from the filename because the statement text was ambiguous.",
+            )
         return _manual("This PDF's issuer is ambiguous. Select it before uploading.")
-    issuer = matches[0]
-    return _detected(issuer, _product(text, issuer), f"Detected {issuer} from the statement text.")
+
+    return _detected(issuer, _product(body, issuer), f"Detected {issuer} from {source}.")
 
 
 def detect_statement_identity(path: Path) -> StatementIdentity:

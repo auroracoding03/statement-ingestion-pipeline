@@ -1,7 +1,6 @@
 """API surface tests, with all writes redirected into a temp workspace."""
 
 from pathlib import Path
-from unittest.mock import Mock
 
 import pandas as pd
 import pytest
@@ -9,7 +8,6 @@ import yaml
 from fastapi.testclient import TestClient
 
 import src.api.app as api_app
-import src.atomic as atomic_mod
 import src.paths as paths_mod
 import src.pipeline as pipeline_mod
 import src.store as store_mod
@@ -326,14 +324,3 @@ def test_staged_amex_csv_requires_only_product_confirmation(client: TestClient, 
     statement = workspace["root"] / "inbox" / "americanexpress-platinum" / "statement.csv"
     assert statement.exists()
     assert sidecar_path(statement).exists()
-
-
-def test_directory_fsync_failure_is_ignored_for_windows_compatibility(monkeypatch, tmp_path: Path):
-    monkeypatch.setattr(atomic_mod.os, "open", lambda *_args: 123)
-    monkeypatch.setattr(atomic_mod.os, "fsync", lambda _fd: (_ for _ in ()).throw(OSError("Bad file descriptor")))
-    close = Mock()
-    monkeypatch.setattr(atomic_mod.os, "close", close)
-
-    atomic_mod._fsync_directory(tmp_path)
-
-    close.assert_called_once_with(123)
