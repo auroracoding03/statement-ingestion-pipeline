@@ -117,15 +117,62 @@ a {
   max-width: 22rem;
 }
 
-/* ----------------------------------------------------------- pipeline bar */
+/* --------------------------------------------------------------- ingestion */
 
-.pipeline-bar {
-  border-bottom: 1px solid var(--line-soft);
+.ingestion-dropzone,
+.ingestion-queue,
+.pipeline-panel {
+  margin: 1.2rem 0;
+  padding: 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) * 2);
   background: var(--card);
-  padding: 0.7rem 2rem;
-  position: sticky;
-  top: 61px;
-  z-index: 15;
+}
+
+.ingestion-dropzone {
+  border-style: dashed;
+  text-align: center;
+}
+
+.ingestion-dropzone h2,
+.ingestion-queue h2,
+.pipeline-panel h2 {
+  margin: 0;
+  font-family: var(--font-display);
+}
+
+.ingestion-dropzone p,
+.pipeline-panel > .muted {
+  margin: 0.35rem 0 1rem;
+}
+
+.upload-review {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.upload-review:last-of-type {
+  margin-bottom: 1rem;
+}
+
+.upload-review p {
+  margin: 0.2rem 0 0;
+}
+
+.upload-details {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.upload-details label {
+  display: grid;
+  gap: 0.2rem;
+  color: var(--muted);
+  font-size: 0.8rem;
 }
 
 .pipeline-actions {

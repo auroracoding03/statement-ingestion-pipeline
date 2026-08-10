@@ -8,6 +8,7 @@ read-only static export.
 from __future__ import annotations
 
 import math
+import os
 import re
 import uuid
 from pathlib import Path
@@ -23,12 +24,13 @@ from src import pipeline
 from src.ai_suggest import ollama_available
 from src.atomic import atomic_copy_stream
 from src.api import jobs
-from src.api.schemas import ClassifyRequest, MerchantIn, ReviewDecision, RuleIn
+from src.api.schemas import ClassifyRequest, MerchantIn, ReviewDecision, RuleIn, UploadCommitRequest
 from src.classify import append_rule, delete_rule, load_rules
 from src.extract import iter_statement_files
 from src.merchants import append_merchant, delete_merchant, load_merchants
-from src.paths import DASHBOARD, EXPORT_DIR, FINANCE_DB, INBOX, UI, ensure_dirs
+from src.paths import DASHBOARD, EXPORT_DIR, FINANCE_DB, INBOX, PENDING_UPLOADS, UI, ensure_dirs
 from src.review import needs_review
+from src.statement_identity import detect_statement_identity
 from src.updater import UpdateError, check_for_update, install_latest_update
 from src.upload_context import card_key, normalize_issuer, normalize_product, write_upload_context
 from src.version import APP_VERSION
@@ -163,6 +165,92 @@ def get_job(job_id: str) -> dict:
 # --------------------------------------------------------------------------- upload
 
 
+def _safe_upload_name(upload: UploadFile) -> tuple[str, str]:
+    name = SAFE_NAME.sub("-", Path(upload.filename or "statement").name)
+    suffix = Path(name).suffix.lower()
+    if suffix not in {".csv", ".pdf"}:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {upload.filename}")
+    return name, suffix
+
+
+def _unique_target(directory: Path, name: str) -> Path:
+    target = directory / name
+    if target.exists():
+        original = Path(name)
+        target = directory / f"{original.stem}-{uuid.uuid4().hex[:8]}{original.suffix}"
+    return target
+
+
+@app.post("/api/uploads/inspect")
+async def inspect_uploads(files: list[UploadFile] = ()) -> dict:
+    """Stage documents and return automatic identity detection for each one."""
+    ensure_dirs()
+    if not files:
+        raise HTTPException(status_code=400, detail="Select at least one CSV or PDF statement.")
+
+    staged: list[dict] = []
+    for upload in files:
+        name, suffix = _safe_upload_name(upload)
+        token = uuid.uuid4().hex
+        target = PENDING_UPLOADS / f"{token}--{name}"
+        try:
+            atomic_copy_stream(target, upload.file)
+            identity = detect_statement_identity(target)
+        except OSError as exc:
+            target.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail=f"Could not save {name}: {exc}") from exc
+        staged.append(
+            {
+                "token": token,
+                "name": name,
+                "issuer": identity.issuer,
+                "product": identity.product,
+                "confidence": identity.confidence,
+                "message": identity.message,
+                "needs_manual_details": identity.needs_manual_details,
+            }
+        )
+    return {"items": staged}
+
+
+@app.post("/api/uploads/commit")
+def commit_uploads(body: UploadCommitRequest) -> dict:
+    """Move inspected statements into their durable issuer folders."""
+    ensure_dirs()
+    prepared: list[tuple[Path, str, str, str | None, str]] = []
+    for item in body.items:
+        candidates = list(PENDING_UPLOADS.glob(f"{item.token}--*"))
+        if len(candidates) != 1:
+            raise HTTPException(status_code=404, detail="An upload has expired. Select the file again.")
+        staged = candidates[0]
+        identity = detect_statement_identity(staged)
+        try:
+            issuer = normalize_issuer(item.issuer) if item.issuer else identity.issuer
+            product = normalize_product(item.product) if item.product is not None else identity.product
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if not issuer:
+            raise HTTPException(status_code=422, detail=f"Select an issuer for {staged.name[34:]}")
+        if issuer == "American Express" and staged.suffix.lower() == ".csv" and not product:
+            raise HTTPException(
+                status_code=422,
+                detail="American Express CSV files need a card product because the export does not include it.",
+            )
+        card = card_key(issuer, product) if issuer != "Generic" else "generic"
+        prepared.append((staged, issuer, card, product, staged.name[34:]))
+
+    written: list[str] = []
+    for staged, issuer, card, product, original_name in prepared:
+        destination_dir = INBOX / card
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        target = _unique_target(destination_dir, original_name)
+        os.replace(staged, target)
+        if issuer != "Generic":
+            write_upload_context(target, issuer=issuer, product=product)
+        written.append(f"{card}/{target.name}")
+    return {"written": written}
+
+
 @app.post("/api/upload")
 async def post_upload(
     card: str = Query("generic"),
@@ -188,16 +276,11 @@ async def post_upload(
 
     written: list[str] = []
     for upload in files:
-        name = SAFE_NAME.sub("-", Path(upload.filename or "statement").name)
-        if not name.lower().endswith((".csv", ".pdf")):
-            raise HTTPException(status_code=400, detail=f"Unsupported file type: {upload.filename}")
-        target = dest_dir / name
-        if target.exists():
-            original = Path(name)
-            target = dest_dir / f"{original.stem}-{uuid.uuid4().hex[:8]}{original.suffix}"
+        name, _suffix = _safe_upload_name(upload)
+        target = _unique_target(dest_dir, name)
+        atomic_copy_stream(target, upload.file)
         if selected_issuer:
             write_upload_context(target, issuer=selected_issuer, product=selected_product)
-        atomic_copy_stream(target, upload.file)
         written.append(f"{safe_card}/{target.name}")
 
     return {"card": safe_card, "written": written}

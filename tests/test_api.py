@@ -1,6 +1,7 @@
 """API surface tests, with all writes redirected into a temp workspace."""
 
 from pathlib import Path
+from unittest.mock import Mock
 
 import pandas as pd
 import pytest
@@ -8,6 +9,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 import src.api.app as api_app
+import src.atomic as atomic_mod
 import src.paths as paths_mod
 import src.pipeline as pipeline_mod
 import src.store as store_mod
@@ -109,6 +111,8 @@ def workspace(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setattr(pipeline_mod, "LEDGER_LOCK", data / "ledger.lock", raising=False)
     monkeypatch.setattr(pipeline_mod, "PROPOSALS_PARQUET", data / "proposals.parquet", raising=False)
     monkeypatch.setattr(api_app, "INBOX", tmp_path / "inbox", raising=False)
+    monkeypatch.setattr(api_app, "PENDING_UPLOADS", tmp_path / "data" / "pending_uploads", raising=False)
+    (tmp_path / "data" / "pending_uploads").mkdir()
     monkeypatch.setattr(api_app, "ensure_dirs", lambda: None)
 
     original_write = store_mod.write_ledger
@@ -284,3 +288,44 @@ def test_amex_upload_persists_selected_parser_context(client: TestClient, worksp
     statement = workspace["root"] / "inbox" / response.json()["written"][0]
     assert statement.exists()
     assert sidecar_path(statement).read_text() == '{"card_issuer": "American Express", "card_product": "Platinum"}\n'
+
+
+def test_staged_upload_detects_chase_csv_and_commits_without_manual_details(client: TestClient, workspace: dict):
+    payload = b"Transaction Date,Post Date,Description,Category,Type,Amount\n2026-01-01,2026-01-02,Coffee,Food,Sale,-10.00\n"
+    inspected = client.post("/api/uploads/inspect", files=[("files", ("statement.csv", payload, "text/csv"))])
+
+    assert inspected.status_code == 200
+    item = inspected.json()["items"][0]
+    assert item["issuer"] == "Chase"
+    assert item["needs_manual_details"] is False
+
+    committed = client.post("/api/uploads/commit", json={"items": [{"token": item["token"]}]})
+    assert committed.status_code == 200
+    assert committed.json()["written"] == ["chase/statement.csv"]
+    assert (workspace["root"] / "inbox" / "chase" / "statement.csv").exists()
+
+
+def test_staged_amex_csv_requires_only_product_confirmation(client: TestClient, workspace: dict):
+    payload = b"Date,Description,Card Member,Account #,Amount\n2026-01-01,Coffee,ALEX EXAMPLE,,10.00\n"
+    inspected = client.post("/api/uploads/inspect", files=[("files", ("statement.csv", payload, "text/csv"))])
+
+    item = inspected.json()["items"][0]
+    assert item["issuer"] == "American Express"
+    assert item["confidence"] == "product_required"
+
+    committed = client.post("/api/uploads/commit", json={"items": [{"token": item["token"], "product": "Platinum"}]})
+    assert committed.status_code == 200
+    statement = workspace["root"] / "inbox" / "americanexpress-platinum" / "statement.csv"
+    assert statement.exists()
+    assert sidecar_path(statement).exists()
+
+
+def test_directory_fsync_failure_is_ignored_for_windows_compatibility(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(atomic_mod.os, "open", lambda *_args: 123)
+    monkeypatch.setattr(atomic_mod.os, "fsync", lambda _fd: (_ for _ in ()).throw(OSError("Bad file descriptor")))
+    close = Mock()
+    monkeypatch.setattr(atomic_mod.os, "close", close)
+
+    atomic_mod._fsync_directory(tmp_path)
+
+    close.assert_called_once_with(123)

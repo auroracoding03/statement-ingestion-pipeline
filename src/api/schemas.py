@@ -36,3 +36,13 @@ class RuleIn(BaseModel):
     merchant_canonical: str | None = None
     category: str
     subcategory: str = ""
+
+
+class UploadCommitItem(BaseModel):
+    token: str = Field(min_length=32, max_length=32, pattern="^[a-f0-9]+$")
+    issuer: str | None = None
+    product: str | None = Field(default=None, max_length=80)
+
+
+class UploadCommitRequest(BaseModel):
+    items: list[UploadCommitItem] = Field(min_length=1, max_length=20)

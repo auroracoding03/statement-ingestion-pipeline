@@ -82,6 +82,7 @@ TRANSACTION_SOURCES_PARQUET = DATA / "transaction_sources.parquet"
 RECURRING_PARQUET = DATA / "recurring.parquet"
 RECONCILE_PARQUET = DATA / "reconciliation.parquet"
 EXPORT_DIR = DATA / "export"
+PENDING_UPLOADS = DATA / "pending_uploads"
 
 
 def seed_default_config(
@@ -101,4 +102,5 @@ def ensure_dirs() -> None:
     INBOX.mkdir(parents=True, exist_ok=True)
     DATA.mkdir(parents=True, exist_ok=True)
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    PENDING_UPLOADS.mkdir(parents=True, exist_ok=True)
     seed_default_config()
