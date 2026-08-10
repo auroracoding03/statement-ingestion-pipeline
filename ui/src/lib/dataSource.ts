@@ -77,6 +77,16 @@ export interface UpdateStatus {
   message: string;
 }
 
+export interface UploadInspection {
+  token: string;
+  name: string;
+  issuer: string | null;
+  product: string | null;
+  confidence: string;
+  message: string;
+  needs_manual_details: boolean;
+}
+
 export const api = {
   async status(): Promise<Status> {
     if (canWrite) return req<Status>("/api/status");
@@ -170,6 +180,21 @@ export const api = {
       };
     }
     return req<UpdateStatus>("/api/updates");
+  },
+
+  async inspectUploads(files: FileList | File[]) {
+    const form = new FormData();
+    Array.from(files).forEach((file) => form.append("files", file));
+    const res = await fetch("/api/uploads/inspect", { method: "POST", body: form });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new DataError(String(body?.detail ?? `Upload failed: ${res.status}`));
+    }
+    return res.json() as Promise<{ items: UploadInspection[] }>;
+  },
+
+  commitUploads(items: { token: string; issuer?: string; product?: string }[]) {
+    return req<{ written: string[] }>("/api/uploads/commit", { method: "POST", body: JSON.stringify({ items }) });
   },
 
   // ---------------------------------------------------------------- mutations

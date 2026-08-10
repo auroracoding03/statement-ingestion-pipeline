@@ -18,12 +18,22 @@ def _fsync_file(path: Path) -> None:
 
 
 def _fsync_directory(path: Path) -> None:
+    """Best-effort directory durability.
+
+    POSIX filesystems support syncing a directory after a rename. Windows does
+    not, and calling ``fsync`` on its directory handle raises ``EBADF``. The
+    file itself has already been synced before the rename, so skip only this
+    unsupported final durability hint.
+    """
     try:
         fd = os.open(path, os.O_RDONLY)
     except OSError:
         return
     try:
-        os.fsync(fd)
+        try:
+            os.fsync(fd)
+        except OSError:
+            return
     finally:
         os.close(fd)
 

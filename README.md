@@ -8,8 +8,8 @@ Raw statements, `rules.yaml`, and `merchants.yaml` stay on your machine. The pub
 
 For normal desktop use, download `StatementPipelineSetup.exe` from the release,
 run it, and click **Install**. Launch **Statement Pipeline** from the Start menu;
-it opens the local dashboard in your default browser. Python, Node.js, and a
-terminal are not required on the installed machine.
+it opens in its own native Windows window. Python, Node.js, and a terminal are
+not required on the installed machine.
 
 The current unsigned installer may show a Windows SmartScreen reputation prompt.
 Choose **More info** then **Run anyway** only when you downloaded the installer
@@ -20,6 +20,11 @@ Your statements, configuration, and local database are stored in
 Upgrades and normal uninstalls preserve this folder. Back it up if you want a
 copy of your financial history; delete it manually only if you intend to erase
 that data permanently.
+
+Use the **Ingestion** page to add statement files. PDFs are identified from the
+statement text and normally need no issuer or card-product input. CSV exports
+are identified from their headers when possible; a card product is requested
+only when the file omits it, such as an American Express CSV export.
 
 ### Building an installer
 
