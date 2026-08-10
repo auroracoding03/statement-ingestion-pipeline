@@ -8,10 +8,13 @@ import type { UnknownCluster } from "../lib/types";
 
 export function Merchants() {
   const merchants = useAsync(() => api.merchants(), []);
+  const rules = useAsync(() => api.rules(), []);
   const [threshold, setThreshold] = useState(88);
   const [withAi, setWithAi] = useState(false);
   const unknown = useAsync(() => api.unknownMerchants(threshold, withAi), [threshold, withAi]);
   const [error, setError] = useState<string | null>(null);
+  const categories = rules.data?.categories ?? [];
+  const subcategories = rules.data?.subcategories ?? {};
 
   function refreshAll() {
     merchants.reload();
@@ -69,6 +72,8 @@ export function Merchants() {
               <ClusterCard
                 key={cluster.cluster_id}
                 cluster={cluster}
+                categories={categories}
+                subcategories={subcategories}
                 onSaved={refreshAll}
                 onError={setError}
               />
@@ -144,10 +149,14 @@ export function Merchants() {
 
 function ClusterCard({
   cluster,
+  categories,
+  subcategories,
   onSaved,
   onError,
 }: {
   cluster: UnknownCluster;
+  categories: string[];
+  subcategories: Record<string, string[]>;
   onSaved: () => void;
   onError: (msg: string) => void;
 }) {
@@ -157,16 +166,20 @@ function ClusterCard({
   const [category, setCategory] = useState("");
   const [subcategory, setSubcategory] = useState("");
   const [saving, setSaving] = useState(false);
+  const categorySubs = category ? subcategories[category] ?? [] : [];
 
   async function save() {
     if (!canonical.trim()) return;
     setSaving(true);
     try {
+      const cleanedCategory = category.trim() || null;
+      const cleanedSub =
+        cleanedCategory && subcategory && categorySubs.includes(subcategory) ? subcategory : null;
       await api.saveMerchant({
         canonical: canonical.trim(),
         members: cluster.members,
-        category: category.trim() || null,
-        subcategory: subcategory.trim() || null,
+        category: cleanedCategory,
+        subcategory: cleanedSub,
         restamp: true,
       });
       onSaved();
@@ -208,20 +221,34 @@ function ClusterCard({
           placeholder="Canonical brand name"
           aria-label="Canonical brand name"
         />
-        <input
-          type="text"
+        <select
           value={category}
-          onChange={(e) => setCategory(e.target.value)}
-          placeholder="Default category (optional)"
+          onChange={(e) => {
+            setCategory(e.target.value);
+            setSubcategory("");
+          }}
           aria-label="Default category"
-        />
-        <input
-          type="text"
+        >
+          <option value="">Default category (optional)</option>
+          {categories.map((entry) => (
+            <option key={entry} value={entry}>
+              {entry}
+            </option>
+          ))}
+        </select>
+        <select
           value={subcategory}
           onChange={(e) => setSubcategory(e.target.value)}
-          placeholder="Subcategory (optional)"
+          disabled={!category}
           aria-label="Default subcategory"
-        />
+        >
+          <option value="">Subcategory (optional)</option>
+          {categorySubs.map((sub) => (
+            <option key={sub} value={sub}>
+              {sub}
+            </option>
+          ))}
+        </select>
         <button className="btn" onClick={save} disabled={saving || !canonical.trim()}>
           {saving ? "Saving…" : "Confirm merchant"}
         </button>

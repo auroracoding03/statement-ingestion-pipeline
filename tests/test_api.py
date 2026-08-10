@@ -52,6 +52,17 @@ def workspace(tmp_path: Path, monkeypatch) -> Path:
             }
         )
     )
+    tags_path = config / "tags.yaml"
+    tags_path.write_text(
+        yaml.safe_dump(
+            {
+                "tags": [
+                    {"id": "date", "label": "Date", "kind": "occasion"},
+                    {"id": "gift", "label": "Gift", "kind": "occasion"},
+                ]
+            }
+        )
+    )
 
     ledger_path = data / "ledger.parquet"
     # Ids must be the real hashes, otherwise load_ledger() correctly treats the
@@ -74,6 +85,7 @@ def workspace(tmp_path: Path, monkeypatch) -> Path:
                 "source_file": "chase/2026-01.csv",
                 "category": None,
                 "subcategory": None,
+                "tags": [],
                 "classified_by": None,
                 "proposed_category": None,
                 "proposed_subcategory": None,
@@ -91,6 +103,7 @@ def workspace(tmp_path: Path, monkeypatch) -> Path:
                 "source_file": "chase/2026-01.csv",
                 "category": None,
                 "subcategory": None,
+                "tags": ["date"],
                 "classified_by": None,
                 "proposed_category": None,
                 "proposed_subcategory": None,
@@ -102,6 +115,7 @@ def workspace(tmp_path: Path, monkeypatch) -> Path:
     # classify/merchants resolve these lazily off the paths module
     monkeypatch.setattr(paths_mod, "RULES_PATH", rules_path)
     monkeypatch.setattr(paths_mod, "MERCHANTS_PATH", merchants_path)
+    monkeypatch.setattr(paths_mod, "TAGS_PATH", tags_path)
 
     # These were bound into module namespaces at import time
     for module in (pipeline_mod, store_mod, api_app):
@@ -164,7 +178,54 @@ def test_transactions_search_and_filter(client: TestClient):
     assert r.json()["total"] == 0
 
     r = client.get("/api/transactions?unclassified=true")
+    assert r.status_code == 200
     assert r.json()["total"] == 2
+
+    r = client.get("/api/transactions?tag=date")
+    assert r.status_code == 200
+    assert r.json()["total"] == 1
+    assert r.json()["items"][0]["tags"] == ["date"]
+
+
+def test_tags_vocabulary_crud(client: TestClient):
+    listed = client.get("/api/tags")
+    assert listed.status_code == 200
+    assert {item["id"] for item in listed.json()["items"]} >= {"date", "gift"}
+
+    created = client.post("/api/tags", json={"label": "London-Paris", "kind": "trip"})
+    assert created.status_code == 200
+    assert created.json()["tag"]["id"] == "london-paris"
+
+    blocked = client.delete("/api/tags/date")
+    assert blocked.status_code == 409
+
+    removed = client.delete("/api/tags/london-paris")
+    assert removed.status_code == 200
+
+
+def test_add_primary_category(client: TestClient):
+    r = client.post("/api/categories", json={"category": "Travel"})
+    assert r.status_code == 200
+    assert "Travel" in r.json()["categories"]
+    assert "Travel" in r.json()["subcategories"]
+
+
+def test_subcategory_vocabulary_crud(client: TestClient):
+    listed = client.get("/api/rules").json()
+    assert "Food" in listed["subcategories"]
+
+    created = client.post(
+        "/api/subcategories",
+        json={"category": "Food", "subcategory": "Coffee"},
+    )
+    assert created.status_code == 200
+    assert "Coffee" in created.json()["subcategories"]["Food"]
+
+    rules = client.get("/api/rules").json()
+    assert "Coffee" in rules["subcategories"]["Food"]
+
+    queue = client.get("/api/review/queue").json()
+    assert "Coffee" in queue["subcategories"]["Food"]
 
 
 def test_review_queue_and_decision_creates_rule(client: TestClient, workspace: dict):
@@ -174,15 +235,24 @@ def test_review_queue_and_decision_creates_rule(client: TestClient, workspace: d
 
     r = client.post(
         f"/api/review/{workspace['coffee_id']}",
-        json={"category": "Food", "subcategory": "Coffee", "create_rule": True},
+        json={
+            "category": "Food",
+            "subcategory": "Coffee",
+            "tags": ["date"],
+            "create_rule": True,
+        },
     )
     assert r.status_code == 200
     assert r.json()["rule"] is not None
 
     # Decision is persisted and drops out of the queue
     assert client.get("/api/review/queue").json()["total"] == 1
-    rules = client.get("/api/rules").json()["rules"]
-    assert any(r["category"] == "Food" for r in rules)
+    txn = client.get(f"/api/transactions?q=coffee").json()["items"][0]
+    assert txn["category"] == "Food"
+    assert txn["tags"] == ["date"]
+    rules_doc = client.get("/api/rules").json()
+    assert any(r["category"] == "Food" for r in rules_doc["rules"])
+    assert "Coffee" in rules_doc["subcategories"]["Food"]
 
 
 def test_review_unknown_transaction_is_404(client: TestClient):

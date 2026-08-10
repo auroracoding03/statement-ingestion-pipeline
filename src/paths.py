@@ -20,6 +20,7 @@ CONFIG_FILES = (
     "expected_recurring.yaml",
     "publish.yaml",
     "ollama.yaml",
+    "tags.yaml",
 )
 
 
@@ -72,6 +73,7 @@ MERCHANTS_PATH = CONFIG / "merchants.yaml"
 EXPECTED_RECURRING_PATH = CONFIG / "expected_recurring.yaml"
 PUBLISH_PATH = CONFIG / "publish.yaml"
 OLLAMA_PATH = CONFIG / "ollama.yaml"
+TAGS_PATH = CONFIG / "tags.yaml"
 
 LEDGER_PARQUET = DATA / "ledger.parquet"
 LEDGER_LOCK = DATA / "ledger.lock"
