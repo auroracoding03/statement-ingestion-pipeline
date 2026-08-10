@@ -40,6 +40,38 @@ def test_check_for_update_reports_newer_release(monkeypatch) -> None:
     assert result["latest_version"] == FUTURE_VERSION
 
 
+def test_launch_installer_tokenizes_paths_with_spaces(monkeypatch) -> None:
+    installer = Path(r"C:\Users\Ada Lovelace\AppData\Local\Statement Pipeline\updates\StatementPipelineSetup-0.2.4.exe")
+    installed_exe = Path(r"C:\Users\Ada Lovelace\AppData\Local\Programs\Statement Pipeline\StatementPipeline.exe")
+    popen = Mock()
+    timer = Mock()
+
+    monkeypatch.setattr(updater, "_installed_executable", lambda: installed_exe)
+    monkeypatch.setattr(updater.subprocess, "Popen", popen)
+    monkeypatch.setattr(updater.threading, "Timer", lambda *_args: timer)
+
+    updater._launch_installer(installer)
+
+    assert popen.call_args.args[0] == [
+        "cmd.exe",
+        "/d",
+        "/c",
+        "start",
+        "",
+        "/wait",
+        str(installer),
+        "/VERYSILENT",
+        "/SUPPRESSMSGBOXES",
+        "/NORESTART",
+        "&&",
+        "start",
+        "",
+        str(installed_exe),
+    ]
+    assert "/s" not in popen.call_args.args[0]
+    timer.start.assert_called_once_with()
+
+
 def test_install_update_verifies_checksum_before_launching(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(updater, "_windows_desktop_build", lambda: True)
     monkeypatch.setattr(updater, "USER_DATA_ROOT", tmp_path)
