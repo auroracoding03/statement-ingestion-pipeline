@@ -91,37 +91,6 @@ def main() -> None:
     try:
         instance_lock.acquire(timeout=0)
     except Timeout:
-        # #region agent log
-        try:
-            import json
-            import time
-            from pathlib import Path as _Path
-
-            payload = {
-                "sessionId": "a4748f",
-                "runId": "desktop-runtime",
-                "hypothesisId": "H5",
-                "location": "desktop.py:main",
-                "message": "single-instance lock busy",
-                "data": {
-                    "pid": os.getpid(),
-                    "lock": str(USER_DATA_ROOT / "statement-pipeline.desktop.lock"),
-                },
-                "timestamp": int(time.time() * 1000),
-            }
-            for target in (
-                _Path(__file__).resolve().parents[1] / "debug-a4748f.log",
-                USER_DATA_ROOT / "updates" / "debug-a4748f.log",
-            ):
-                try:
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    with target.open("a", encoding="utf-8") as handle:
-                        handle.write(json.dumps(payload) + "\n")
-                except OSError:
-                    continue
-        except Exception:
-            pass
-        # #endregion
         _show_error("Statement Pipeline", "Statement Pipeline is already running.")
         return
 
