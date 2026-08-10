@@ -142,16 +142,38 @@ def _installed_executable() -> Path:
     return Path(sys.executable).resolve()
 
 
+def _installer_command(installer: Path, installed_exe: Path) -> list[str]:
+    """Build a tokenized ``cmd`` invocation for update + relaunch.
+
+    ``start`` is a cmd built-in whose first quoted argument is its title.  Do
+    not hand cmd one pre-quoted script string: Windows can then parse a path
+    containing spaces as ``\\``.  Supplying each token separately lets
+    ``subprocess`` apply Windows command-line quoting exactly once.
+    """
+    return [
+        "cmd.exe",
+        "/d",
+        "/c",
+        "start",
+        "",
+        "/wait",
+        str(installer),
+        "/VERYSILENT",
+        "/SUPPRESSMSGBOXES",
+        "/NORESTART",
+        "&&",
+        "start",
+        "",
+        str(installed_exe),
+    ]
+
+
 def _launch_installer(installer: Path) -> None:
     """Run the in-place installer after this server has had time to reply."""
     installed_exe = _installed_executable()
-    command = (
-        f'start "" /wait "{installer}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART '
-        f'&& start "" "{installed_exe}"'
-    )
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     subprocess.Popen(
-        ["cmd.exe", "/d", "/s", "/c", command],
+        _installer_command(installer, installed_exe),
         close_fds=True,
         creationflags=flags,
     )
