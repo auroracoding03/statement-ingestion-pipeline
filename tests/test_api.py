@@ -63,6 +63,21 @@ def workspace(tmp_path: Path, monkeypatch) -> Path:
             }
         )
     )
+    card_products_path = config / "card_products.yaml"
+    card_products_path.write_text(
+        yaml.safe_dump(
+            {
+                "products": {
+                    "American Express": ["Platinum", "Delta Gold", "Gold", "Delta SkyMiles"],
+                    "Wells Fargo": ["Autograph Visa Signature"],
+                    "Chase": [],
+                    "Bank of America": [],
+                    "Capital One": [],
+                    "Generic": [],
+                }
+            }
+        )
+    )
 
     ledger_path = data / "ledger.parquet"
     # Ids must be the real hashes, otherwise load_ledger() correctly treats the
@@ -116,6 +131,7 @@ def workspace(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setattr(paths_mod, "RULES_PATH", rules_path)
     monkeypatch.setattr(paths_mod, "MERCHANTS_PATH", merchants_path)
     monkeypatch.setattr(paths_mod, "TAGS_PATH", tags_path)
+    monkeypatch.setattr(paths_mod, "CARD_PRODUCTS_PATH", card_products_path)
 
     # These were bound into module namespaces at import time
     for module in (pipeline_mod, store_mod, api_app):
@@ -420,3 +436,32 @@ def test_staged_amex_csv_requires_only_product_confirmation(client: TestClient, 
     statement = workspace["root"] / "inbox" / "americanexpress-platinum" / "statement.csv"
     assert statement.exists()
     assert sidecar_path(statement).exists()
+
+
+def test_card_products_list_and_append(client: TestClient):
+    listed = client.get("/api/card-products")
+    assert listed.status_code == 200
+    assert "Platinum" in listed.json()["products"]["American Express"]
+
+    created = client.post(
+        "/api/card-products",
+        json={"issuer": "American Express", "product": "Blue Cash Preferred"},
+    )
+    assert created.status_code == 200
+    assert "Blue Cash Preferred" in created.json()["products"]["American Express"]
+
+    again = client.get("/api/card-products")
+    assert "Blue Cash Preferred" in again.json()["products"]["American Express"]
+
+
+def test_amex_commit_rejects_unknown_product(client: TestClient):
+    payload = b"Date,Description,Card Member,Account #,Amount\n2026-01-01,Coffee,ALEX EXAMPLE,,10.00\n"
+    inspected = client.post("/api/uploads/inspect", files=[("files", ("statement.csv", payload, "text/csv"))])
+    token = inspected.json()["items"][0]["token"]
+
+    rejected = client.post(
+        "/api/uploads/commit",
+        json={"items": [{"token": token, "product": "Not A Real Card"}]},
+    )
+    assert rejected.status_code == 422
+    assert "Unsupported American Express product" in rejected.json()["detail"]
