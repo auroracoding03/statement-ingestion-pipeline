@@ -3,7 +3,9 @@ import { useMemo, useState } from "react";
 import { Empty, ErrorNote, Loading, PageHeader } from "../components/ui";
 import { api } from "../lib/dataSource";
 import { useAsync } from "../lib/useAsync";
-import type { TagKind } from "../lib/types";
+import type { Rule, TagKind } from "../lib/types";
+
+type EditDraft = { category: string; subcategory: string };
 
 export function Rules() {
   const { data, loading, error, reload } = useAsync(() => api.rules(), []);
@@ -18,6 +20,9 @@ export function Rules() {
   const [newCategory, setNewCategory] = useState("");
   const [newSubcategory, setNewSubcategory] = useState({ category: "", subcategory: "" });
   const [newTag, setNewTag] = useState({ label: "", kind: "trip" as TagKind });
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState<EditDraft>({ category: "", subcategory: "" });
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const categories = data?.categories ?? [];
   const subcategories = data?.subcategories ?? {};
@@ -25,6 +30,10 @@ export function Rules() {
   const formSubs = useMemo(
     () => (form.category ? subcategories[form.category] ?? [] : []),
     [form.category, subcategories],
+  );
+  const editSubs = useMemo(
+    () => (editDraft.category ? subcategories[editDraft.category] ?? [] : []),
+    [editDraft.category, subcategories],
   );
   const tagsByKind = useMemo(() => {
     const groups: Record<string, typeof tags> = { occasion: [], trip: [], other: [] };
@@ -86,11 +95,43 @@ export function Rules() {
     }
   }
 
+  function startEdit(rule: Rule) {
+    setSaveError(null);
+    setEditingIndex(rule.index);
+    setEditDraft({
+      category: rule.category ?? "",
+      subcategory: rule.subcategory ?? "",
+    });
+  }
+
+  function cancelEdit() {
+    setEditingIndex(null);
+    setEditDraft({ category: "", subcategory: "" });
+  }
+
+  async function saveEdit(index: number) {
+    if (!editDraft.category.trim()) return;
+    setSaveError(null);
+    setSavingEdit(true);
+    try {
+      await api.updateRule(index, {
+        category: editDraft.category.trim(),
+        subcategory: editDraft.subcategory.trim(),
+      });
+      cancelEdit();
+      reload();
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
   return (
     <>
       <PageHeader
         title="Classification rules"
-        lede="Manage primary categories, subcategories, and context tags, then ordered rules. Category totals use the primary only; tags are for filtering."
+        lede="Manage primary categories, subcategories, and context tags, then ordered rules. Category totals use the primary only; tags are for filtering. After editing a rule, re-run Classify to apply it to the ledger."
       />
 
       <section className="panel taxonomy-panel">
@@ -291,6 +332,7 @@ export function Rules() {
                   rule.match.merchant_exact ??
                   rule.match.merchant_regex ??
                   "";
+                const isEditing = editingIndex === rule.index;
                 return (
                   <tr key={rule.index}>
                     <td className="num muted">{rule.index}</td>
@@ -298,22 +340,89 @@ export function Rules() {
                     <td>
                       <code>{pattern}</code>
                     </td>
-                    <td>{[rule.category, rule.subcategory].filter(Boolean).join(" / ")}</td>
                     <td>
-                      <button
-                        className="btn danger small"
-                        onClick={async () => {
-                          setSaveError(null);
-                          try {
-                            await api.deleteRule(rule.index);
-                            reload();
-                          } catch (err) {
-                            setSaveError(err instanceof Error ? err.message : String(err));
-                          }
-                        }}
-                      >
-                        Remove
-                      </button>
+                      {isEditing ? (
+                        <div className="toolbar" style={{ margin: 0, gap: "0.35rem" }}>
+                          <select
+                            value={editDraft.category}
+                            onChange={(e) =>
+                              setEditDraft({ category: e.target.value, subcategory: "" })
+                            }
+                            disabled={savingEdit}
+                          >
+                            <option value="">Category</option>
+                            {categories.map((category) => (
+                              <option key={category} value={category}>
+                                {category}
+                              </option>
+                            ))}
+                          </select>
+                          <select
+                            value={editDraft.subcategory}
+                            onChange={(e) =>
+                              setEditDraft({ ...editDraft, subcategory: e.target.value })
+                            }
+                            disabled={!editDraft.category || savingEdit}
+                          >
+                            <option value="">Subcategory (optional)</option>
+                            {editSubs.map((sub) => (
+                              <option key={sub} value={sub}>
+                                {sub}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      ) : (
+                        [rule.category, rule.subcategory].filter(Boolean).join(" / ")
+                      )}
+                    </td>
+                    <td>
+                      {isEditing ? (
+                        <div className="toolbar" style={{ margin: 0, gap: "0.35rem" }}>
+                          <button
+                            className="btn small"
+                            type="button"
+                            disabled={savingEdit || !editDraft.category.trim()}
+                            onClick={() => void saveEdit(rule.index)}
+                          >
+                            Save
+                          </button>
+                          <button
+                            className="btn small"
+                            type="button"
+                            disabled={savingEdit}
+                            onClick={cancelEdit}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="toolbar" style={{ margin: 0, gap: "0.35rem" }}>
+                          <button
+                            className="btn small"
+                            type="button"
+                            onClick={() => startEdit(rule)}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            className="btn danger small"
+                            type="button"
+                            onClick={async () => {
+                              setSaveError(null);
+                              try {
+                                await api.deleteRule(rule.index);
+                                if (editingIndex === rule.index) cancelEdit();
+                                reload();
+                              } catch (err) {
+                                setSaveError(err instanceof Error ? err.message : String(err));
+                              }
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 );

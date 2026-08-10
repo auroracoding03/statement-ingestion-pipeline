@@ -11,6 +11,7 @@ from src.classify import (
     list_subcategories,
     load_rules,
     rule_pattern_from_merchant,
+    update_rule,
 )
 
 
@@ -56,6 +57,43 @@ def test_append_rule_registers_subcategory(tmp_path: Path):
         rules_path=rules,
     )
     assert "Coffee" in list_subcategories(rules)["Food"]
+
+
+def test_update_rule_sets_subcategory_and_registers_vocab(tmp_path: Path):
+    rules = tmp_path / "rules.yaml"
+    rules.write_text(
+        yaml.safe_dump(
+            {
+                "categories": ["Utilities"],
+                "subcategories": {"Utilities": ["Electric"]},
+                "rules": [
+                    {
+                        "match": {"merchant_regex": "(?i)SPI\\s+GA\\s+NATGAS"},
+                        "category": "Utilities",
+                        "subcategory": "",
+                    }
+                ],
+            }
+        )
+    )
+
+    updated = update_rule(
+        0,
+        category="Utilities",
+        subcategory="NaturalGas",
+        rules_path=rules,
+    )
+    assert updated is not None
+    assert updated["category"] == "Utilities"
+    assert updated["subcategory"] == "NaturalGas"
+    assert updated["match"]["merchant_regex"] == "(?i)SPI\\s+GA\\s+NATGAS"
+    assert list_subcategories(rules)["Utilities"] == ["Electric", "NaturalGas"]
+
+    cleared = update_rule(0, category="Utilities", subcategory="", rules_path=rules)
+    assert cleared is not None
+    assert cleared["subcategory"] == ""
+
+    assert update_rule(99, category="Utilities", rules_path=rules) is None
 
 
 def test_load_rules_reads_utf8_en_dash_on_windows(tmp_path: Path) -> None:

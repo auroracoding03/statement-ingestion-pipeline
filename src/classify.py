@@ -278,6 +278,39 @@ def append_subcategory(
         return list_subcategories(target)
 
 
+def update_rule(
+    index: int,
+    *,
+    category: str,
+    subcategory: str = "",
+    rules_path: Path | None = None,
+) -> dict | None:
+    """Update category/subcategory for the rule at ``index``. Match fields are unchanged."""
+    cleaned_category = " ".join(category.split()).strip()
+    if not cleaned_category:
+        raise ValueError("Category name is required")
+    cleaned_sub = " ".join((subcategory or "").split()).strip()
+
+    target = _path(rules_path)
+    with FileLock(f"{target}.lock"):
+        doc = load_rules(target)
+        rules = doc.get("rules") or []
+        if index < 0 or index >= len(rules):
+            return None
+        rule = dict(rules[index])
+        rule["category"] = cleaned_category
+        rule["subcategory"] = cleaned_sub
+        rules[index] = rule
+        doc["rules"] = rules
+
+        cats = doc.setdefault("categories", [])
+        if cleaned_category not in cats:
+            cats.append(cleaned_category)
+        _ensure_subcategory(doc, cleaned_category, cleaned_sub)
+        save_rules(doc, target)
+        return rule
+
+
 def delete_rule(index: int, rules_path: Path | None = None) -> bool:
     target = _path(rules_path)
     with FileLock(f"{target}.lock"):
