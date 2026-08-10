@@ -142,41 +142,45 @@ def _installed_executable() -> Path:
     return Path(sys.executable).resolve()
 
 
-def _installer_command(installer: Path, installed_exe: Path) -> list[str]:
-    """Build a tokenized ``cmd`` invocation for update + relaunch.
+def _installer_command(installer: Path, installed_exe: Path, pid: int) -> list[str]:
+    """Wait for the live app to exit, then install and relaunch.
 
-    ``start`` is a cmd built-in whose first quoted argument is its title.  Do
-    not hand cmd one pre-quoted script string: Windows can then parse a path
-    containing spaces as ``\\``.  Supplying each token separately lets
-    ``subprocess`` apply Windows command-line quoting exactly once.
+    The previous flow started the installer (and relaunch) while this process
+    still held the single-instance lock, so the replacement exe reported
+    "Statement Pipeline is already running."  Waiting on ``pid`` first makes
+    the lock available before the new process starts.
     """
+    installer_literal = json.dumps(str(installer))
+    exe_literal = json.dumps(str(installed_exe))
+    script = (
+        f"while (Get-Process -Id {int(pid)} -ErrorAction SilentlyContinue) "
+        f"{{ Start-Sleep -Milliseconds 400 }}; "
+        f"$p = Start-Process -FilePath {installer_literal} "
+        f"-ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru -Wait; "
+        f"if ($p.ExitCode -ne 0) {{ exit $p.ExitCode }}; "
+        f"Start-Process -FilePath {exe_literal}"
+    )
     return [
-        "cmd.exe",
-        "/d",
-        "/c",
-        "start",
-        "",
-        "/wait",
-        str(installer),
-        "/VERYSILENT",
-        "/SUPPRESSMSGBOXES",
-        "/NORESTART",
-        "&&",
-        "start",
-        "",
-        str(installed_exe),
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        script,
     ]
 
 
 def _launch_installer(installer: Path) -> None:
-    """Run the in-place installer after this server has had time to reply."""
+    """Run the in-place installer after this process has exited."""
     installed_exe = _installed_executable()
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     subprocess.Popen(
-        _installer_command(installer, installed_exe),
+        _installer_command(installer, installed_exe, os.getpid()),
         close_fds=True,
         creationflags=flags,
     )
+    # Hard-exit so the waiter observes this PID disappearing promptly. The
+    # detached PowerShell script holds the install + relaunch sequence.
     threading.Timer(0.75, lambda: os._exit(0)).start()
 
 
