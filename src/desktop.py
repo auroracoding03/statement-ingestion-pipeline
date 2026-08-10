@@ -20,7 +20,8 @@ from src.paths import ASSET_ROOT, USER_DATA_ROOT, ensure_dirs
 
 HOST = "127.0.0.1"
 PREFERRED_PORT = 8787
-STARTUP_TIMEOUT_SECONDS = 12
+STARTUP_TIMEOUT_SECONDS = 20
+READY_PROBE_TIMEOUT_SECONDS = 2.0
 
 
 def _ensure_stdio() -> None:
@@ -48,8 +49,16 @@ def _available_port(preferred_port: int) -> int:
 
 
 def _server_ready(url: str) -> bool:
+    """Return true when the local API accepts a cheap health probe.
+
+    Do not use ``/api/status`` here: that route loads the ledger and scans the
+    inbox, which routinely exceeds a short readiness timeout on cold start and
+    made the desktop launcher report that the service never started.
+    """
     try:
-        with urllib.request.urlopen(f"{url}/api/status", timeout=0.35):
+        with urllib.request.urlopen(
+            f"{url}/api/health", timeout=READY_PROBE_TIMEOUT_SECONDS
+        ):
             return True
     except (OSError, ValueError, urllib.error.URLError):
         return False

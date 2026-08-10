@@ -134,6 +134,14 @@ def client(workspace: dict) -> TestClient:  # noqa: ARG001 — fixture ordering 
     return TestClient(api_app.app)
 
 
+def test_health_is_lightweight(client: TestClient):
+    r = client.get("/api/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert "version" in body
+
+
 def test_status_reports_counts(client: TestClient):
     r = client.get("/api/status")
     assert r.status_code == 200
