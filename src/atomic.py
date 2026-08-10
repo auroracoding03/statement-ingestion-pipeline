@@ -13,8 +13,19 @@ import pandas as pd
 
 
 def _fsync_file(path: Path) -> None:
-    with path.open("rb") as handle:
-        os.fsync(handle.fileno())
+    """Best-effort file durability after an external writer closes the path.
+
+    Windows ``FlushFileBuffers`` requires a write-capable handle, so reopening
+    read-only and calling ``os.fsync`` raises ``EBADF`` (seen as
+    ``OSError: [Errno 9] Bad file descriptor`` during ledger parquet writes).
+    Prefer a read/write reopen; if sync is still unsupported, the writer has
+    already flushed bytes to the filesystem.
+    """
+    try:
+        with path.open("rb+") as handle:
+            os.fsync(handle.fileno())
+    except OSError:
+        return
 
 
 def _fsync_directory(path: Path) -> None:
