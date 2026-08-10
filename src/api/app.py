@@ -25,6 +25,7 @@ from src.ai_suggest import ollama_available
 from src.atomic import atomic_copy_stream
 from src.api import jobs
 from src.api.schemas import (
+    CardProductIn,
     CategoryIn,
     ClassifyRequest,
     MerchantIn,
@@ -52,7 +53,14 @@ from src.review import needs_review
 from src.statement_identity import detect_statement_identity
 from src.tags import create_tag, delete_tag, list_tags, normalize_tag_ids
 from src.updater import UpdateError, check_for_update, install_latest_update
-from src.upload_context import card_key, normalize_issuer, normalize_product, write_upload_context
+from src.upload_context import (
+    append_card_product,
+    card_key,
+    list_card_products,
+    normalize_issuer,
+    normalize_product,
+    write_upload_context,
+)
 from src.version import APP_VERSION
 
 app = FastAPI(title="Statement Ingestion Pipeline", version=APP_VERSION)
@@ -261,7 +269,8 @@ def commit_uploads(body: UploadCommitRequest) -> dict:
         identity = detect_statement_identity(staged)
         try:
             issuer = normalize_issuer(item.issuer) if item.issuer else identity.issuer
-            product = normalize_product(item.product) if item.product is not None else identity.product
+            raw_product = item.product if item.product is not None else identity.product
+            product = normalize_product(issuer, raw_product)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if not issuer:
@@ -296,7 +305,7 @@ async def post_upload(
     ensure_dirs()
     try:
         selected_issuer = normalize_issuer(issuer) if issuer else None
-        selected_product = normalize_product(product)
+        selected_product = normalize_product(selected_issuer, product)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if selected_issuer == "American Express" and not selected_product:
@@ -654,6 +663,22 @@ def remove_tag(tag_id: str) -> dict:
     if not delete_tag(tag_id):
         raise HTTPException(status_code=404, detail="Unknown tag")
     return {"deleted": tag_id}
+
+
+@app.get("/api/card-products")
+def get_card_products() -> dict:
+    ensure_dirs()
+    return {"products": list_card_products()}
+
+
+@app.post("/api/card-products")
+def post_card_product(body: CardProductIn) -> dict:
+    ensure_dirs()
+    try:
+        products = append_card_product(body.issuer, body.product)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"products": products}
 
 
 # --------------------------------------------------------------------------- static UI

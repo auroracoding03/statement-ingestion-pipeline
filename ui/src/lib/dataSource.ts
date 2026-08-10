@@ -207,6 +207,19 @@ export const api = {
     return req<{ written: string[] }>("/api/uploads/commit", { method: "POST", body: JSON.stringify({ items }) });
   },
 
+  async cardProducts(): Promise<{ products: Record<string, string[]> }> {
+    if (!canWrite) return { products: {} };
+    return req<{ products: Record<string, string[]> }>("/api/card-products");
+  },
+
+  addCardProduct(issuer: string, product: string) {
+    if (!canWrite) writeGuard();
+    return req<{ products: Record<string, string[]> }>("/api/card-products", {
+      method: "POST",
+      body: JSON.stringify({ issuer, product }),
+    });
+  },
+
   // ---------------------------------------------------------------- mutations
 
   submitReview(
