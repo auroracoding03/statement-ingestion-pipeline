@@ -32,13 +32,46 @@ def load_rules(path: Path | None = None) -> dict:
     target = _path(path)
     if not target.exists():
         return {}
-    with target.open() as f:
+    # Always UTF-8: review-created regexes can include en/em dashes from
+    # statement text, and Windows defaults to a locale encoding that then
+    # fails to reload the file (empty Rules UI via /api/rules 500).
+    with target.open(encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
 
 def save_rules(data: dict, path: Path | None = None) -> None:
     target = _path(path)
     atomic_write_text(target, yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+
+
+_DASH_TRANSLATION = str.maketrans(
+    {
+        "\u2010": "-",  # hyphen
+        "\u2011": "-",  # non-breaking hyphen
+        "\u2012": "-",  # figure dash
+        "\u2013": "-",  # en dash
+        "\u2014": "-",  # em dash
+        "\u2015": "-",  # horizontal bar
+        "\u2212": "-",  # minus sign
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+    }
+)
+
+
+def rule_pattern_from_merchant(merchant: str) -> str:
+    """Build a case-insensitive regex from a normalized merchant string.
+
+    Fancy punctuation from PDF/CSV text is folded to ASCII so Windows-safe
+    YAML reloads stay reliable even if a reader forgets ``encoding='utf-8'``.
+    """
+    tokens: list[str] = []
+    for token in str(merchant).translate(_DASH_TRANSLATION).split():
+        if token:
+            tokens.append(re.escape(token))
+    return "(?i)" + r"\s+".join(tokens) if tokens else "(?i)."
 
 
 def _compile_rules(rules_doc: dict) -> list[dict]:
