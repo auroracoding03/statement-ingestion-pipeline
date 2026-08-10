@@ -229,56 +229,11 @@ try {{
     ]
 
 
-def _agent_debug_log(hypothesis_id: str, location: str, message: str, data: dict[str, Any] | None = None) -> None:
-    # #region agent log
-    try:
-        import time
-
-        payload = {
-            "sessionId": "a4748f",
-            "runId": "updater-runtime",
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data or {},
-            "timestamp": int(time.time() * 1000),
-        }
-        path = Path(__file__).resolve().parents[1] / "debug-a4748f.log"
-        # Installed builds live outside the repo; also mirror beside update.log.
-        candidates = [path, _update_log_path().parent / "debug-a4748f.log"]
-        line = json.dumps(payload) + "\n"
-        for target in candidates:
-            try:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with target.open("a", encoding="utf-8") as handle:
-                    handle.write(line)
-            except OSError:
-                continue
-    except Exception:
-        pass
-    # #endregion
-
-
 def _launch_installer(installer: Path) -> None:
     """Run the in-place installer after this process has exited."""
     installed_exe = _installed_executable()
     log_path = _update_log_path()
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    # #region agent log
-    _agent_debug_log(
-        "H1",
-        "updater.py:_launch_installer",
-        "launching handoff",
-        {
-            "pid": os.getpid(),
-            "installer": str(installer),
-            "installed_exe": str(installed_exe),
-            "update_log": str(log_path),
-            "app_version": APP_VERSION,
-            "frozen": bool(getattr(sys, "frozen", False)),
-        },
-    )
-    # #endregion
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     subprocess.Popen(
         _installer_command(installer, installed_exe, log_path=log_path),
@@ -288,9 +243,6 @@ def _launch_installer(installer: Path) -> None:
     # Hard-exit so the waiter observes this PID disappearing promptly. The
     # detached PowerShell script remains authoritative if graceful exit fails.
     threading.Timer(0.75, lambda: os._exit(0)).start()
-    # #region agent log
-    _agent_debug_log("H2", "updater.py:_launch_installer", "scheduled hard-exit timer", {"delay_s": 0.75})
-    # #endregion
 
 
 def install_latest_update() -> dict[str, str]:
@@ -299,14 +251,6 @@ def install_latest_update() -> dict[str, str]:
         raise UpdateError("In-app updates are only available in the installed Windows application.")
 
     release = _latest_release()
-    # #region agent log
-    _agent_debug_log(
-        "H3",
-        "updater.py:install_latest_update",
-        "update requested",
-        {"current": APP_VERSION, "latest": release["latest_version"]},
-    )
-    # #endregion
     if _version_key(release["latest_version"]) <= _version_key(APP_VERSION):
         raise UpdateError("You are already using the latest version.")
 
@@ -318,13 +262,5 @@ def install_latest_update() -> dict[str, str]:
         installer.unlink(missing_ok=True)
         raise UpdateError("The update checksum did not match. Your installed version was not changed.")
 
-    # #region agent log
-    _agent_debug_log(
-        "H1",
-        "updater.py:install_latest_update",
-        "download verified; starting handoff",
-        {"installer_size": installer.stat().st_size if installer.exists() else None},
-    )
-    # #endregion
     _launch_installer(installer)
     return {"message": "Update downloaded. Statement Pipeline will restart shortly."}
