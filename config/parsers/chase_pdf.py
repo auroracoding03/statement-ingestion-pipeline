@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
 import pdfplumber
 import pandas as pd
 
-from .base import coerce_amount, finalize
+from .base import coerce_amount, finalize, resolve_cycle_date
 
 ISSUER = "Chase"
 PERIOD_RE = re.compile(r"(?P<start>\d{2}/\d{2}/\d{2})\s*-\s*(?P<end>\d{2}/\d{2}/\d{2})")
@@ -165,17 +165,9 @@ def _cardholder(text: str) -> str | None:
     return clean.title()
 
 
-def _resolve_date(value: str, start: date, end: date) -> date:
+def _resolve_date(value: str, start: date, end: date) -> date | None:
     parsed = datetime.strptime(value, "%m/%d")
-    candidates = [date(year, parsed.month, parsed.day) for year in range(start.year - 1, end.year + 2)]
-    matching = [candidate for candidate in candidates if start <= candidate <= end]
-    if len(matching) != 1:
-        # Chase occasionally prints a transaction one day outside the labeled cycle.
-        grace_start, grace_end = start - timedelta(days=1), end + timedelta(days=1)
-        matching = [candidate for candidate in candidates if grace_start <= candidate <= grace_end]
-    if len(matching) != 1:
-        raise ValueError(f"Chase row date {value!r} is outside the statement period")
-    return matching[0]
+    return resolve_cycle_date(parsed.month, parsed.day, start, end)
 
 
 def _parse_row(line: Line, bounds: Bounds, start: date, end: date, section: str, metadata: dict[str, str | None], cardholder: str | None) -> dict[str, Any] | None:
@@ -193,9 +185,8 @@ def _parse_row(line: Line, bounds: Bounds, start: date, end: date, section: str,
     amounts = AMOUNT_RE.findall(amount_text)
     if not amounts:
         return None
-    try:
-        posted_date = _resolve_date(date_text, start, end)
-    except ValueError:
+    posted_date = _resolve_date(date_text, start, end)
+    if posted_date is None:
         # Far outside the cycle (and grace window): skip rather than fail the statement.
         return None
     return {
