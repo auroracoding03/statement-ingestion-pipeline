@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 
+import { CategoryFields } from "../components/CategoryFields";
 import { Empty, ErrorNote, Loading, PageHeader, StatusPill } from "../components/ui";
 import { api, waitForJob } from "../lib/dataSource";
 import { money } from "../lib/format";
@@ -10,6 +11,7 @@ export function AiAssistant() {
   const status = useAsync(() => api.aiStatus(), []);
   const merchants = useAsync(() => api.aiProposals("merchant"), []);
   const categories = useAsync(() => api.aiProposals("category"), []);
+  const rules = useAsync(() => api.rules(), []);
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -20,11 +22,14 @@ export function AiAssistant() {
     () => [...(merchants.data?.items ?? []), ...(categories.data?.items ?? [])],
     [merchants.data?.items, categories.data?.items],
   );
+  const categoryList = rules.data?.categories ?? [];
+  const subcategoryMap = rules.data?.subcategories ?? {};
 
   function refresh() {
     status.reload();
     merchants.reload();
     categories.reload();
+    rules.reload();
   }
 
   async function run(label: string, start: () => Promise<{ job_id: string }>) {
@@ -151,7 +156,16 @@ export function AiAssistant() {
       {merchants.loading || categories.loading ? <Loading what="AI proposals" /> : proposals.length === 0 ? <Empty>Nothing is waiting for review. Set up the model and run analysis after ingesting statements.</Empty> : (
         <div className="cluster-list ai-proposal-list">
           {proposals.map((proposal) => (
-            <ProposalCard key={proposal.proposal_id} proposal={proposal} selected={selected.has(proposal.proposal_id)} busy={busy !== ""} onToggle={toggle} onDecide={decide} />
+            <ProposalCard
+              key={proposal.proposal_id}
+              proposal={proposal}
+              categories={categoryList}
+              subcategories={subcategoryMap}
+              selected={selected.has(proposal.proposal_id)}
+              busy={busy !== ""}
+              onToggle={toggle}
+              onDecide={decide}
+            />
           ))}
         </div>
       )}
@@ -159,7 +173,23 @@ export function AiAssistant() {
   );
 }
 
-function ProposalCard({ proposal, selected, busy, onToggle, onDecide }: { proposal: AiProposal; selected: boolean; busy: boolean; onToggle: (id: string) => void; onDecide: (d: { proposal_id: string; action?: "accept" | "reject" | "defer"; recommendation?: Record<string, string>; save_as_rule?: boolean }[]) => void }) {
+function ProposalCard({
+  proposal,
+  categories,
+  subcategories,
+  selected,
+  busy,
+  onToggle,
+  onDecide,
+}: {
+  proposal: AiProposal;
+  categories: string[];
+  subcategories: Record<string, string[]>;
+  selected: boolean;
+  busy: boolean;
+  onToggle: (id: string) => void;
+  onDecide: (d: { proposal_id: string; action?: "accept" | "reject" | "defer"; recommendation?: Record<string, string>; save_as_rule?: boolean }[]) => void;
+}) {
   const [canonical, setCanonical] = useState(proposal.recommendation.canonical ?? "");
   const [category, setCategory] = useState(proposal.recommendation.category ?? "");
   const [subcategory, setSubcategory] = useState(proposal.recommendation.subcategory ?? "");
@@ -176,7 +206,7 @@ function ProposalCard({ proposal, selected, busy, onToggle, onDecide }: { propos
   const recommendation: Record<string, string> = isMerchant
     ? { canonical, category, subcategory }
     : { category, subcategory };
-  const canApprove = isMerchant ? Boolean(canonical.trim() && category.trim()) : Boolean(category.trim());
+  const canApprove = isMerchant ? Boolean(canonical.trim()) : Boolean(category.trim());
   return (
     <article className="cluster ai-proposal">
       <div className="cluster-head">
@@ -191,8 +221,22 @@ function ProposalCard({ proposal, selected, busy, onToggle, onDecide }: { propos
         {isMerchant && (
           <input value={canonical} onChange={(e) => setCanonical(e.target.value)} aria-label="Canonical merchant" placeholder="Canonical brand name" />
         )}
-        <input value={category} onChange={(e) => setCategory(e.target.value)} aria-label="Category" placeholder="Category" />
-        <input value={subcategory} onChange={(e) => setSubcategory(e.target.value)} aria-label="Subcategory" placeholder="Subcategory" />
+        <CategoryFields
+          categories={categories}
+          subcategories={subcategories}
+          category={category}
+          subcategory={subcategory}
+          requiredCategory={!isMerchant}
+          categoryLabel={isMerchant ? "Category (optional)" : "Category"}
+          onCategoryChange={(nextCategory, nextSub) => {
+            setCategory(nextCategory);
+            setSubcategory(nextSub);
+          }}
+          onPairChange={(nextCategory, nextSub) => {
+            setCategory(nextCategory);
+            setSubcategory(nextSub);
+          }}
+        />
         <button className="btn" disabled={busy || !canApprove} onClick={() => onDecide([{ proposal_id: proposal.proposal_id, action: "accept", recommendation }])}>Approve</button>
         <button className="btn subtle" disabled={busy} onClick={() => onDecide([{ proposal_id: proposal.proposal_id, action: "defer" }])}>Defer</button>
         <button className="btn danger subtle" disabled={busy} onClick={() => onDecide([{ proposal_id: proposal.proposal_id, action: "reject" }])}>Reject</button>

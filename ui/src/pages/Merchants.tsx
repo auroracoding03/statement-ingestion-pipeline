@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { CategoryFields } from "../components/CategoryFields";
 import { Empty, ErrorNote, Loading, PageHeader } from "../components/ui";
 import { api, canWrite } from "../lib/dataSource";
 import { money } from "../lib/format";
@@ -166,15 +167,13 @@ function ClusterCard({
   const [category, setCategory] = useState("");
   const [subcategory, setSubcategory] = useState("");
   const [saving, setSaving] = useState(false);
-  const categorySubs = category ? subcategories[category] ?? [] : [];
 
   async function save() {
     if (!canonical.trim()) return;
     setSaving(true);
     try {
       const cleanedCategory = category.trim() || null;
-      const cleanedSub =
-        cleanedCategory && subcategory && categorySubs.includes(subcategory) ? subcategory : null;
+      const cleanedSub = cleanedCategory && subcategory.trim() ? subcategory.trim() : null;
       await api.saveMerchant({
         canonical: canonical.trim(),
         members: cluster.members,
@@ -221,34 +220,22 @@ function ClusterCard({
           placeholder="Canonical brand name"
           aria-label="Canonical brand name"
         />
-        <select
-          value={category}
-          onChange={(e) => {
-            setCategory(e.target.value);
-            setSubcategory("");
+        <CategoryFields
+          categories={categories}
+          subcategories={subcategories}
+          category={category}
+          subcategory={subcategory}
+          categoryLabel="Default category (optional)"
+          subcategoryLabel="Subcategory (optional)"
+          onCategoryChange={(nextCategory, nextSub) => {
+            setCategory(nextCategory);
+            setSubcategory(nextSub);
           }}
-          aria-label="Default category"
-        >
-          <option value="">Default category (optional)</option>
-          {categories.map((entry) => (
-            <option key={entry} value={entry}>
-              {entry}
-            </option>
-          ))}
-        </select>
-        <select
-          value={subcategory}
-          onChange={(e) => setSubcategory(e.target.value)}
-          disabled={!category}
-          aria-label="Default subcategory"
-        >
-          <option value="">Subcategory (optional)</option>
-          {categorySubs.map((sub) => (
-            <option key={sub} value={sub}>
-              {sub}
-            </option>
-          ))}
-        </select>
+          onPairChange={(nextCategory, nextSub) => {
+            setCategory(nextCategory);
+            setSubcategory(nextSub);
+          }}
+        />
         <button className="btn" onClick={save} disabled={saving || !canonical.trim()}>
           {saving ? "Saving…" : "Confirm merchant"}
         </button>

@@ -228,3 +228,74 @@ def test_looks_like_category_label():
     assert ai_review._looks_like_category_label("Transport / Gas", categories)
     assert not ai_review._looks_like_category_label("Sheetz", categories)
     assert not ai_review._looks_like_category_label("Circle K", categories)
+
+
+def test_quoted_brand_recovered_when_canonical_empty(tmp_path: Path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    ledger = _ledger()
+    monkeypatch.setattr(ai_review, "ollama_available", lambda host: True)
+
+    def fake_ask(kind, profiles, categories, cfg):
+        if kind == "merchant":
+            return [
+                {
+                    "key": p["key"],
+                    "canonical": "",
+                    "category": "Food",
+                    "subcategory": "Groceries",
+                    "confidence": "high",
+                    "reason": "'Publix' is a well-known grocery store chain.",
+                    "ambiguous": False,
+                }
+                for p in profiles
+            ]
+        return [{"key": p["key"], "category": "Food", "subcategory": "Groceries", "confidence": "medium", "reason": "Grocery", "ambiguous": False} for p in profiles]
+
+    monkeypatch.setattr(ai_review, "_ask_batch", fake_ask)
+    ai_review.run_analysis(ledger)
+    merchant = next(item for item in ai_review.list_proposals()["items"] if item["kind"] == "merchant")
+    assert merchant["recommendation"]["canonical"] == "Publix"
+
+
+def test_approved_merchant_brand_only_leaves_category_untouched(tmp_path: Path, monkeypatch):
+    data, _rules, merchants = _configure(tmp_path, monkeypatch)
+    ledger = _ledger()
+    ledger_path = data / "ledger.parquet"
+    atomic_write_parquet(ledger, ledger_path)
+    ai_review._write_proposals(
+        pd.DataFrame(
+            [
+                {
+                    "proposal_id": "merchant-brand-only",
+                    "input_fingerprint": "brand-only",
+                    "kind": "merchant",
+                    "status": "pending",
+                    "members_json": json.dumps(["WAL-MART ATLANTA GA"]),
+                    "txn_ids_json": json.dumps(ledger["txn_id"].tolist()),
+                    "recommendation_json": json.dumps({"canonical": "Walmart", "category": "", "subcategory": ""}),
+                    "evidence_json": json.dumps({"txn_count": 1}),
+                    "confidence": "high",
+                    "model": "qwen3.5:9b",
+                    "prompt_version": ai_review.PROMPT_VERSION,
+                    "batch_id": None,
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                    "error": None,
+                }
+            ]
+        )
+    )
+
+    result = ai_review.apply_decisions(
+        ledger,
+        lambda frame: atomic_write_parquet(frame, ledger_path),
+        [{"proposal_id": "merchant-brand-only", "action": "accept"}],
+        ledger_path=ledger_path,
+    )
+    assert result["applied"] == ["merchant-brand-only"]
+    row = pd.read_parquet(ledger_path).iloc[0]
+    assert row["canonical_merchant"] == "Walmart"
+    assert pd.isna(row["category"]) or row["category"] in (None, "")
+    saved = yaml.safe_load(merchants.read_text())["merchants"][0]
+    assert saved["canonical"] == "Walmart"
+    assert "category" not in saved

@@ -17,6 +17,7 @@ from src.merchants import (
     match_canonical,
     merchant_defaults,
 )
+from src.normalize import merchant_identity_key
 
 
 @pytest.fixture
@@ -113,6 +114,41 @@ def test_cluster_unknowns_groups_similar_names():
     assert "THE WEDDING VENUE DEPOSIT" in by_rep
     # Highest spend surfaces first for review
     assert clusters[0]["representative"] == "THE WEDDING VENUE DEPOSIT"
+
+
+def test_cluster_ignores_shared_city_state():
+    frame = _frame(
+        [
+            {"normalized_merchant": "CAVA EAST COBB MARIETTA GA", "amount": 20.0},
+            {"normalized_merchant": "EAST COBB AUTO CARE MARIETTA GA", "amount": 80.0},
+        ]
+    )
+    clusters = cluster_unknowns(frame, threshold=80)
+    assert len(clusters) == 2
+    members = {frozenset(c["members"]) for c in clusters}
+    assert frozenset(["CAVA EAST COBB MARIETTA GA"]) in members
+    assert frozenset(["EAST COBB AUTO CARE MARIETTA GA"]) in members
+
+
+def test_cluster_separates_apple_pay_underlying_merchants():
+    frame = _frame(
+        [
+            {"normalized_merchant": "APLPAY ORCA SEATTLE WA", "amount": 3.0},
+            {"normalized_merchant": "APLPAY STARBUCKS SEATTLE WA", "amount": 6.0},
+            {"normalized_merchant": "APLPAY ORCA TACOMA WA", "amount": 2.5},
+        ]
+    )
+    clusters = cluster_unknowns(frame, threshold=80)
+    by_members = {frozenset(c["members"]): c for c in clusters}
+    orca = next(members for members in by_members if any("ORCA" in m for m in members))
+    assert orca == frozenset(["APLPAY ORCA SEATTLE WA", "APLPAY ORCA TACOMA WA"])
+    assert frozenset(["APLPAY STARBUCKS SEATTLE WA"]) in by_members
+
+
+def test_merchant_identity_key_strips_rail_and_geo():
+    assert merchant_identity_key("APLPAY ORCA 00SJFQR SEATTLE WA") == "ORCA 00SJFQR"
+    assert merchant_identity_key("CAVA EAST COBB MARIETTA GA") == "CAVA EAST COBB"
+    assert merchant_identity_key("APLPAY") == "APLPAY"
 
 
 def test_cluster_ignores_already_canonical(merchants_file: Path):
