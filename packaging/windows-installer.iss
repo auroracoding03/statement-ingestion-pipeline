@@ -42,12 +42,10 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilen
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 
-; Relaunch after silent in-app upgrades too. The PowerShell handoff deliberately
-; does not start the exe, so Setup is the single relaunch authority.
-; A second cmd-start entry covers silent installs where the direct Run entry is skipped.
+; Relaunch once after install. Dual [Run] entries previously launched two hosts
+; and the second hit the single-instance lock ("already running").
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifdoesntexist
-Filename: "{cmd}"; Parameters: "/C start """" ""{app}\{#MyAppExeName}"""; Flags: nowait postinstall skipifdoesntexist runhidden
 
 [Code]
 function PrepareToInstall(var NeedsRestart: Boolean): String;

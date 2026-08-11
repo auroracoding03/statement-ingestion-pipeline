@@ -22,6 +22,22 @@ HOST = "127.0.0.1"
 PREFERRED_PORT = 8787
 STARTUP_TIMEOUT_SECONDS = 20
 READY_PROBE_TIMEOUT_SECONDS = 2.0
+DESKTOP_LOCK_NAME = "statement-pipeline.desktop.lock"
+
+_instance_lock: FileLock | None = None
+
+
+def release_instance_lock() -> None:
+    """Release the single-instance lock so an updater relaunch can acquire it."""
+    global _instance_lock
+    lock = _instance_lock
+    _instance_lock = None
+    if lock is None:
+        return
+    try:
+        lock.release()
+    except Exception:  # noqa: BLE001 — lock may already be released during forced exit
+        pass
 
 
 def _ensure_stdio() -> None:
@@ -85,14 +101,16 @@ def _show_error(title: str, message: str) -> None:
 
 def main() -> None:
     """Run FastAPI in the background and render it in a native WebView window."""
+    global _instance_lock
     _ensure_stdio()
     ensure_dirs()
-    instance_lock = FileLock(str(USER_DATA_ROOT / "statement-pipeline.desktop.lock"))
+    instance_lock = FileLock(str(USER_DATA_ROOT / DESKTOP_LOCK_NAME))
     try:
         instance_lock.acquire(timeout=0)
     except Timeout:
         _show_error("Statement Pipeline", "Statement Pipeline is already running.")
         return
+    _instance_lock = instance_lock
 
     server: uvicorn.Server | None = None
     try:
@@ -124,7 +142,7 @@ def main() -> None:
     finally:
         if server is not None:
             server.should_exit = True
-        instance_lock.release()
+        release_instance_lock()
 
 
 if __name__ == "__main__":
