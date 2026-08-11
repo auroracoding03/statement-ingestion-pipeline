@@ -8,8 +8,8 @@ Raw statements, `rules.yaml`, and `merchants.yaml` stay on your machine. The pub
 
 For normal desktop use, download `StatementPipelineSetup.exe` from the release,
 run it, and click **Install**. Launch **Statement Pipeline** from the Start menu;
-it opens the local dashboard in your default browser. Python, Node.js, and a
-terminal are not required on the installed machine.
+it opens in its own native Windows window. Python, Node.js, and a terminal are
+not required on the installed machine.
 
 The current unsigned installer may show a Windows SmartScreen reputation prompt.
 Choose **More info** then **Run anyway** only when you downloaded the installer
@@ -20,6 +20,11 @@ Your statements, configuration, and local database are stored in
 Upgrades and normal uninstalls preserve this folder. Back it up if you want a
 copy of your financial history; delete it manually only if you intend to erase
 that data permanently.
+
+Use the **Ingestion** page to add statement files. PDFs are identified from the
+statement text and normally need no issuer or card-product input. CSV exports
+are identified from their headers when possible; a card product is requested
+only when the file omits it, such as an American Express CSV export.
 
 ### Building an installer
 
@@ -68,6 +73,30 @@ fin serve               # http://127.0.0.1:8787
 `fin serve` binds to localhost only and serves the React app plus the `/api/*` routes that drive ingest, the review queue, and merchant curation. During UI development, run `npm run dev` in `ui/` (port 5173, proxies `/api` to 8787).
 
 CLI entrypoint: `fin` (also `python -m src.cli`).
+
+### Local AI assistant (Windows / Radeon RX 6900 XT)
+
+The **AI assistant** page is a high-throughput local review queue for a large
+transaction history. It is designed for an RX 6900 XT (16 GB VRAM) and uses
+`qwen3.5:9b` (6.6 GB) through Ollama. The app batches merchant profiles rather
+than making one request per transaction, then keeps suggestions in a local
+checkpointed queue for review.
+
+1. Update the desktop app, then open **AI assistant**.
+2. Install [Ollama for Windows](https://ollama.com/download/windows) if needed.
+3. Choose **Download recommended model**. The page warms up the model and
+   confirms that it occupies GPU memory. On RX 6000 cards, Ollama's Vulkan
+   backend is the expected Windows fallback if ROCm is unavailable.
+4. Run **Analyze new or changed data**, review merchant identity proposals
+   first, and approve only the aliases you want saved. Then review category
+   proposals. Mixed-use merchants such as Walmart remain transaction-level
+   suggestions unless prior reviewed history is consistent.
+
+Statements, descriptions, model prompts, and proposals never leave the local
+machine. The per-merchant **Look up** button displays the exact browser query
+and requires confirmation; it sends only that merchant text, never an amount,
+date, card, or statement data. Each approval batch has a local snapshot and
+can be undone from the AI assistant page.
 
 ## Merchant identity
 

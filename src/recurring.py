@@ -12,7 +12,7 @@ from src.paths import EXPECTED_RECURRING_PATH
 
 
 def load_expected(path: Path = EXPECTED_RECURRING_PATH) -> list[dict]:
-    with path.open() as f:
+    with path.open(encoding="utf-8") as f:
         doc = yaml.safe_load(f) or {}
     return list(doc.get("bills") or [])
 

@@ -9,14 +9,17 @@ export function Transactions() {
   const [query, setQuery] = useState("");
   const [card, setCard] = useState("");
   const [category, setCategory] = useState("");
+  const [tag, setTag] = useState("");
   const [unclassified, setUnclassified] = useState(false);
+  const tagsState = useAsync(() => api.tags(), []);
 
   const { data, loading, error } = useAsync(
-    () => api.transactions({ q: query, card, category, unclassified, limit: 500 }),
-    [query, card, category, unclassified],
+    () => api.transactions({ q: query, card, category, tag, unclassified, limit: 500 }),
+    [query, card, category, tag, unclassified],
   );
 
   const items = data?.items ?? [];
+  const tagCatalog = tagsState.data?.items ?? [];
   const facets = useMemo(() => {
     const cards = new Set<string>();
     const categories = new Set<string>();
@@ -27,11 +30,16 @@ export function Transactions() {
     return { cards: [...cards].sort(), categories: [...categories].sort() };
   }, [items]);
 
+  const tagLabel = useMemo(() => {
+    const map = new Map(tagCatalog.map((entry) => [entry.id, entry.label]));
+    return (id: string) => map.get(id) ?? id;
+  }, [tagCatalog]);
+
   return (
     <>
       <PageHeader
         title="Transactions"
-        lede="Every row shows all three merchant layers: the raw statement text, the mechanical normalization, and the curated canonical brand."
+        lede="Every row shows merchant layers plus optional context tags (dates, trips) without changing category totals."
       />
 
       <div className="toolbar">
@@ -55,6 +63,14 @@ export function Transactions() {
           {facets.categories.map((c) => (
             <option key={c} value={c}>
               {c}
+            </option>
+          ))}
+        </select>
+        <select value={tag} onChange={(e) => setTag(e.target.value)}>
+          <option value="">All tags</option>
+          {tagCatalog.map((entry) => (
+            <option key={entry.id} value={entry.id}>
+              {entry.label}
             </option>
           ))}
         </select>
@@ -88,6 +104,7 @@ export function Transactions() {
                   <th>Raw description</th>
                   <th className="num">Amount</th>
                   <th>Category</th>
+                  <th>Tags</th>
                   <th>Source</th>
                 </tr>
               </thead>
@@ -107,6 +124,15 @@ export function Transactions() {
                     <td>
                       {t.category ?? <span className="unresolved">Uncategorized</span>}
                       {t.subcategory ? <span className="merchant-raw"> {t.subcategory}</span> : null}
+                    </td>
+                    <td>
+                      <div className="tag-chip-row compact">
+                        {(t.tags ?? []).map((id) => (
+                          <span key={id} className="tag-chip readonly">
+                            {tagLabel(id)}
+                          </span>
+                        ))}
+                      </div>
                     </td>
                     <td>
                       <span className={`status status-${t.classified_by ?? "missing"}`}>

@@ -1,4 +1,7 @@
-# Optional Ollama settings for unclassified-tail suggestions.
-model: llama3.2
+# Local AI settings.  Qwen 3.5 9B Q4 fits comfortably in a 16 GB Radeon card
+# while leaving room for the Windows/Vulkan runtime and request context.
+model: qwen3.5:9b
 host: http://127.0.0.1:11434
-temperature: 0.1
+temperature: 0
+num_ctx: 8192
+keep_alive: 10m

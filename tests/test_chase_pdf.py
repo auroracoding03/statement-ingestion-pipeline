@@ -77,6 +77,43 @@ def test_chase_sapphire_product_and_holder_are_detected():
     assert parsed.loc[0, "cardholder"] == "Sam Example"
 
 
+def test_chase_parser_collapses_doubled_glyph_headings():
+    """Some Chase PDFs extract each letter twice; headings must not look like cardholders."""
+    words: list[dict] = []
+    _line(words, 10, [(50, "amazon | CHASE"), (250, "YOUR PRIME VISA POINTS")])
+    _line(words, 15, [(50, "Opening/Closing Date"), (250, "04/25/26 - 05/24/26")])
+    _line(words, 20, [(50, "AACCCCOOUUUNNTT SSUUMMMMAARRYY")])
+    _line(words, 30, [(50, "ALEX EXAMPLE")])
+    _line(words, 40, [(50, "CASH ADVANCES")])
+    _line(words, 50, [(50, "BALANCE TRANSFERS")])
+    _line(words, 55, [(50, "IMPORTANT NEWS")])
+    _line(words, 60, [(50, "PURCHASE")])
+    _header(words, 70)
+    _row(words, 80, "05/08", "AMAZON MKTPL*TEST Amzn.com/bill WA", "12.00")
+
+    parsed = _parse_pages([_Page(words)], card="chase-amazon", source_file="chase/doubled.pdf")
+
+    assert parsed["cardholder"].unique().tolist() == ["Alex Example"]
+    assert len(parsed) == 1
+
+
+def test_chase_parser_skips_dates_far_outside_period():
+    words: list[dict] = []
+    _line(words, 10, [(50, "amazon | CHASE"), (250, "YOUR PRIME VISA POINTS")])
+    _line(words, 15, [(50, "Opening/Closing Date"), (250, "11/25/24 - 12/24/24")])
+    _line(words, 20, [(50, "ALEX EXAMPLE")])
+    _line(words, 30, [(50, "PAYMENTS AND OTHER CREDITS")])
+    _header(words, 40)
+    _row(words, 50, "10/24", "Payment Thank You - Web", "-50.00")
+    _row(words, 60, "12/01", "Payment Thank You - Web", "-25.00")
+
+    parsed = _parse_pages([_Page(words)], card="chase-amazon", source_file="chase/boundary.pdf")
+
+    assert len(parsed) == 1
+    assert parsed["posted_date"].astype(str).tolist() == ["2024-12-01"]
+
+
+
 def test_chase_parser_rejects_image_only_statement():
     with pytest.raises(ValueError, match="no extractable text"):
         _parse_pages([_Page([])], card="chase", source_file="chase/image.pdf")
