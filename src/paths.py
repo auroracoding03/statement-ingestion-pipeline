@@ -81,6 +81,9 @@ LEDGER_PARQUET = DATA / "ledger.parquet"
 LEDGER_LOCK = DATA / "ledger.lock"
 FINANCE_DB = DATA / "finance.duckdb"
 PROPOSALS_PARQUET = DATA / "proposals.parquet"
+AI_PROPOSALS_PARQUET = DATA / "ai_proposals.parquet"
+AI_APPLICATIONS_PATH = DATA / "ai_applications.json"
+AI_SNAPSHOTS = DATA / "ai_snapshots"
 INGEST_MANIFEST = DATA / "ingestion_manifest.parquet"
 TRANSACTION_SOURCES_PARQUET = DATA / "transaction_sources.parquet"
 RECURRING_PARQUET = DATA / "recurring.parquet"
@@ -107,4 +110,5 @@ def ensure_dirs() -> None:
     DATA.mkdir(parents=True, exist_ok=True)
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     PENDING_UPLOADS.mkdir(parents=True, exist_ok=True)
+    AI_SNAPSHOTS.mkdir(parents=True, exist_ok=True)
     seed_default_config()
