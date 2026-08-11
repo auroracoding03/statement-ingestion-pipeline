@@ -221,6 +221,107 @@ def test_failed_approval_restores_config_and_ledger(tmp_path: Path, monkeypatch)
     assert ai_review.list_proposals()["items"][0]["status"] == "pending"
 
 
+def test_full_reanalyze_clears_stale_pending_proposals(tmp_path: Path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    ledger = _ledger()
+    monkeypatch.setattr(ai_review, "ollama_available", lambda host: True)
+
+    stale = {
+        "proposal_id": "stale-combined",
+        "input_fingerprint": "old-fingerprint-not-matching",
+        "kind": "merchant",
+        "status": "pending",
+        "members_json": json.dumps(["CAVA EAST COBB MARIETTA GA", "EAST COBB AUTO CARE MARIETTA GA"]),
+        "txn_ids_json": "[]",
+        "recommendation_json": json.dumps({"canonical": "Cava"}),
+        "evidence_json": "{}",
+        "confidence": "high",
+        "model": "qwen3.5:9b",
+        "prompt_version": "merchant-review-v2",
+        "batch_id": None,
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "error": None,
+    }
+    applied = {**stale, "proposal_id": "already-applied", "status": "applied", "input_fingerprint": "applied-fp"}
+    ai_review._write_proposals(pd.DataFrame([stale, applied]))
+
+    def fake_ask(kind, profiles, categories, cfg):
+        if kind == "merchant":
+            return [
+                {
+                    "key": p["key"],
+                    "canonical": "Walmart",
+                    "category": "Shopping",
+                    "subcategory": "Retail",
+                    "confidence": "high",
+                    "reason": "Known brand",
+                    "ambiguous": False,
+                }
+                for p in profiles
+            ]
+        return [{"key": p["key"], "category": "Shopping", "subcategory": "Retail", "confidence": "medium", "reason": "Retailer", "ambiguous": True} for p in profiles]
+
+    monkeypatch.setattr(ai_review, "_ask_batch", fake_ask)
+    outcome = ai_review.run_analysis(ledger, mode="full")
+    assert outcome["mode"] == "full"
+    assert outcome["created"] == 2
+
+    proposals = ai_review.load_proposals()
+    pending = proposals[proposals["status"] == "pending"]
+    assert "stale-combined" not in set(pending["proposal_id"].astype(str))
+    assert "old-fingerprint-not-matching" not in set(pending["input_fingerprint"].astype(str))
+    assert (proposals["proposal_id"] == "already-applied").any()
+    pending_kinds = {item["kind"] for item in ai_review.list_proposals(status="pending")["items"]}
+    assert pending_kinds == {"merchant", "category"}
+
+
+def test_incremental_reanalyze_keeps_unrelated_pending(tmp_path: Path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
+    ledger = _ledger()
+    monkeypatch.setattr(ai_review, "ollama_available", lambda host: True)
+    stale = {
+        "proposal_id": "stale-combined",
+        "input_fingerprint": "old-fingerprint-not-matching",
+        "kind": "merchant",
+        "status": "pending",
+        "members_json": json.dumps(["CAVA EAST COBB MARIETTA GA", "EAST COBB AUTO CARE MARIETTA GA"]),
+        "txn_ids_json": "[]",
+        "recommendation_json": json.dumps({"canonical": "Cava"}),
+        "evidence_json": "{}",
+        "confidence": "high",
+        "model": "qwen3.5:9b",
+        "prompt_version": "merchant-review-v2",
+        "batch_id": None,
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "error": None,
+    }
+    ai_review._write_proposals(pd.DataFrame([stale]))
+
+    def fake_ask(kind, profiles, categories, cfg):
+        if kind == "merchant":
+            return [
+                {
+                    "key": p["key"],
+                    "canonical": "Walmart",
+                    "category": "",
+                    "subcategory": "",
+                    "confidence": "high",
+                    "reason": "Known brand",
+                    "ambiguous": False,
+                }
+                for p in profiles
+            ]
+        return [{"key": p["key"], "category": "Shopping", "subcategory": "Retail", "confidence": "medium", "reason": "Retailer", "ambiguous": True} for p in profiles]
+
+    monkeypatch.setattr(ai_review, "_ask_batch", fake_ask)
+    ai_review.run_analysis(ledger, mode="incremental")
+    pending = ai_review.load_proposals()
+    pending = pending[pending["status"] == "pending"]
+    assert "stale-combined" in set(pending["proposal_id"].astype(str))
+
+
 def test_looks_like_category_label():
     categories = ["Food", "Shopping", "Transport"]
     assert ai_review._looks_like_category_label("Food", categories)
