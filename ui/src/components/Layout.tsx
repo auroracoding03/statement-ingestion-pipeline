@@ -10,6 +10,7 @@ const LINKS = [
   { to: "/categories", label: "Categories" },
   { to: "/recurring", label: "Recurring" },
   { to: "/merchants", label: "Merchants" },
+  { to: "/ai-assistant", label: "AI assistant", writeOnly: true },
   { to: "/review", label: "Review", writeOnly: true },
   { to: "/rules", label: "Rules", writeOnly: true },
 ];

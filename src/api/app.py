@@ -21,10 +21,13 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from src import pipeline
+from src import ai_review
 from src.ai_suggest import ollama_available
 from src.atomic import atomic_copy_stream
 from src.api import jobs
 from src.api.schemas import (
+    AIAnalyzeRequest,
+    AIProposalDecisionsRequest,
     CardProductIn,
     CategoryIn,
     ClassifyRequest,
@@ -147,6 +150,54 @@ def get_status() -> dict:
         "exports": EXPORT_DIR.exists(),
         "ollama_available": ollama_available(),
     }
+
+
+# --------------------------------------------------------------------------- local AI
+
+
+@app.get("/api/ai/status")
+def get_ai_status(warmup: bool = False) -> dict:
+    """Report local runtime/model state; no financial data leaves the machine."""
+    return ai_review.ai_status(warmup=warmup)
+
+
+@app.post("/api/ai/model/pull")
+def post_ai_model_pull(background: BackgroundTasks) -> dict:
+    return _start("ai-model-pull", ai_review.pull_model, background)
+
+
+@app.post("/api/ai/analyze")
+def post_ai_analyze(body: AIAnalyzeRequest, background: BackgroundTasks) -> dict:
+    return _start("ai-analyze", lambda: pipeline.run_ai_analysis(body.mode), background)
+
+
+@app.get("/api/ai/proposals")
+def get_ai_proposals(
+    status: str | None = Query("pending", pattern="^(pending|deferred|applied|rejected)$"),
+    kind: str | None = Query(None, pattern="^(merchant|category)$"),
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    return ai_review.list_proposals(status=status, kind=kind, limit=limit, offset=offset)
+
+
+@app.post("/api/ai/proposals/decide")
+def post_ai_proposal_decisions(body: AIProposalDecisionsRequest) -> dict:
+    try:
+        result = pipeline.apply_ai_decisions([item.model_dump(exclude_none=True) for item in body.decisions])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if result.get("error"):
+        raise HTTPException(status_code=409, detail=result["error"])
+    return result
+
+
+@app.post("/api/ai/applications/rollback")
+def post_ai_rollback() -> dict:
+    result = pipeline.rollback_ai_application()
+    if result.get("error"):
+        raise HTTPException(status_code=409, detail=result["error"])
+    return result
 
 
 # --------------------------------------------------------------------------- updates

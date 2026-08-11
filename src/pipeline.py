@@ -12,6 +12,7 @@ import pandas as pd
 from filelock import FileLock
 
 from src.ai_suggest import propose_canonicals_for_clusters, suggest
+from src import ai_review
 from src.atomic import atomic_write_parquet
 from src.classify import classify as apply_rules
 from src.extract import ExtractionError, extract_statements
@@ -179,6 +180,32 @@ def unknown_merchant_clusters(threshold: int = 88, with_ai: bool = False) -> lis
     if with_ai:
         clusters = propose_canonicals_for_clusters(clusters)
     return clusters
+
+
+def run_ai_analysis(mode: str = "full") -> dict:
+    """Create resumable local-AI proposals without mutating the ledger."""
+    with ledger_lock():
+        return ai_review.run_analysis(load_ledger(), mode=mode)
+
+
+def apply_ai_decisions(decisions: list[dict]) -> dict:
+    """Apply explicitly approved AI proposals under the ledger write lock."""
+    with ledger_lock():
+        ledger = load_ledger()
+        if ledger.empty:
+            return {"error": "No ledger yet. Run ingest first."}
+        return ai_review.apply_decisions(
+            ledger,
+            lambda frame: write_ledger(_ensure_columns(frame)),
+            decisions,
+            ledger_path=LEDGER_PARQUET,
+        )
+
+
+def rollback_ai_application() -> dict:
+    """Restore the snapshot from the most recent AI approval batch."""
+    with ledger_lock():
+        return ai_review.rollback_latest(LEDGER_PARQUET)
 
 
 def apply_review_decision(
