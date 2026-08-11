@@ -17,6 +17,7 @@ from rapidfuzz import fuzz
 
 from src.atomic import atomic_write_text
 from src import paths
+from src.normalize import merchant_identity_key
 
 MERCHANT_SOURCES = ("alias", "ai", "manual", "none")
 
@@ -183,6 +184,18 @@ def cluster_unknowns(
     assigned: set[str] = set()
     clusters: list[dict] = []
 
+    def _same_cluster(left: str, right: str) -> bool:
+        left_key = merchant_identity_key(left)
+        right_key = merchant_identity_key(right)
+        left_tokens = left_key.split()
+        right_tokens = right_key.split()
+        if not left_tokens or not right_tokens:
+            return False
+        # Shared city/state must not glue unrelated brands (CAVA vs EAST COBB).
+        if left_tokens[0].casefold() != right_tokens[0].casefold():
+            return False
+        return fuzz.token_set_ratio(left_key, right_key) >= threshold
+
     for name in names:
         if name in assigned:
             continue
@@ -191,7 +204,7 @@ def cluster_unknowns(
         for other in names:
             if other in assigned:
                 continue
-            if fuzz.token_set_ratio(name, other) >= threshold:
+            if _same_cluster(name, other):
                 members.append(other)
                 assigned.add(other)
 

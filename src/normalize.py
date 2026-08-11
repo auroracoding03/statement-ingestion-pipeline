@@ -56,6 +56,72 @@ NOISE_RE = re.compile(
 )
 MULTI_SPACE = re.compile(r"\s+")
 
+# Leading payment/processor rails that are not the consumer-facing merchant.
+PAYMENT_PREFIX_RE = re.compile(
+    r"^(?:"
+    r"APLPAY|APPLE\s+PAY|GPPAY|GOOGLE\s+PAY|"
+    r"PAYPAL|PP|"
+    r"SQ|TST|SP"
+    r")\b[\s\-*]*",
+    re.IGNORECASE,
+)
+
+US_STATE_CODES = frozenset(
+    {
+        "AL",
+        "AK",
+        "AZ",
+        "AR",
+        "CA",
+        "CO",
+        "CT",
+        "DE",
+        "FL",
+        "GA",
+        "HI",
+        "ID",
+        "IL",
+        "IN",
+        "IA",
+        "KS",
+        "KY",
+        "LA",
+        "ME",
+        "MD",
+        "MA",
+        "MI",
+        "MN",
+        "MS",
+        "MO",
+        "MT",
+        "NE",
+        "NV",
+        "NH",
+        "NJ",
+        "NM",
+        "NY",
+        "NC",
+        "ND",
+        "OH",
+        "OK",
+        "OR",
+        "PA",
+        "RI",
+        "SC",
+        "SD",
+        "TN",
+        "TX",
+        "UT",
+        "VT",
+        "VA",
+        "WA",
+        "WV",
+        "WI",
+        "WY",
+        "DC",
+    }
+)
+
 
 def normalize_merchant(raw: str) -> str:
     text = str(raw or "").upper().strip()
@@ -65,6 +131,34 @@ def normalize_merchant(raw: str) -> str:
     # Keep first ~6 tokens — enough for merchant identity, drops trailing city/state noise
     tokens = text.split()
     return " ".join(tokens[:6]) if tokens else "UNKNOWN"
+
+
+def merchant_identity_key(text: str) -> str:
+    """Core tokens for fuzzy clustering — strips payment rails and trailing geo.
+
+    Ledger ``normalized_merchant`` values stay unchanged; this key is only used
+    when deciding whether two unknown merchants should share a cluster.
+    """
+    original = MULTI_SPACE.sub(" ", str(text or "").upper().replace("*", " ").strip())
+    if not original:
+        return "UNKNOWN"
+
+    stripped = original
+    # Payment rails can stack (rare) or appear once; peel a couple of times.
+    for _ in range(2):
+        next_text = PAYMENT_PREFIX_RE.sub("", stripped).strip()
+        if next_text == stripped:
+            break
+        stripped = next_text
+
+    tokens = [t for t in stripped.split() if t]
+    if len(tokens) >= 2 and tokens[-1] in US_STATE_CODES:
+        tokens = tokens[:-2]  # drop CITY STATE
+    elif tokens and tokens[-1] in US_STATE_CODES:
+        tokens = tokens[:-1]
+
+    core = " ".join(tokens).strip()
+    return core if core else original
 
 
 def make_txn_id(card: str, posted_date, amount: float, raw_description: str, seq: int = 0) -> str:

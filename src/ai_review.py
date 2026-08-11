@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import uuid
 from datetime import datetime, timezone
@@ -26,7 +27,7 @@ from src.classify import append_rule, load_rules
 from src.merchants import append_merchant, canonicalize, cluster_unknowns
 
 
-PROMPT_VERSION = "merchant-review-v2"
+PROMPT_VERSION = "merchant-review-v3"
 RECOMMENDED_MODEL = "qwen3.5:9b"
 GAS_STATION_HINT = (
     "Gas stations and fuel brands (Shell, BP, Exxon, Chevron, Circle K, Speedway, "
@@ -34,6 +35,7 @@ GAS_STATION_HINT = (
     "category Transport and subcategory Gas — never Food, Shopping, or Retail, "
     "even when the site also sells convenience food."
 )
+QUOTED_BRAND_RE = re.compile(r"""['\"]([^'\"]{2,60})['\"]""")
 PROPOSAL_COLUMNS = [
     "proposal_id",
     "input_fingerprint",
@@ -150,7 +152,7 @@ def _profile_unknown_merchants(ledger: pd.DataFrame) -> list[dict]:
     # Reuse the existing local fuzzy clusterer so spelling/punctuation variants
     # are presented together.  The model still sees every source member and a
     # human approves the resulting alias before it is made durable.
-    for cluster in cluster_unknowns(ledger, threshold=82):
+    for cluster in cluster_unknowns(ledger, threshold=88):
         members = sorted({str(v) for v in cluster["members"] if str(v).strip()})
         if not members:
             continue
@@ -278,7 +280,23 @@ def _sanitize_merchant_answer(answer: dict, categories: list[str]) -> dict:
         out["category"] = category
         out["subcategory"] = subcategory if category else ""
     out["canonical"] = str(out.get("canonical") or "").strip()
+    if not out["canonical"]:
+        recovered = _recover_quoted_brand(str(out.get("reason") or ""), categories)
+        if recovered:
+            out["canonical"] = recovered
     return out
+
+
+def _recover_quoted_brand(reason: str, categories: list[str]) -> str:
+    """Pull a brand the model named in quotes when canonical was left empty."""
+    matches = [m.strip() for m in QUOTED_BRAND_RE.findall(reason) if m.strip()]
+    for candidate in matches:
+        if _looks_like_category_label(candidate, categories):
+            continue
+        if len(candidate.split()) > 8:
+            continue
+        return candidate
+    return ""
 
 
 def _category_vocab_line(categories: list[str]) -> str:
@@ -298,10 +316,15 @@ def _ask_batch(kind: str, profiles: list[dict], categories: list[str], cfg: dict
         instruction = "\n".join(
             [
                 "For each statement merchant profile, fill two separate fields:",
-                "1) canonical — the consumer-facing brand name only (e.g. Sheetz, Circle K, BP). "
+                "1) canonical — the consumer-facing brand or merchant name (e.g. Publix, Sheetz, Circle K, Dairy Queen). "
+                "When the brand is recognizable from the statement text, you MUST fill canonical. "
                 "Never put a category, subcategory, or 'Food/Shopping' style label in canonical. "
-                "Do not invent a name. Use an empty canonical and ambiguous=true when unsure.",
-                "2) category and subcategory — personal-finance labels from the allowed vocabulary.",
+                "Leave canonical empty and set ambiguous=true only when the merchant identity is truly unknown.",
+                "Payment rails: if the string starts with APLPAY/Apple Pay, SQ/Square, TST, SP, PayPal, or Google Pay, "
+                "prefer the underlying merchant after the rail (e.g. ORCA). If only the rail remains, use "
+                "'Apple Pay', 'Square', 'PayPal', or 'Google Pay' as canonical — do not leave it blank.",
+                "2) category and subcategory — optional personal-finance labels from the allowed vocabulary "
+                "(may be empty strings when unsure).",
                 GAS_STATION_HINT,
                 "Keep the reason focused on how you recognized the brand; mention category only briefly.",
             ]
@@ -604,25 +627,26 @@ def apply_decisions(ledger: pd.DataFrame, write_ledger, decisions: list[dict], *
                     raise ValueError("Canonical brand name cannot be a category label.")
                 category = str(recommendation.get("category") or "").strip()
                 subcategory = str(recommendation.get("subcategory") or "").strip()
-                if not category:
-                    raise ValueError("Merchant approval requires a category.")
-                if category not in allowed:
+                if category and category not in allowed:
                     raise ValueError(f"Unknown category {category!r}.")
+                if not category:
+                    subcategory = ""
                 append_merchant(
                     canonical=canonical,
                     members=[str(m) for m in members],
-                    category=category,
+                    category=category or None,
                     subcategory=subcategory or None,
                 )
                 match = out["normalized_merchant"].isin([str(m) for m in members])
                 out.loc[match, "canonical_merchant"] = canonical
                 out.loc[match, "merchant_source"] = "manual"
                 out.loc[match, "proposed_canonical"] = None
-                out.loc[match, "category"] = category
-                out.loc[match, "subcategory"] = subcategory
-                out.loc[match, "classified_by"] = "manual"
-                out.loc[match, "proposed_category"] = None
-                out.loc[match, "proposed_subcategory"] = None
+                if category:
+                    out.loc[match, "category"] = category
+                    out.loc[match, "subcategory"] = subcategory
+                    out.loc[match, "classified_by"] = "manual"
+                    out.loc[match, "proposed_category"] = None
+                    out.loc[match, "proposed_subcategory"] = None
             else:
                 category = str(recommendation.get("category") or "").strip()
                 if not category:
