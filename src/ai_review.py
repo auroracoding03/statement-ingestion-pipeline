@@ -432,9 +432,17 @@ def _history_proposal(profile: dict, model: str) -> dict:
 
 
 def run_analysis(ledger: pd.DataFrame, *, mode: str = "full") -> dict:
-    """Create new proposal records without changing the supplied ledger."""
+    """Create new proposal records without changing the supplied ledger.
+
+    ``mode="full"`` rebuilds the review queue: pending and deferred proposals are
+    cleared, then replaced by a fresh analysis of the current ledger.
+    ``mode="incremental"`` only adds proposals whose input fingerprint is not
+    already waiting, and supersedes matching pending/deferred rows.
+    """
     if ledger.empty:
         return {"error": "No ledger yet. Run ingest first."}
+    if mode not in {"full", "incremental"}:
+        return {"error": f"Unsupported analysis mode {mode!r}."}
     cfg = recommended_config()
     if not ollama_available(str(cfg["host"])):
         return {"error": f"Ollama is not reachable at {cfg['host']}."}
@@ -491,8 +499,15 @@ def run_analysis(ledger: pd.DataFrame, *, mode: str = "full") -> dict:
         except Exception as exc:  # noqa: BLE001
             errors.append(f"category batch {start // 20 + 1}: {exc}")
 
-    if created:
-        # A renewed input supersedes prior pending/deferred proposals for that input.
+    if mode == "full":
+        # Full rebuild: drop the waiting queue so obsolete clusters (e.g. after
+        # a clustering change) cannot linger beside the fresh proposals.
+        retained = existing[~existing["status"].isin(["pending", "deferred"])].copy()
+        if created:
+            _write_proposals(pd.concat([retained, pd.DataFrame(created)], ignore_index=True))
+        else:
+            _write_proposals(retained)
+    elif created:
         fingerprints = {record["input_fingerprint"] for record in created}
         existing = existing[~((existing["input_fingerprint"].isin(fingerprints)) & (existing["status"].isin(["pending", "deferred"])))]
         _write_proposals(pd.concat([existing, pd.DataFrame(created)], ignore_index=True))
@@ -501,6 +516,7 @@ def run_analysis(ledger: pd.DataFrame, *, mode: str = "full") -> dict:
         "category_profiles": len(category_profiles),
         "created": len(created),
         "errors": errors,
+        "mode": mode,
     }
 
 

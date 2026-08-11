@@ -124,7 +124,7 @@ export function AiAssistant() {
         </div>
         <div>
           <h2>2. Analyze safely</h2>
-          <p className="muted">Analysis batches merchant profiles instead of sending one request per transaction. Existing rules and manual decisions are preserved.</p>
+          <p className="muted">Analysis batches merchant profiles instead of sending one request per transaction. Existing rules and manual decisions are preserved. Reanalyze all clears pending proposals and rebuilds the queue from the current ledger.</p>
           <div className="review-actions">
             <button className="btn" disabled={!modelReady || busy !== ""} onClick={() => void run("analyze", () => api.startAiAnalysis("incremental"))}>
               {busy === "analyze" ? "Analyzing…" : "Analyze new or changed data"}
