@@ -25,10 +25,11 @@ export function Review() {
   const [newTagKind, setNewTagKind] = useState<TagKind>("trip");
 
   const items = useMemo(() => data?.items ?? [], [data]);
+  const queue = useMemo(() => items.filter((t) => !done.includes(t.txn_id)), [items, done]);
   const categories = data?.categories ?? [];
   const subcategories = data?.subcategories ?? {};
   const tagCatalog: ContextTag[] = tagsState.data?.items ?? [];
-  const current: Transaction | undefined = items[index];
+  const current: Transaction | undefined = queue[index];
 
   const proposal = current?.proposed_category ?? null;
 
@@ -40,9 +41,16 @@ export function Review() {
     setSaveError(null);
   }, [current?.txn_id, current?.proposed_category, current?.proposed_subcategory, current?.tags]);
 
+  // Keep cursor valid when cascade-reclassify shrinks the queue under us.
+  useEffect(() => {
+    if (index > 0 && index >= queue.length) {
+      setIndex(Math.max(0, queue.length - 1));
+    }
+  }, [index, queue.length]);
+
   const advance = useCallback(() => {
-    setIndex((i) => Math.min(i + 1, items.length));
-  }, [items.length]);
+    setIndex((i) => Math.min(i + 1, queue.length));
+  }, [queue.length]);
 
   const resolveSubcategory = useCallback(
     (category: string) => {
@@ -73,22 +81,24 @@ export function Review() {
       setSaving(true);
       setSaveError(null);
       try {
-        await api.submitReview(current.txn_id, {
+        const result = await api.submitReview(current.txn_id, {
           category,
           subcategory: resolveSubcategory(category),
           tags: selectedTags,
           create_rule: createRule,
           rule_scope: "auto",
         });
-        setDone((d) => [...d, current.txn_id]);
-        advance();
+        const applied = result.applied_txn_ids ?? [];
+        // Drop this txn and any siblings the new rule auto-classified. Index stays
+        // put so the next remaining item slides into place.
+        setDone((d) => [...d, current.txn_id, ...applied]);
       } catch (err) {
         setSaveError(err instanceof Error ? err.message : String(err));
       } finally {
         setSaving(false);
       }
     },
-    [advance, createRule, current, resolveSubcategory, saving, selectedTags],
+    [createRule, current, resolveSubcategory, saving, selectedTags],
   );
 
   function toggleTag(tagId: string) {
@@ -147,7 +157,8 @@ export function Review() {
   if (loading) return <Loading what="review queue" />;
   if (error) return <ErrorNote error={error} />;
 
-  const remaining = items.length - index;
+  const remaining = queue.length;
+  const progressDone = items.length === 0 ? 0 : ((items.length - remaining) / items.length) * 100;
 
   if (!current) {
     return (
@@ -173,7 +184,7 @@ export function Review() {
       />
 
       <div className="progress">
-        <span style={{ width: `${(index / items.length) * 100}%` }} />
+        <span style={{ width: `${progressDone}%` }} />
       </div>
 
       <div className="review-layout">

@@ -45,6 +45,10 @@ def review(frame: pd.DataFrame) -> pd.DataFrame:
     console.print(f"Known categories: {', '.join(categories)}\n")
 
     for idx, row in pending.iterrows():
+        # A prior rule save in this session may have already classified this row.
+        if not needs_review(out.loc[idx]):
+            continue
+
         table = Table(show_header=False, box=None)
         table.add_row("Date", str(row["posted_date"]))
         table.add_row("Card", str(row["card"]))
@@ -80,21 +84,48 @@ def review(frame: pd.DataFrame) -> pd.DataFrame:
         out.at[idx, "proposed_subcategory"] = None
 
         if Confirm.ask("Save as a reusable rule for this merchant?", default=True):
+            from src.classify import _compile_rules, _match_rule
+
             canonical = row.get("canonical_merchant")
             if not _is_blank(canonical):
-                append_rule(
+                rule = append_rule(
                     merchant_canonical=str(canonical),
                     category=category,
                     subcategory=subcategory,
                 )
-                console.print(f"[green]Rule saved[/green] canonical={canonical} → {category}/{subcategory}\n")
+                console.print(f"[green]Rule saved[/green] canonical={canonical} → {category}/{subcategory}")
             else:
-                append_rule(
+                rule = append_rule(
                     merchant_regex=rule_pattern_from_merchant(str(row["normalized_merchant"])),
                     category=category,
                     subcategory=subcategory,
                 )
-                console.print(f"[green]Rule saved[/green] → {category}/{subcategory}\n")
+                console.print(f"[green]Rule saved[/green] → {category}/{subcategory}")
+
+            compiled = _compile_rules({"rules": [rule]})
+            applied = 0
+            if compiled:
+                compiled_rule = compiled[0]
+                for other_idx, other in out.iterrows():
+                    if other_idx == idx or not needs_review(other):
+                        continue
+                    canonical_m = str(other.get("canonical_merchant") or "")
+                    merchant = str(other.get("normalized_merchant") or "")
+                    raw = str(other.get("raw_description") or "")
+                    if not _match_rule(
+                        compiled_rule, canonical=canonical_m, merchant=merchant, raw=raw
+                    ):
+                        continue
+                    out.at[other_idx, "category"] = compiled_rule["category"]
+                    out.at[other_idx, "subcategory"] = compiled_rule["subcategory"]
+                    out.at[other_idx, "classified_by"] = "rule"
+                    out.at[other_idx, "proposed_category"] = None
+                    out.at[other_idx, "proposed_subcategory"] = None
+                    applied += 1
+            if applied:
+                console.print(f"[green]Also classified {applied} matching open item(s)[/green]\n")
+            else:
+                console.print()
         else:
             console.print("[dim]Saved on this transaction only[/dim]\n")
 
