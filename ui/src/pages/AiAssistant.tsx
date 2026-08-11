@@ -160,10 +160,11 @@ export function AiAssistant() {
 }
 
 function ProposalCard({ proposal, selected, busy, onToggle, onDecide }: { proposal: AiProposal; selected: boolean; busy: boolean; onToggle: (id: string) => void; onDecide: (d: { proposal_id: string; action?: "accept" | "reject" | "defer"; recommendation?: Record<string, string>; save_as_rule?: boolean }[]) => void }) {
-  const initial = proposal.kind === "merchant" ? proposal.recommendation.canonical ?? "" : proposal.recommendation.category ?? "";
-  const [value, setValue] = useState(initial);
+  const [canonical, setCanonical] = useState(proposal.recommendation.canonical ?? "");
+  const [category, setCategory] = useState(proposal.recommendation.category ?? "");
   const [subcategory, setSubcategory] = useState(proposal.recommendation.subcategory ?? "");
   const merchantText = proposal.members[0] ?? proposal.recommendation.canonical ?? "merchant";
+  const isMerchant = proposal.kind === "merchant";
 
   function lookup() {
     const query = `${merchantText} merchant`;
@@ -172,26 +173,30 @@ function ProposalCard({ proposal, selected, busy, onToggle, onDecide }: { propos
     }
   }
 
-  const recommendation: Record<string, string> = proposal.kind === "merchant"
-    ? { canonical: value }
-    : { category: value, subcategory };
+  const recommendation: Record<string, string> = isMerchant
+    ? { canonical, category, subcategory }
+    : { category, subcategory };
+  const canApprove = isMerchant ? Boolean(canonical.trim() && category.trim()) : Boolean(category.trim());
   return (
     <article className="cluster ai-proposal">
       <div className="cluster-head">
         <label className="checkbox"><input type="checkbox" checked={selected} onChange={() => onToggle(proposal.proposal_id)} /> Select</label>
-        <strong>{proposal.kind === "merchant" ? "Merchant normalization" : "Category suggestion"}</strong>
+        <strong>{isMerchant ? "Merchant normalization" : "Category suggestion"}</strong>
         <StatusPill status={proposal.confidence} />
         <span className="muted">{proposal.evidence.txn_count ?? proposal.txn_ids.length} txn · {money(proposal.evidence.total_amount ?? 0)}</span>
       </div>
       <p className="muted" style={{ marginTop: "0.5rem" }}>{proposal.evidence.reason || "Local model proposal"}{proposal.evidence.ambiguous ? " · flagged ambiguous" : ""}</p>
       <div>{proposal.members.map((member) => <span key={member} className="tag">{member}</span>)}</div>
       <div className="cluster-form">
-        <input value={value} onChange={(e) => setValue(e.target.value)} aria-label={proposal.kind === "merchant" ? "Canonical merchant" : "Category"} placeholder={proposal.kind === "merchant" ? "Canonical brand name" : "Category"} />
-        {proposal.kind === "category" && <input value={subcategory} onChange={(e) => setSubcategory(e.target.value)} aria-label="Subcategory" placeholder="Subcategory" />}
-        <button className="btn" disabled={busy || !value.trim()} onClick={() => onDecide([{ proposal_id: proposal.proposal_id, action: "accept", recommendation }])}>Approve</button>
+        {isMerchant && (
+          <input value={canonical} onChange={(e) => setCanonical(e.target.value)} aria-label="Canonical merchant" placeholder="Canonical brand name" />
+        )}
+        <input value={category} onChange={(e) => setCategory(e.target.value)} aria-label="Category" placeholder="Category" />
+        <input value={subcategory} onChange={(e) => setSubcategory(e.target.value)} aria-label="Subcategory" placeholder="Subcategory" />
+        <button className="btn" disabled={busy || !canApprove} onClick={() => onDecide([{ proposal_id: proposal.proposal_id, action: "accept", recommendation }])}>Approve</button>
         <button className="btn subtle" disabled={busy} onClick={() => onDecide([{ proposal_id: proposal.proposal_id, action: "defer" }])}>Defer</button>
         <button className="btn danger subtle" disabled={busy} onClick={() => onDecide([{ proposal_id: proposal.proposal_id, action: "reject" }])}>Reject</button>
-        {proposal.kind === "merchant" && <button className="btn subtle" disabled={busy} onClick={lookup}>Look up</button>}
+        {isMerchant && <button className="btn subtle" disabled={busy} onClick={lookup}>Look up</button>}
       </div>
     </article>
   );

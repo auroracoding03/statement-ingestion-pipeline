@@ -26,8 +26,14 @@ from src.classify import append_rule, load_rules
 from src.merchants import append_merchant, canonicalize, cluster_unknowns
 
 
-PROMPT_VERSION = "merchant-review-v1"
+PROMPT_VERSION = "merchant-review-v2"
 RECOMMENDED_MODEL = "qwen3.5:9b"
+GAS_STATION_HINT = (
+    "Gas stations and fuel brands (Shell, BP, Exxon, Chevron, Circle K, Speedway, "
+    "Love's, Loves, Sheetz, QuikTrip, Wawa, Racetrack, Costco Gas, etc.) must use "
+    "category Transport and subcategory Gas — never Food, Shopping, or Retail, "
+    "even when the site also sells convenience food."
+)
 PROPOSAL_COLUMNS = [
     "proposal_id",
     "input_fingerprint",
@@ -204,11 +210,13 @@ def _schema(kind: str) -> dict:
             "properties": {
                 "key": {"type": "string"},
                 "canonical": {"type": "string"},
+                "category": {"type": "string"},
+                "subcategory": {"type": "string"},
                 "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
                 "reason": {"type": "string"},
                 "ambiguous": {"type": "boolean"},
             },
-            "required": ["key", "canonical", "confidence", "reason", "ambiguous"],
+            "required": ["key", "canonical", "category", "subcategory", "confidence", "reason", "ambiguous"],
         }
     else:
         item = {
@@ -226,23 +234,95 @@ def _schema(kind: str) -> dict:
     return {"type": "object", "properties": {"items": {"type": "array", "items": item}}, "required": ["items"]}
 
 
+def _looks_like_category_label(value: str, categories: list[str]) -> bool:
+    """True when a brand field is clearly taxonomy text rather than a brand name."""
+    cleaned = " ".join(value.split()).strip()
+    if not cleaned:
+        return False
+    folded = cleaned.casefold()
+    allowed = {c.casefold() for c in categories}
+    if folded in allowed:
+        return True
+    # Models often emit "Food/Shopping", "Transport / Gas", or "Food or Shopping".
+    separators = ("/", "|", " or ", " / ")
+    for sep in separators:
+        if sep in folded:
+            parts = [p.strip() for p in folded.split(sep) if p.strip()]
+            if parts and all(part in allowed or part in {"gas", "retail", "fastfood"} for part in parts):
+                return True
+    return False
+
+
+def _sanitize_merchant_answer(answer: dict, categories: list[str]) -> dict:
+    """Keep category values out of the brand field and validate category membership."""
+    out = dict(answer)
+    canonical = str(out.get("canonical") or "").strip()
+    category = str(out.get("category") or "").strip()
+    subcategory = str(out.get("subcategory") or "").strip()
+    if _looks_like_category_label(canonical, categories):
+        # Recover when the model swapped fields: taxonomy in canonical, brand empty.
+        if not category and canonical.casefold() in {c.casefold() for c in categories}:
+            category = next(c for c in categories if c.casefold() == canonical.casefold())
+        out["canonical"] = ""
+        out["confidence"] = "low"
+        out["ambiguous"] = True
+        reason = str(out.get("reason") or "").strip()
+        note = "Model returned a category label as the brand name."
+        out["reason"] = f"{reason} {note}".strip() if reason else note
+    if category and category not in categories:
+        out["category"] = ""
+        out["subcategory"] = ""
+        out["confidence"] = "low"
+        out["ambiguous"] = True
+    else:
+        out["category"] = category
+        out["subcategory"] = subcategory if category else ""
+    out["canonical"] = str(out.get("canonical") or "").strip()
+    return out
+
+
+def _category_vocab_line(categories: list[str]) -> str:
+    rules = load_rules()
+    subs = rules.get("subcategories") or {}
+    parts: list[str] = []
+    for category in categories:
+        bucket = [str(s) for s in (subs.get(category) or []) if str(s).strip()]
+        parts.append(f"{category} ({', '.join(bucket)})" if bucket else category)
+    return "; ".join(parts)
+
+
 def _ask_batch(kind: str, profiles: list[dict], categories: list[str], cfg: dict) -> list[dict]:
     """Call the local Ollama API with a strict response schema."""
+    vocab = _category_vocab_line(categories) if categories else ""
     if kind == "merchant":
-        instruction = (
-            "Identify the consumer-facing brand for each statement merchant profile. "
-            "Do not invent a name. Mark ambiguous true and use an empty canonical when unsure."
+        instruction = "\n".join(
+            [
+                "For each statement merchant profile, fill two separate fields:",
+                "1) canonical — the consumer-facing brand name only (e.g. Sheetz, Circle K, BP). "
+                "Never put a category, subcategory, or 'Food/Shopping' style label in canonical. "
+                "Do not invent a name. Use an empty canonical and ambiguous=true when unsure.",
+                "2) category and subcategory — personal-finance labels from the allowed vocabulary.",
+                GAS_STATION_HINT,
+                "Keep the reason focused on how you recognized the brand; mention category only briefly.",
+            ]
         )
+        category_line = f"Allowed category vocabulary (for category/subcategory only): {vocab}" if vocab else ""
     else:
-        instruction = (
-            "Suggest a personal-finance category for each merchant profile. "
-            "Use only the allowed categories. Mixed-use merchants must be marked ambiguous."
+        instruction = "\n".join(
+            [
+                "Suggest a personal-finance category and subcategory for each merchant profile.",
+                "Use only the allowed category vocabulary.",
+                GAS_STATION_HINT,
+                "When a merchant could be food or fuel, prefer Transport/Gas for fuel brands and gas stations.",
+                "Mark ambiguous true only when the merchant identity itself is unclear.",
+            ]
         )
+        category_line = f"Allowed category vocabulary: {vocab}" if vocab else ""
     prompt = "\n".join(
         [
             instruction,
             "Return only the JSON schema response.",
-            f"Allowed categories: {', '.join(categories)}" if categories else "",
+            category_line,
             f"Profiles: {_json(profiles)}",
         ]
     ).strip()
@@ -269,7 +349,11 @@ def _ask_batch(kind: str, profiles: list[dict], categories: list[str], cfg: dict
 
 def _make_proposal(kind: str, profile: dict, result: dict, model: str) -> dict:
     if kind == "merchant":
-        recommendation = {"canonical": str(result.get("canonical") or "").strip()}
+        recommendation = {
+            "canonical": str(result.get("canonical") or "").strip(),
+            "category": str(result.get("category") or "").strip(),
+            "subcategory": str(result.get("subcategory") or "").strip(),
+        }
         fingerprint_input = {"members": profile["members"], "sample_raw": profile["sample_raw"]}
     else:
         recommendation = {
@@ -353,6 +437,7 @@ def run_analysis(ledger: pd.DataFrame, *, mode: str = "full") -> dict:
             answers = {str(item.get("key")): item for item in _ask_batch("merchant", batch, categories, cfg)}
             for profile in batch:
                 answer = answers.get(profile["key"], {"confidence": "low", "ambiguous": True, "reason": "No model answer."})
+                answer = _sanitize_merchant_answer(answer, categories)
                 created.append(_make_proposal("merchant", profile, answer, str(cfg["model"])))
         except Exception as exc:  # noqa: BLE001
             errors.append(f"merchant batch {start // 20 + 1}: {exc}")
@@ -514,11 +599,30 @@ def apply_decisions(ledger: pd.DataFrame, write_ledger, decisions: list[dict], *
                 canonical = str(recommendation.get("canonical") or "").strip()
                 if not canonical:
                     raise ValueError("Merchant approval requires a canonical name.")
-                append_merchant(canonical=canonical, members=[str(m) for m in members])
+                allowed = [c for c in (load_rules().get("categories") or []) if c != "Uncategorized"]
+                if _looks_like_category_label(canonical, allowed):
+                    raise ValueError("Canonical brand name cannot be a category label.")
+                category = str(recommendation.get("category") or "").strip()
+                subcategory = str(recommendation.get("subcategory") or "").strip()
+                if not category:
+                    raise ValueError("Merchant approval requires a category.")
+                if category not in allowed:
+                    raise ValueError(f"Unknown category {category!r}.")
+                append_merchant(
+                    canonical=canonical,
+                    members=[str(m) for m in members],
+                    category=category,
+                    subcategory=subcategory or None,
+                )
                 match = out["normalized_merchant"].isin([str(m) for m in members])
                 out.loc[match, "canonical_merchant"] = canonical
                 out.loc[match, "merchant_source"] = "manual"
                 out.loc[match, "proposed_canonical"] = None
+                out.loc[match, "category"] = category
+                out.loc[match, "subcategory"] = subcategory
+                out.loc[match, "classified_by"] = "manual"
+                out.loc[match, "proposed_category"] = None
+                out.loc[match, "proposed_subcategory"] = None
             else:
                 category = str(recommendation.get("category") or "").strip()
                 if not category:
