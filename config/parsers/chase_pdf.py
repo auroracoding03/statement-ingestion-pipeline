@@ -70,7 +70,7 @@ def _collapse_doubled_glyphs(text: str) -> str:
     """Undo Chase PDF extractions that emit each letter twice (ACCOUNT → AACCCCOOUUUNNTT).
 
     Intentional double letters become quadruples under that encoding, so runs are
-    halved (CCCC→CC) rather than fully deduped. Ordinary names like AARON stay
+    halved (CCCC→CC) rather than fully deduped. Ordinary names like ALEX stay
     untouched because their consecutive-duplication density stays low.
     """
     raw = str(text or "")
