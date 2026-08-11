@@ -77,6 +77,25 @@ def test_wells_fargo_parser_extracts_signs_product_and_holder():
     assert parsed["posted_date"].astype(str).tolist() == ["2026-04-30", "2026-05-02", "2026-05-06"]
 
 
+def test_wells_fargo_parser_prefers_upload_product_over_generic_credit_label():
+    words: list[dict] = []
+    _line(words, 10, [(75, "WELLS FARGO CREDIT CARD")])
+    _line(words, 15, [(75, "Statement Period 04/08/2026 to 05/08/2026")])
+    _line(words, 20, [(75, "ALEX N EXAMPLE")])
+    _line(words, 30, [(75, "Transactions")])
+    _header(words, 35)
+    _line(words, 40, [(75, "Purchases, Balance Transfers & Other Charges")])
+    _row(words, 45, "05/02", "05/02", "ABC123", "COFFEE SHOP ATLANTA GA", charge="4.50")
+
+    parsed = _parse_pages(
+        [_Page(words)],
+        card="wellsfargo-autograph",
+        source_file="wells/credit.pdf",
+        upload_metadata={"card_issuer": "Wells Fargo", "card_product": "Autograph Visa Signature"},
+    )
+    assert parsed["card_product"].unique().tolist() == ["Autograph Visa Signature"]
+
+
 def test_wells_fargo_parser_rejects_image_only_statement():
     with pytest.raises(ValueError, match="no extractable text"):
         _parse_pages([_Page([])], card="wellsfargo", source_file="wells/image.pdf")

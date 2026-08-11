@@ -106,10 +106,15 @@ def _column_bounds(line: Line) -> Bounds | None:
 
 
 def _product(text: str) -> str | None:
+    from src.upload_context import is_generic_card_product
+
     match = PRODUCT_RE.search(_clean(text))
     if not match:
         return None
-    return match.group("product").replace("®", "").strip().title()
+    product = match.group("product").replace("®", "").strip().title()
+    if is_generic_card_product(product):
+        return None
+    return product
 
 
 def _cardholder(text: str) -> str | None:
@@ -179,14 +184,23 @@ def _parse_row(line: Line, bounds: Bounds, start: date, end: date, cardholder: s
     }
 
 
-def _parse_pages(pages: Iterable[Any], card: str, source_file: str) -> pd.DataFrame:
+def _parse_pages(
+    pages: Iterable[Any],
+    card: str,
+    source_file: str,
+    upload_metadata: dict[str, Any] | None = None,
+) -> pd.DataFrame:
     all_lines: list[Line] = []
     for page in pages:
         all_lines.extend(_lines(page.extract_words() or []))
     if not all_lines:
         raise ValueError("Wells Fargo statement contains no extractable text")
 
-    metadata: dict[str, str | None] = {"card_issuer": None, "card_product": None}
+    upload_metadata = dict(upload_metadata or {})
+    metadata: dict[str, str | None] = {
+        "card_issuer": upload_metadata.get("card_issuer") or None,
+        "card_product": upload_metadata.get("card_product") or None,
+    }
     start: date | None = None
     end: date | None = None
     holders: list[str] = []
@@ -194,7 +208,9 @@ def _parse_pages(pages: Iterable[Any], card: str, source_file: str) -> pd.DataFr
         text = line.text
         if "wells fargo" in text.lower():
             metadata["card_issuer"] = ISSUER
-        metadata["card_product"] = _product(text) or metadata["card_product"]
+        extracted = _product(text)
+        if extracted and not metadata["card_product"]:
+            metadata["card_product"] = extracted
         period = PERIOD_RE.search(text)
         if period:
             start = datetime.strptime(period.group("start"), "%m/%d/%Y").date()
@@ -202,6 +218,8 @@ def _parse_pages(pages: Iterable[Any], card: str, source_file: str) -> pd.DataFr
         holder = _cardholder(text)
         if holder and holder not in holders:
             holders.append(holder)
+    if upload_metadata.get("card_product"):
+        metadata["card_product"] = str(upload_metadata["card_product"])
     if metadata["card_issuer"] != ISSUER:
         raise ValueError("Wells Fargo statement identity was not found")
     if not metadata["card_product"]:
@@ -242,4 +260,4 @@ def _parse_pages(pages: Iterable[Any], card: str, source_file: str) -> pd.DataFr
 def parse_wells_fargo_pdf(path: Path, card: str, metadata: dict[str, Any] | None = None) -> pd.DataFrame:
     """Parse native-text Wells Fargo credit-card statements only."""
     with pdfplumber.open(path) as pdf:
-        return _parse_pages(pdf.pages, card=card, source_file=str(path))
+        return _parse_pages(pdf.pages, card=card, source_file=str(path), upload_metadata=metadata)

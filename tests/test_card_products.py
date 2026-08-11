@@ -7,8 +7,10 @@ import yaml
 
 from src.upload_context import (
     append_card_product,
+    is_generic_card_product,
     list_card_products,
     normalize_product,
+    resolve_card_product_for_issuer,
 )
 
 
@@ -62,3 +64,27 @@ def test_normalize_product_enforces_vocab_when_configured(tmp_path: Path):
 
     # Empty vocab keeps free-form behavior.
     assert normalize_product("Chase", "Sapphire Preferred", path=products) == "Sapphire Preferred"
+
+
+def test_resolve_card_product_for_issuer_flags_generic_and_unknown(tmp_path: Path):
+    products = tmp_path / "card_products.yaml"
+    _write_products(
+        products,
+        {
+            "American Express": [],
+            "Chase": [],
+            "Bank of America": [],
+            "Capital One": [],
+            "Wells Fargo": ["Autograph Visa Signature"],
+            "Generic": [],
+        },
+    )
+
+    assert is_generic_card_product("Credit")
+    product, needs = resolve_card_product_for_issuer("Wells Fargo", "Credit", path=products)
+    assert product is None
+    assert needs is True
+
+    product, needs = resolve_card_product_for_issuer("Wells Fargo", "Autograph Visa Signature", path=products)
+    assert product == "Autograph Visa Signature"
+    assert needs is False

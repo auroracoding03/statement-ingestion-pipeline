@@ -164,6 +164,7 @@ export function Ingestion() {
                       <select
                         value={upload.selectedIssuer}
                         onChange={(event) => changeIssuer(index, event.target.value)}
+                        disabled={upload.confidence === "product_required" && Boolean(upload.issuer)}
                       >
                         <option value="">Select issuer</option>
                         {ISSUERS.map((issuer) => (
