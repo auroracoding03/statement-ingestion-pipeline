@@ -62,6 +62,7 @@ from src.upload_context import (
     list_card_products,
     normalize_issuer,
     normalize_product,
+    resolve_card_product_for_issuer,
     write_upload_context,
 )
 from src.version import APP_VERSION
@@ -326,6 +327,12 @@ def commit_uploads(body: UploadCommitRequest) -> dict:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if not issuer:
             raise HTTPException(status_code=422, detail=f"Select an issuer for {staged.name[34:]}")
+        _, needs_product = resolve_card_product_for_issuer(issuer, product)
+        if needs_product:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Select a card product for {staged.name[34:]} before adding it to the inbox.",
+            )
         if issuer == "American Express" and staged.suffix.lower() == ".csv" and not product:
             raise HTTPException(
                 status_code=422,

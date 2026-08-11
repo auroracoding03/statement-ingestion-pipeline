@@ -71,8 +71,29 @@ def test_filename_hint_used_when_text_is_ambiguous(monkeypatch, tmp_path: Path) 
     result = identity.detect_statement_identity(path)
 
     assert result.issuer == "Wells Fargo"
-    assert result.confidence == "detected"
+    # Wells has a configured product vocabulary, so a bare issuer hit still
+    # requires the user to pick Autograph (or another configured product).
+    assert result.confidence == "product_required"
+    assert result.needs_manual_details is True
     assert "filename" in result.message.lower()
+
+
+def test_wells_generic_credit_label_requires_product_selection(monkeypatch, tmp_path: Path) -> None:
+    path = tmp_path / "wells-credit.pdf"
+    path.write_bytes(b"%PDF-fake")
+    pages = [
+        "WELLS FARGO CREDIT CARD\nStatement Period 01/08/2024 to 02/07/2024",
+        "Trans Date Post Date Description Credits Charges",
+    ]
+    monkeypatch.setattr(identity.pdfplumber, "open", lambda _path: _FakePdf(pages))
+
+    result = identity.detect_statement_identity(path)
+
+    assert result.issuer == "Wells Fargo"
+    assert result.product is None
+    assert result.confidence == "product_required"
+    assert result.needs_manual_details is True
+    assert "select the card product" in result.message.lower()
 
 
 def test_chase_header_still_detects_chase(monkeypatch, tmp_path: Path) -> None:

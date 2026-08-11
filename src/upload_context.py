@@ -92,6 +92,57 @@ def list_card_products(path: Path | None = None) -> dict[str, list[str]]:
     return dict(load_card_products(path).get("products") or {})
 
 
+# Labels parsers sometimes pull from "… CREDIT CARD" that are not real products.
+GENERIC_CARD_PRODUCT_LABELS = frozenset(
+    {
+        "credit",
+        "debit",
+        "consumer",
+        "business",
+        "visa",
+        "mastercard",
+        "card",
+        "credit card",
+        "debit card",
+    }
+)
+
+
+def is_generic_card_product(value: str | None) -> bool:
+    if value is None:
+        return True
+    clean = " ".join(str(value).split()).casefold()
+    return not clean or clean in GENERIC_CARD_PRODUCT_LABELS
+
+
+def resolve_card_product_for_issuer(
+    issuer: str | None,
+    product: str | None,
+    *,
+    path: Path | None = None,
+) -> tuple[str | None, bool]:
+    """Return ``(product, needs_selection)`` after vocabulary / generic checks.
+
+    ``needs_selection`` is true when the issuer has a configured product list and
+    the detected product is missing, generic, or not in that list.
+    """
+    if not issuer:
+        return (None if is_generic_card_product(product) else product, False)
+
+    try:
+        canonical_issuer = normalize_issuer(issuer)
+    except ValueError:
+        return (None if is_generic_card_product(product) else product, False)
+
+    clean = None if is_generic_card_product(product) else " ".join(str(product).split())
+    allowed = list_card_products(path).get(canonical_issuer) or []
+    if not allowed:
+        return clean, False
+    if clean and clean in allowed:
+        return clean, False
+    return clean, True
+
+
 def append_card_product(
     issuer: str,
     product: str,

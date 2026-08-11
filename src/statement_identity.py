@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pdfplumber
 
+from src.upload_context import resolve_card_product_for_issuer
+
 
 @dataclass(frozen=True)
 class StatementIdentity:
@@ -30,6 +32,23 @@ def _manual(message: str) -> StatementIdentity:
     return StatementIdentity(issuer=None, product=None, confidence="manual", message=message)
 
 
+def _product_required(issuer: str, product: str | None, message: str) -> StatementIdentity:
+    return StatementIdentity(issuer=issuer, product=product, confidence="product_required", message=message)
+
+
+def _finalize(issuer: str, product: str | None, message: str) -> StatementIdentity:
+    """Apply vocabulary rules so invalid auto-products force a UI picker."""
+    resolved, needs_selection = resolve_card_product_for_issuer(issuer, product)
+    if needs_selection:
+        hint = f" Detected label {product!r} is not a configured product." if product and product != resolved else ""
+        return _product_required(
+            issuer,
+            None,
+            f"{message.rstrip('.')} — select the card product to continue.{hint}".strip(),
+        )
+    return _detected(issuer, resolved, message)
+
+
 def _csv_identity(path: Path) -> StatementIdentity:
     try:
         with path.open("r", encoding="utf-8-sig", newline="") as source:
@@ -38,13 +57,12 @@ def _csv_identity(path: Path) -> StatementIdentity:
         return _manual("Could not read CSV headers. Select its issuer before uploading.")
 
     if {"post date", "transaction date", "description", "amount"}.issubset(headers):
-        return _detected("Chase", None, "Detected Chase CSV from its export headers.")
+        return _finalize("Chase", None, "Detected Chase CSV from its export headers.")
     if {"date", "description", "card member", "account #", "amount"}.issubset(headers):
-        return StatementIdentity(
-            issuer="American Express",
-            product=None,
-            confidence="product_required",
-            message="Detected American Express CSV. Select the card product because this export omits it.",
+        return _product_required(
+            "American Express",
+            None,
+            "Detected American Express CSV. Select the card product because this export omits it.",
         )
     return _manual("This CSV format is not recognized. Select an issuer to continue.")
 
@@ -146,7 +164,7 @@ def _pdf_identity(path: Path) -> StatementIdentity:
     if not body.strip():
         filename_issuer = _filename_issuer(path)
         if filename_issuer:
-            return _detected(
+            return _finalize(
                 filename_issuer,
                 None,
                 f"Detected {filename_issuer} from the filename because the PDF had no extractable text.",
@@ -163,14 +181,14 @@ def _pdf_identity(path: Path) -> StatementIdentity:
     if issuer is None:
         filename_issuer = _filename_issuer(path)
         if filename_issuer:
-            return _detected(
+            return _finalize(
                 filename_issuer,
                 _product(body, filename_issuer),
                 f"Detected {filename_issuer} from the filename because the statement text was ambiguous.",
             )
         return _manual("This PDF's issuer is ambiguous. Select it before uploading.")
 
-    return _detected(issuer, _product(body, issuer), f"Detected {issuer} from {source}.")
+    return _finalize(issuer, _product(body, issuer), f"Detected {issuer} from {source}.")
 
 
 def detect_statement_identity(path: Path) -> StatementIdentity:
