@@ -64,7 +64,7 @@ rules:
     subcategory: Rideshare
 
   - match:
-      merchant_regex: "(?i)shell|exxon|chevron|bp\\b|circle k|speedway|costco gas"
+      merchant_regex: "(?i)shell|exxon|chevron|bp\\b|circle k|speedway|costco gas|love'?s|loves\\b|sheetz|quik\\s?trip|\\bqt\\b|wawa|racetrac(?:k)?|pilot\\b|flying j|murphy express|casey'?s|kum\\s?&\\s?go"
     category: Transport
     subcategory: Gas
 
