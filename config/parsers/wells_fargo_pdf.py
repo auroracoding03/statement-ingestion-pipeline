@@ -11,7 +11,7 @@ from typing import Any, Iterable
 import pdfplumber
 import pandas as pd
 
-from .base import coerce_amount, finalize
+from .base import coerce_amount, finalize, resolve_cycle_date
 
 ISSUER = "Wells Fargo"
 PERIOD_RE = re.compile(r"Statement Period\s+(?P<start>\d{2}/\d{2}/\d{4})\s+to\s+(?P<end>\d{2}/\d{2}/\d{4})", re.I)
@@ -129,13 +129,9 @@ def _cardholder(text: str) -> str | None:
     return " ".join(parts)
 
 
-def _resolve_date(value: str, start: date, end: date) -> date:
+def _resolve_date(value: str, start: date, end: date) -> date | None:
     parsed = datetime.strptime(value, "%m/%d")
-    candidates = [date(year, parsed.month, parsed.day) for year in range(start.year - 1, end.year + 2)]
-    matching = [candidate for candidate in candidates if start <= candidate <= end]
-    if len(matching) != 1:
-        raise ValueError(f"Wells Fargo row date {value!r} is outside the statement period")
-    return matching[0]
+    return resolve_cycle_date(parsed.month, parsed.day, start, end)
 
 
 def _amount(text: str, sign: int) -> float | None:
@@ -174,8 +170,12 @@ def _parse_row(line: Line, bounds: Bounds, start: date, end: date, cardholder: s
     amount = credit if credit is not None else charge
     if amount is None:
         return None
+    posted_date = _resolve_date(post_date, start, end)
+    if posted_date is None:
+        # Far outside the cycle (and grace window): skip rather than fail the statement.
+        return None
     return {
-        "posted_date": _resolve_date(post_date, start, end),
+        "posted_date": posted_date,
         "amount": amount,
         "raw_description": description,
         "card_issuer": ISSUER,

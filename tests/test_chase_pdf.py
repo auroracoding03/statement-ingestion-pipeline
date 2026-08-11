@@ -97,6 +97,21 @@ def test_chase_parser_collapses_doubled_glyph_headings():
     assert len(parsed) == 1
 
 
+def test_chase_parser_keeps_dates_within_one_day_grace():
+    words: list[dict] = []
+    _line(words, 10, [(50, "amazon | CHASE"), (250, "YOUR PRIME VISA POINTS")])
+    _line(words, 15, [(50, "Opening/Closing Date"), (250, "11/25/24 - 12/24/24")])
+    _line(words, 20, [(50, "ALEX EXAMPLE")])
+    _line(words, 30, [(50, "PURCHASE")])
+    _header(words, 40)
+    _row(words, 50, "11/24", "EDGE DATE COFFEE", "6.50")
+    _row(words, 60, "12/01", "IN PERIOD COFFEE", "4.25")
+
+    parsed = _parse_pages([_Page(words)], card="chase-amazon", source_file="chase/grace.pdf")
+
+    assert parsed["posted_date"].astype(str).tolist() == ["2024-11-24", "2024-12-01"]
+
+
 def test_chase_parser_skips_dates_far_outside_period():
     words: list[dict] = []
     _line(words, 10, [(50, "amazon | CHASE"), (250, "YOUR PRIME VISA POINTS")])

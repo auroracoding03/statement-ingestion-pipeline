@@ -96,6 +96,41 @@ def test_wells_fargo_parser_prefers_upload_product_over_generic_credit_label():
     assert parsed["card_product"].unique().tolist() == ["Autograph Visa Signature"]
 
 
+def test_wells_fargo_parser_keeps_dates_within_one_day_grace():
+    words: list[dict] = []
+    _line(words, 10, [(75, "WELLS FARGO AUTOGRAPH VISA SIGNATURE® CARD")])
+    _line(words, 15, [(75, "Statement Period 11/08/2024 to 12/08/2024")])
+    _line(words, 20, [(75, "ALEX N EXAMPLE")])
+    _line(words, 30, [(75, "Transactions")])
+    _header(words, 35)
+    _line(words, 40, [(75, "Purchases, Balance Transfers & Other Charges")])
+    _row(words, 45, "11/07", "11/07", "ABC100", "EDGE DATE MERCHANT GA", charge="9.99")
+    _row(words, 50, "11/20", "11/20", "ABC101", "IN PERIOD MERCHANT GA", charge="4.50")
+
+    parsed = _parse_pages([_Page(words)], card="wellsfargo-autograph", source_file="wells/grace.pdf")
+
+    assert parsed["posted_date"].astype(str).tolist() == ["2024-11-07", "2024-11-20"]
+    assert parsed["amount"].tolist() == [9.99, 4.50]
+
+
+def test_wells_fargo_parser_skips_dates_far_outside_period():
+    words: list[dict] = []
+    _line(words, 10, [(75, "WELLS FARGO AUTOGRAPH VISA SIGNATURE® CARD")])
+    _line(words, 15, [(75, "Statement Period 11/08/2024 to 12/08/2024")])
+    _line(words, 20, [(75, "ALEX N EXAMPLE")])
+    _line(words, 30, [(75, "Transactions")])
+    _header(words, 35)
+    _line(words, 40, [(75, "Purchases, Balance Transfers & Other Charges")])
+    _row(words, 45, "10/01", "10/01", "ABC100", "STALE MERCHANT GA", charge="50.00")
+    _row(words, 50, "11/20", "11/20", "ABC101", "IN PERIOD MERCHANT GA", charge="4.50")
+
+    parsed = _parse_pages([_Page(words)], card="wellsfargo-autograph", source_file="wells/outside.pdf")
+
+    assert len(parsed) == 1
+    assert parsed["posted_date"].astype(str).tolist() == ["2024-11-20"]
+    assert parsed["amount"].tolist() == [4.50]
+
+
 def test_wells_fargo_parser_rejects_image_only_statement():
     with pytest.raises(ValueError, match="no extractable text"):
         _parse_pages([_Page([])], card="wellsfargo", source_file="wells/image.pdf")

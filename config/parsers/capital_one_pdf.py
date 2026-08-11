@@ -18,7 +18,7 @@ from typing import Any, Iterable
 import pdfplumber
 import pandas as pd
 
-from .base import coerce_amount, finalize
+from .base import coerce_amount, finalize, resolve_cycle_date
 
 PARSER_ID = "capital_one_pdf_v1"
 ISSUER = "Capital One"
@@ -155,14 +155,10 @@ def _last_amount(text: str) -> float | None:
     return coerce_amount(matches[-1].group("amount").replace(" ", ""))
 
 
-def _infer_cycle_date(value: str, cycle_start: date, cycle_end: date) -> date:
-    """Resolve Capital One's month/day rows to a date inside the billing cycle."""
+def _infer_cycle_date(value: str, cycle_start: date, cycle_end: date) -> date | None:
+    """Resolve Capital One's month/day rows onto the billing cycle (with grace)."""
     parsed = datetime.strptime(_clean_text(value), "%b %d")
-    candidates = [date(year, parsed.month, parsed.day) for year in range(cycle_start.year - 1, cycle_end.year + 2)]
-    within_cycle = [candidate for candidate in candidates if cycle_start <= candidate <= cycle_end]
-    if len(within_cycle) != 1:
-        raise ValueError(f"Capital One row date {value!r} is outside the billing cycle")
-    return within_cycle[0]
+    return resolve_cycle_date(parsed.month, parsed.day, cycle_start, cycle_end)
 
 
 def _section_heading(text: str) -> tuple[str, str | None] | None:
@@ -246,8 +242,12 @@ def _parse_table_row(
     if amount is None:
         return None
 
+    posted = _infer_cycle_date(post_date, cycle_start, cycle_end)
+    if posted is None:
+        # Far outside the cycle (and grace window): skip rather than fail the statement.
+        return None
     return {
-        "posted_date": _infer_cycle_date(post_date, cycle_start, cycle_end),
+        "posted_date": posted,
         "amount": _activity_amount(amount, section),
         "raw_description": description,
         "card_issuer": metadata["card_issuer"],

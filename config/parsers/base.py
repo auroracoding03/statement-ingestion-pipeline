@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
@@ -61,6 +61,38 @@ def coerce_date(value: Any) -> datetime.date:
     if pd.isna(parsed):
         raise ValueError(f"Unparseable date: {value!r}")
     return parsed.date()
+
+
+def resolve_cycle_date(
+    month: int,
+    day: int,
+    cycle_start: date,
+    cycle_end: date,
+    *,
+    grace_days: int = 1,
+) -> date | None:
+    """Map a month/day onto a statement cycle, allowing a small grace window.
+
+    Issuers occasionally print a transaction one day outside the labeled period.
+    Dates that still fall outside that grace window return ``None`` so parsers
+    can skip the row instead of failing the whole statement.
+    """
+    candidates: list[date] = []
+    for year in range(cycle_start.year - 1, cycle_end.year + 2):
+        try:
+            candidates.append(date(year, month, day))
+        except ValueError:
+            continue
+    matching = [candidate for candidate in candidates if cycle_start <= candidate <= cycle_end]
+    if len(matching) == 1:
+        return matching[0]
+    if grace_days > 0:
+        grace_start = cycle_start - timedelta(days=grace_days)
+        grace_end = cycle_end + timedelta(days=grace_days)
+        matching = [candidate for candidate in candidates if grace_start <= candidate <= grace_end]
+        if len(matching) == 1:
+            return matching[0]
+    return None
 
 
 def finalize(

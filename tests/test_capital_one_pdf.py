@@ -121,6 +121,53 @@ def test_capital_one_parser_extracts_activity_and_statement_metadata():
     assert transaction_rows["amount"].sum() == pytest.approx(423.09)
 
 
+def test_capital_one_parser_keeps_dates_within_one_day_grace():
+    words: list[dict] = []
+    _add_line(
+        words,
+        10,
+        [
+            (50, "Capital One"),
+            (180, "Savor Credit Card | World Elite Mastercard"),
+            (430, "Nov 08, 2024 - Dec 08, 2024"),
+        ],
+    )
+    _add_line(words, 20, [(50, "Alex Example : Transactions")])
+    _header(words, 25)
+    _activity_row(words, 30, "Nov 07", "Nov 07", "EDGE DATE MERCHANT", "$9.99")
+    _activity_row(words, 35, "Nov 20", "Nov 20", "IN PERIOD MERCHANT", "$4.50")
+    _add_line(words, 40, [(50, "Total Transactions"), (530, "$14.49")])
+
+    parsed = _parse_pages([_Page(words)], card="capitalone", source_file="capitalone/grace.pdf")
+
+    assert parsed["posted_date"].astype(str).tolist() == ["2024-11-07", "2024-11-20"]
+    assert parsed["amount"].tolist() == [9.99, 4.50]
+
+
+def test_capital_one_parser_skips_dates_far_outside_period():
+    words: list[dict] = []
+    _add_line(
+        words,
+        10,
+        [
+            (50, "Capital One"),
+            (180, "Savor Credit Card | World Elite Mastercard"),
+            (430, "Nov 08, 2024 - Dec 08, 2024"),
+        ],
+    )
+    _add_line(words, 20, [(50, "Alex Example : Transactions")])
+    _header(words, 25)
+    _activity_row(words, 30, "Oct 01", "Oct 01", "STALE MERCHANT", "$50.00")
+    _activity_row(words, 35, "Nov 20", "Nov 20", "IN PERIOD MERCHANT", "$4.50")
+    _add_line(words, 40, [(50, "Total Transactions"), (530, "$4.50")])
+
+    parsed = _parse_pages([_Page(words)], card="capitalone", source_file="capitalone/outside.pdf")
+
+    assert len(parsed) == 1
+    assert parsed["posted_date"].astype(str).tolist() == ["2024-11-20"]
+    assert parsed["amount"].tolist() == [4.50]
+
+
 def test_capital_one_parser_rejects_image_only_documents():
     with pytest.raises(ValueError, match="no extractable text"):
         _parse_pages([_Page([])], card="capitalone", source_file="capitalone/image.pdf")
