@@ -84,8 +84,19 @@ def test_second_desktop_instance_shows_native_message(monkeypatch) -> None:
     monkeypatch.setattr(desktop, "ensure_dirs", Mock())
     monkeypatch.setattr(desktop, "FileLock", lambda _path: lock)
     monkeypatch.setattr(desktop, "_show_error", show_error)
+    monkeypatch.setattr(desktop, "_instance_lock", None)
 
     desktop.main()
 
     show_error.assert_called_once()
     lock.release.assert_not_called()
+
+
+def test_release_instance_lock_clears_module_holder(monkeypatch) -> None:
+    lock = Mock()
+    monkeypatch.setattr(desktop, "_instance_lock", lock)
+
+    desktop.release_instance_lock()
+
+    lock.release.assert_called_once_with()
+    assert desktop._instance_lock is None
