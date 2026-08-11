@@ -53,11 +53,9 @@ def test_launch_installer_uses_bounded_handoff_before_relaunch(tmp_path: Path, m
     )
     monkeypatch.setattr(updater, "USER_DATA_ROOT", tmp_path)
     popen = Mock()
-    timer = Mock()
 
     monkeypatch.setattr(updater, "_installed_executable", lambda: installed_exe)
     monkeypatch.setattr(updater.subprocess, "Popen", popen)
-    monkeypatch.setattr(updater.threading, "Timer", lambda *_args: timer)
 
     updater._launch_installer(installer)
 
@@ -81,7 +79,7 @@ def test_launch_installer_uses_bounded_handoff_before_relaunch(tmp_path: Path, m
     assert json.dumps(str(installer)) in script
     assert json.dumps(str(tmp_path / "updates" / "update.log")) in script
     assert "cmd.exe" not in command
-    timer.start.assert_called_once_with()
+    assert (tmp_path / "updates" / "update.log").exists()
 
 
 def test_install_update_verifies_checksum_before_launching(tmp_path: Path, monkeypatch) -> None:
@@ -102,6 +100,7 @@ def test_install_update_verifies_checksum_before_launching(tmp_path: Path, monke
         destination.write_bytes(b"verified installer")
 
     launch = Mock()
+    exit_calls: list[int] = []
     monkeypatch.setattr(updater, "_download", download)
     monkeypatch.setattr(
         updater,
@@ -111,6 +110,9 @@ def test_install_update_verifies_checksum_before_launching(tmp_path: Path, monke
         ),
     )
     monkeypatch.setattr(updater, "_launch_installer", launch)
+    monkeypatch.setattr(updater.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(updater.os, "_exit", lambda code: exit_calls.append(code))
+    monkeypatch.setattr(updater, "_start_install_worker", updater._install_worker)
 
     result = updater.install_latest_update()
 
@@ -118,6 +120,7 @@ def test_install_update_verifies_checksum_before_launching(tmp_path: Path, monke
     launch.assert_called_once_with(
         tmp_path / "updates" / f"StatementPipelineSetup-{FUTURE_VERSION}.exe"
     )
+    assert exit_calls == [0]
 
 
 def test_install_update_rejects_bad_checksum(tmp_path: Path, monkeypatch) -> None:
@@ -137,12 +140,14 @@ def test_install_update_rejects_bad_checksum(tmp_path: Path, monkeypatch) -> Non
     monkeypatch.setattr(updater, "_expected_checksum", lambda _url: "0" * 64)
     launch = Mock()
     monkeypatch.setattr(updater, "_launch_installer", launch)
+    monkeypatch.setattr(updater, "_start_install_worker", updater._install_worker)
 
-    with pytest.raises(updater.UpdateError, match="checksum did not match"):
-        updater.install_latest_update()
+    result = updater.install_latest_update()
+    assert "restart" in result["message"]
 
     assert not (tmp_path / "updates" / f"StatementPipelineSetup-{FUTURE_VERSION}.exe").exists()
     launch.assert_not_called()
+    assert "checksum-mismatch" in (tmp_path / "updates" / "update.log").read_text(encoding="utf-8")
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows update handoff")

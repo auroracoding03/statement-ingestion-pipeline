@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -24,6 +25,7 @@ VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 PROCESS_NAME = "StatementPipeline"
 GRACEFUL_EXIT_SECONDS = 8
 FORCE_STOP_WAIT_SECONDS = 15
+NETWORK_TIMEOUT_SECONDS = 30
 
 
 class UpdateError(RuntimeError):
@@ -41,13 +43,53 @@ def _version_key(value: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in match.groups())
 
 
+def _update_log_path() -> Path:
+    return USER_DATA_ROOT / "updates" / "update.log"
+
+
+def _write_update_progress(message: str) -> None:
+    """Append a Python-side progress line before the PowerShell handoff exists."""
+    path = _update_log_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        line = f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} {message}\n"
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(line)
+    except OSError:
+        pass
+    # #region agent log
+    try:
+        payload = {
+            "sessionId": "a4748f",
+            "runId": "updater-runtime",
+            "hypothesisId": "H1",
+            "location": "updater.py:_write_update_progress",
+            "message": message,
+            "data": {"pid": os.getpid()},
+            "timestamp": int(time.time() * 1000),
+        }
+        for target in (
+            Path(__file__).resolve().parents[1] / "debug-a4748f.log",
+            path.parent / "debug-a4748f.log",
+        ):
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with target.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(payload) + "\n")
+            except OSError:
+                continue
+    except Exception:
+        pass
+    # #endregion
+
+
 def _request_json(url: str) -> dict[str, Any]:
     request = urllib.request.Request(
         url,
         headers={"Accept": "application/vnd.github+json", "User-Agent": "StatementPipeline"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=NETWORK_TIMEOUT_SECONDS) as response:
             payload = json.load(response)
     except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
         raise UpdateError("Could not check GitHub for updates. Check your internet connection.") from exc
@@ -112,7 +154,9 @@ def check_for_update() -> dict[str, Any]:
 def _download(url: str, destination: Path) -> None:
     request = urllib.request.Request(url, headers={"User-Agent": "StatementPipeline"})
     try:
-        with urllib.request.urlopen(request, timeout=30) as response, destination.open("wb") as output:
+        with urllib.request.urlopen(request, timeout=NETWORK_TIMEOUT_SECONDS) as response, destination.open(
+            "wb"
+        ) as output:
             while chunk := response.read(1024 * 1024):
                 output.write(chunk)
     except OSError as exc:
@@ -123,7 +167,7 @@ def _download(url: str, destination: Path) -> None:
 def _expected_checksum(url: str) -> str:
     request = urllib.request.Request(url, headers={"User-Agent": "StatementPipeline"})
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=NETWORK_TIMEOUT_SECONDS) as response:
             text = response.read().decode("utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         raise UpdateError("Could not verify the update checksum.") from exc
@@ -143,10 +187,6 @@ def _file_checksum(path: Path) -> str:
 
 def _installed_executable() -> Path:
     return Path(sys.executable).resolve()
-
-
-def _update_log_path() -> Path:
-    return USER_DATA_ROOT / "updates" / "update.log"
 
 
 def _installer_command(
@@ -230,23 +270,56 @@ try {{
 
 
 def _launch_installer(installer: Path) -> None:
-    """Run the in-place installer after this process has exited."""
+    """Start the detached installer handoff. Caller exits the app process."""
     installed_exe = _installed_executable()
     log_path = _update_log_path()
     log_path.parent.mkdir(parents=True, exist_ok=True)
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    _write_update_progress(f"launch-handoff installer={installer}")
     subprocess.Popen(
         _installer_command(installer, installed_exe, log_path=log_path),
         close_fds=True,
         creationflags=flags,
     )
-    # Hard-exit so the waiter observes this PID disappearing promptly. The
-    # detached PowerShell script remains authoritative if graceful exit fails.
-    threading.Timer(0.75, lambda: os._exit(0)).start()
+
+
+def _install_worker(release: dict[str, Any]) -> None:
+    """Download, verify, hand off, then hard-exit so Setup can replace files."""
+    try:
+        _write_update_progress(f"worker-start target={release['latest_version']}")
+        update_dir = USER_DATA_ROOT / "updates"
+        update_dir.mkdir(parents=True, exist_ok=True)
+        installer = update_dir / f"StatementPipelineSetup-{release['latest_version']}.exe"
+        _write_update_progress("download-start")
+        _download(release["installer_url"], installer)
+        _write_update_progress(f"download-ok size={installer.stat().st_size}")
+        _write_update_progress("checksum-start")
+        if _file_checksum(installer) != _expected_checksum(release["checksum_url"]):
+            installer.unlink(missing_ok=True)
+            _write_update_progress("checksum-mismatch")
+            return
+        _write_update_progress("checksum-ok")
+        _launch_installer(installer)
+        _write_update_progress("exit-scheduled")
+        # Hard-exit in this worker thread — more reliable than Timer in frozen WebView builds.
+        time.sleep(0.5)
+        os._exit(0)
+    except Exception as exc:  # noqa: BLE001 — log and keep the running app usable
+        _write_update_progress(f"worker-error {type(exc).__name__}: {exc}")
+
+
+def _start_install_worker(release: dict[str, Any]) -> None:
+    """Spawn the install worker. Tests may monkeypatch this to run synchronously."""
+    threading.Thread(target=_install_worker, args=(release,), daemon=True, name="statement-pipeline-update").start()
 
 
 def install_latest_update() -> dict[str, str]:
-    """Download, checksum-verify, and silently install a newer release."""
+    """Begin download/install on a background thread and return immediately.
+
+    The HTTP request must not stay open for the multi-minute download, or the UI
+    appears frozen and a failed Timer-based exit can leave the process hung with
+    a completed installer on disk and no ``update.log`` handoff.
+    """
     if not _windows_desktop_build():
         raise UpdateError("In-app updates are only available in the installed Windows application.")
 
@@ -254,13 +327,6 @@ def install_latest_update() -> dict[str, str]:
     if _version_key(release["latest_version"]) <= _version_key(APP_VERSION):
         raise UpdateError("You are already using the latest version.")
 
-    update_dir = USER_DATA_ROOT / "updates"
-    update_dir.mkdir(parents=True, exist_ok=True)
-    installer = update_dir / f"StatementPipelineSetup-{release['latest_version']}.exe"
-    _download(release["installer_url"], installer)
-    if _file_checksum(installer) != _expected_checksum(release["checksum_url"]):
-        installer.unlink(missing_ok=True)
-        raise UpdateError("The update checksum did not match. Your installed version was not changed.")
-
-    _launch_installer(installer)
-    return {"message": "Update downloaded. Statement Pipeline will restart shortly."}
+    _write_update_progress(f"install-accepted current={APP_VERSION} latest={release['latest_version']}")
+    _start_install_worker(release)
+    return {"message": "Update started. Statement Pipeline will restart shortly."}
