@@ -9,6 +9,21 @@ class ClassifyRequest(BaseModel):
     with_ai: bool = False
 
 
+class AIAnalyzeRequest(BaseModel):
+    mode: str = Field(default="incremental", pattern="^(full|incremental)$")
+
+
+class AIProposalDecision(BaseModel):
+    proposal_id: str = Field(min_length=8, max_length=80)
+    action: str = Field(default="accept", pattern="^(accept|reject|defer)$")
+    recommendation: dict | None = None
+    save_as_rule: bool = False
+
+
+class AIProposalDecisionsRequest(BaseModel):
+    decisions: list[AIProposalDecision] = Field(min_length=1, max_length=500)
+
+
 class ReviewDecision(BaseModel):
     category: str
     subcategory: str = ""

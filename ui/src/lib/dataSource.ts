@@ -8,6 +8,8 @@
  * `canWrite` to decide whether to render mutating controls.
  */
 import type {
+  AiProposal,
+  AiStatus,
   CategoryMonthly,
   ContextTag,
   Job,
@@ -89,6 +91,17 @@ export interface UploadInspection {
 }
 
 export const api = {
+  async aiStatus(warmup = false): Promise<AiStatus> {
+    if (!canWrite) throw new DataError("Local AI setup is only available in the desktop app.");
+    return req<AiStatus>(`/api/ai/status${warmup ? "?warmup=true" : ""}`);
+  },
+
+  async aiProposals(kind?: "merchant" | "category") {
+    if (!canWrite) return { total: 0, items: [] as AiProposal[] };
+    const suffix = kind ? `&kind=${kind}` : "";
+    return req<{ total: number; items: AiProposal[] }>(`/api/ai/proposals?status=pending${suffix}`);
+  },
+
   async status(): Promise<Status> {
     if (canWrite) return req<Status>("/api/status");
     const summary = await staticJSON<StaticSummary | null>("summary", null);
@@ -322,6 +335,36 @@ export const api = {
   startBuild() {
     if (!canWrite) writeGuard();
     return req<JobStart>("/api/build", { method: "POST" });
+  },
+
+  startAiModelPull() {
+    if (!canWrite) writeGuard();
+    return req<JobStart>("/api/ai/model/pull", { method: "POST" });
+  },
+
+  startAiAnalysis(mode: "full" | "incremental" = "incremental") {
+    if (!canWrite) writeGuard();
+    return req<JobStart>("/api/ai/analyze", { method: "POST", body: JSON.stringify({ mode }) });
+  },
+
+  decideAiProposals(
+    decisions: {
+      proposal_id: string;
+      action?: "accept" | "reject" | "defer";
+      recommendation?: Record<string, string>;
+      save_as_rule?: boolean;
+    }[],
+  ) {
+    if (!canWrite) writeGuard();
+    return req<{ batch_id?: string; applied?: string[] }>("/api/ai/proposals/decide", {
+      method: "POST",
+      body: JSON.stringify({ decisions }),
+    });
+  },
+
+  rollbackAiApplication() {
+    if (!canWrite) writeGuard();
+    return req<{ rolled_back: string }>("/api/ai/applications/rollback", { method: "POST" });
   },
 
   installUpdate() {
