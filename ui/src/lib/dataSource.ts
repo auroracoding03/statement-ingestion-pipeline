@@ -233,7 +233,14 @@ export const api = {
     },
   ) {
     if (!canWrite) writeGuard();
-    return req<unknown>(`/api/review/${txnId}`, { method: "POST", body: JSON.stringify(body) });
+    return req<{
+      txn_id: string;
+      category: string;
+      subcategory?: string;
+      tags?: string[];
+      rule?: unknown;
+      applied_txn_ids?: string[];
+    }>(`/api/review/${txnId}`, { method: "POST", body: JSON.stringify(body) });
   },
 
   createTag(body: { label: string; kind?: string; id?: string }) {

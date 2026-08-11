@@ -213,6 +213,45 @@ def apply_review_decision(
     return result
 
 
+def apply_rule_to_open_review(rule: dict) -> list[str]:
+    """Classify open review rows that match a newly saved rule.
+
+    Manual / already-final rows are left alone. Returns the txn_ids updated.
+    """
+    from src.classify import _compile_rules, _match_rule
+    from src.review import needs_review
+
+    compiled = _compile_rules({"rules": [rule]})
+    if not compiled:
+        return []
+    compiled_rule = compiled[0]
+
+    with ledger_lock():
+        ledger = load_ledger()
+        if ledger.empty:
+            return []
+
+        applied: list[str] = []
+        for idx, row in ledger.iterrows():
+            if not needs_review(row):
+                continue
+            canonical = str(row.get("canonical_merchant") or "")
+            merchant = str(row.get("normalized_merchant") or "")
+            raw = str(row.get("raw_description") or "")
+            if not _match_rule(compiled_rule, canonical=canonical, merchant=merchant, raw=raw):
+                continue
+            ledger.at[idx, "category"] = compiled_rule["category"]
+            ledger.at[idx, "subcategory"] = compiled_rule["subcategory"]
+            ledger.at[idx, "classified_by"] = "rule"
+            ledger.at[idx, "proposed_category"] = None
+            ledger.at[idx, "proposed_subcategory"] = None
+            applied.append(str(row["txn_id"]))
+
+        if applied:
+            write_ledger(_ensure_columns(ledger))
+        return applied
+
+
 
 def set_canonical_for_merchants(members: list[str], canonical: str) -> int:
     """Stamp a canonical name onto every ledger row matching these variants."""

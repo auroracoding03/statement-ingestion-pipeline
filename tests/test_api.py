@@ -259,7 +259,10 @@ def test_review_queue_and_decision_creates_rule(client: TestClient, workspace: d
         },
     )
     assert r.status_code == 200
-    assert r.json()["rule"] is not None
+    body = r.json()
+    assert body["rule"] is not None
+    # Walmart does not match the coffee regex rule.
+    assert body["applied_txn_ids"] == []
 
     # Decision is persisted and drops out of the queue
     assert client.get("/api/review/queue").json()["total"] == 1
@@ -269,6 +272,58 @@ def test_review_queue_and_decision_creates_rule(client: TestClient, workspace: d
     rules_doc = client.get("/api/rules").json()
     assert any(r["category"] == "Food" for r in rules_doc["rules"])
     assert "Coffee" in rules_doc["subcategories"]["Food"]
+
+
+def test_review_rule_reclassifies_matching_queue_siblings(client: TestClient, workspace: dict):
+    """Saving a rule should clear other open review rows that match it."""
+    sibling_id = make_txn_id("chase", "2026-02-01", 7.25, "LOCAL COFFEE ROASTERS DOWNTOWN")
+    ledger_path = workspace["root"] / "data" / "ledger.parquet"
+    ledger = pd.read_parquet(ledger_path)
+    sibling = {
+        "txn_id": sibling_id,
+        "card": "chase",
+        "posted_date": "2026-02-01",
+        "amount": 7.25,
+        "raw_description": "LOCAL COFFEE ROASTERS DOWNTOWN",
+        "normalized_merchant": "LOCAL COFFEE ROASTERS DOWNTOWN",
+        "canonical_merchant": None,
+        "merchant_source": "none",
+        "proposed_canonical": None,
+        "source_file": "chase/2026-02.csv",
+        "category": None,
+        "subcategory": None,
+        "tags": [],
+        "classified_by": None,
+        "proposed_category": None,
+        "proposed_subcategory": None,
+    }
+    pd.concat([ledger, pd.DataFrame([sibling])], ignore_index=True).to_parquet(ledger_path, index=False)
+
+    assert client.get("/api/review/queue").json()["total"] == 3
+
+    r = client.post(
+        f"/api/review/{workspace['coffee_id']}",
+        json={
+            "category": "Food",
+            "subcategory": "Coffee",
+            "create_rule": True,
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["rule"] is not None
+    assert sibling_id in body["applied_txn_ids"]
+
+    queue = client.get("/api/review/queue").json()
+    assert queue["total"] == 1
+    assert all(item["txn_id"] != sibling_id for item in queue["items"])
+
+    sibling_txn = next(
+        t for t in client.get("/api/transactions?q=coffee").json()["items"] if t["txn_id"] == sibling_id
+    )
+    assert sibling_txn["category"] == "Food"
+    assert sibling_txn["subcategory"] == "Coffee"
+    assert sibling_txn["classified_by"] == "rule"
 
 
 def test_review_unknown_transaction_is_404(client: TestClient):

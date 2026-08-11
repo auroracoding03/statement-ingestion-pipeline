@@ -422,6 +422,7 @@ def post_review(txn_id: str, body: ReviewDecision) -> dict:
         append_subcategory(body.category, body.subcategory)
 
     rule = None
+    applied_txn_ids: list[str] = []
     if body.create_rule and body.rule_scope != "none":
         canonical = row.get("canonical_merchant")
         has_canonical = bool(canonical) and not pd.isna(canonical)
@@ -438,8 +439,9 @@ def post_review(txn_id: str, body: ReviewDecision) -> dict:
                 category=body.category,
                 subcategory=body.subcategory,
             )
+        applied_txn_ids = pipeline.apply_rule_to_open_review(rule)
 
-    return {**result, "rule": rule}
+    return {**result, "rule": rule, "applied_txn_ids": applied_txn_ids}
 
 
 @app.get("/api/recurring")
