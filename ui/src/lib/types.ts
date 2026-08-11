@@ -127,3 +127,39 @@ export interface ReviewQueue {
   categories: string[];
   subcategories: Record<string, string[]>;
 }
+
+export interface AiStatus {
+  host: string;
+  model: string;
+  available: boolean;
+  model_installed: boolean;
+  gpu_resident: boolean;
+  size_vram: number;
+  message: string;
+}
+
+export interface AiProposal {
+  proposal_id: string;
+  kind: "merchant" | "category";
+  status: "pending" | "deferred" | "applied" | "rejected";
+  members: string[];
+  txn_ids: string[];
+  recommendation: {
+    canonical?: string;
+    category?: string;
+    subcategory?: string;
+    reusable?: boolean;
+  };
+  evidence: {
+    reason?: string;
+    ambiguous?: boolean;
+    sample_raw?: string[];
+    txn_count?: number;
+    total_amount?: number;
+    history_category?: string | null;
+    history_ratio?: number;
+  };
+  confidence: "high" | "medium" | "low";
+  model: string;
+  created_at: string;
+}

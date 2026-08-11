@@ -74,6 +74,30 @@ fin serve               # http://127.0.0.1:8787
 
 CLI entrypoint: `fin` (also `python -m src.cli`).
 
+### Local AI assistant (Windows / Radeon RX 6900 XT)
+
+The **AI assistant** page is a high-throughput local review queue for a large
+transaction history. It is designed for an RX 6900 XT (16 GB VRAM) and uses
+`qwen3.5:9b` (6.6 GB) through Ollama. The app batches merchant profiles rather
+than making one request per transaction, then keeps suggestions in a local
+checkpointed queue for review.
+
+1. Update the desktop app, then open **AI assistant**.
+2. Install [Ollama for Windows](https://ollama.com/download/windows) if needed.
+3. Choose **Download recommended model**. The page warms up the model and
+   confirms that it occupies GPU memory. On RX 6000 cards, Ollama's Vulkan
+   backend is the expected Windows fallback if ROCm is unavailable.
+4. Run **Analyze new or changed data**, review merchant identity proposals
+   first, and approve only the aliases you want saved. Then review category
+   proposals. Mixed-use merchants such as Walmart remain transaction-level
+   suggestions unless prior reviewed history is consistent.
+
+Statements, descriptions, model prompts, and proposals never leave the local
+machine. The per-merchant **Look up** button displays the exact browser query
+and requires confirmation; it sends only that merchant text, never an amount,
+date, card, or statement data. Each approval batch has a local snapshot and
+can be undone from the AI assistant page.
+
 ## Merchant identity
 
 Three layers, from immutable to curated:

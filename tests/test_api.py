@@ -178,6 +178,30 @@ def test_status_reports_counts(client: TestClient):
     assert body["counts"]["total"] == 2
 
 
+def test_ai_setup_and_proposal_routes(client: TestClient, monkeypatch):
+    monkeypatch.setattr(
+        api_app.ai_review,
+        "ai_status",
+        lambda warmup=False: {
+            "available": True,
+            "model_installed": True,
+            "gpu_resident": True,
+            "model": "qwen3.5:9b",
+            "size_vram": 6_600_000_000,
+            "message": "ready",
+        },
+    )
+    monkeypatch.setattr(api_app.ai_review, "list_proposals", lambda **_kwargs: {"total": 0, "items": []})
+
+    status = client.get("/api/ai/status?warmup=true")
+    assert status.status_code == 200
+    assert status.json()["gpu_resident"] is True
+
+    proposals = client.get("/api/ai/proposals?status=pending&kind=merchant")
+    assert proposals.status_code == 200
+    assert proposals.json() == {"total": 0, "items": []}
+
+
 def test_updates_are_exposed_without_network_access(client: TestClient):
     r = client.get("/api/updates")
 
