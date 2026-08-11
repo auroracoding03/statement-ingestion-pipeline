@@ -1,0 +1,14 @@
+# Context tags are orthogonal to primary spend categories.
+# Use occasions (date), trips (london-paris), or other labels for filtering.
+# Money totals still roll up by category / subcategory only.
+
+tags:
+  - id: date
+    label: Date
+    kind: occasion
+  - id: gift
+    label: Gift
+    kind: occasion
+  - id: work
+    label: Work
+    kind: other

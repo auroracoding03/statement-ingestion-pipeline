@@ -25,9 +25,11 @@ from src.paths import OLLAMA_PATH
 console = Console()
 
 DEFAULT_CONFIG = {
-    "model": "llama3.2",
+    "model": "qwen3.5:9b",
     "host": "http://127.0.0.1:11434",
-    "temperature": 0.1,
+    "temperature": 0,
+    "num_ctx": 8192,
+    "keep_alive": "10m",
 }
 
 

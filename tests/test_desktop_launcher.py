@@ -1,9 +1,67 @@
 from __future__ import annotations
 
 import sys
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import src.desktop as desktop
+
+
+class _Event:
+    def __init__(self) -> None:
+        self.callback = None
+
+    def __iadd__(self, callback):
+        self.callback = callback
+        return self
+
+
+def test_desktop_launcher_uses_native_webview(monkeypatch) -> None:
+    ensure_dirs = Mock()
+    server = SimpleNamespace(run=lambda: None, should_exit=False)
+    create_window = Mock(return_value=SimpleNamespace(events=SimpleNamespace(closed=_Event())))
+    start = Mock()
+    fake_webview = SimpleNamespace(create_window=create_window, start=start)
+    lock = Mock()
+
+    monkeypatch.setattr(desktop, "ensure_dirs", ensure_dirs)
+    monkeypatch.setattr(desktop, "FileLock", lambda _path: lock)
+    monkeypatch.setattr(desktop, "_available_port", lambda _port: 8787)
+    monkeypatch.setattr(desktop, "_wait_for_server", lambda _url: True)
+    monkeypatch.setattr(desktop.uvicorn, "Config", Mock())
+    monkeypatch.setattr(desktop.uvicorn, "Server", lambda _config: server)
+    monkeypatch.setattr(desktop.threading, "Thread", lambda **_kwargs: SimpleNamespace(start=lambda: None))
+    monkeypatch.setitem(sys.modules, "webview", fake_webview)
+
+    desktop.main()
+
+    ensure_dirs.assert_called_once_with()
+    create_window.assert_called_once()
+    assert create_window.call_args.args[1] == "http://127.0.0.1:8787"
+    start.assert_called_once()
+    assert server.should_exit is True
+    lock.release.assert_called_once_with()
+
+
+def test_server_ready_uses_lightweight_health_probe(monkeypatch) -> None:
+    opened: list[str] = []
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def fake_urlopen(url: str, timeout: float = 0):
+        opened.append(url)
+        assert timeout == desktop.READY_PROBE_TIMEOUT_SECONDS
+        return _Response()
+
+    monkeypatch.setattr(desktop.urllib.request, "urlopen", fake_urlopen)
+
+    assert desktop._server_ready("http://127.0.0.1:8787") is True
+    assert opened == ["http://127.0.0.1:8787/api/health"]
 
 
 def test_ensure_stdio_replaces_missing_streams(monkeypatch) -> None:
@@ -18,47 +76,27 @@ def test_ensure_stdio_replaces_missing_streams(monkeypatch) -> None:
     assert callable(getattr(sys.stderr, "isatty", None))
 
 
-def test_ensure_stdio_allows_uvicorn_logging_config(monkeypatch) -> None:
-    """Reproduce the PyInstaller windowed crash path and prove the fix."""
-    from logging.config import dictConfig
+def test_second_desktop_instance_shows_native_message(monkeypatch) -> None:
+    lock = Mock()
+    lock.acquire.side_effect = desktop.Timeout("already running")
+    show_error = Mock()
 
-    from uvicorn.config import LOGGING_CONFIG
-
-    monkeypatch.setattr(sys, "stdout", None)
-    monkeypatch.setattr(sys, "stderr", None)
-    desktop._ensure_stdio()
-
-    dictConfig(LOGGING_CONFIG)
-
-
-def test_desktop_launcher_opens_existing_server(monkeypatch) -> None:
-    open_browser = Mock()
-    monkeypatch.setattr(desktop, "_server_is_running", lambda _port: True)
-    monkeypatch.setattr(desktop.webbrowser, "open", open_browser)
+    monkeypatch.setattr(desktop, "ensure_dirs", Mock())
+    monkeypatch.setattr(desktop, "FileLock", lambda _path: lock)
+    monkeypatch.setattr(desktop, "_show_error", show_error)
+    monkeypatch.setattr(desktop, "_instance_lock", None)
 
     desktop.main()
 
-    open_browser.assert_called_once_with("http://127.0.0.1:8787")
+    show_error.assert_called_once()
+    lock.release.assert_not_called()
 
 
-def test_desktop_launcher_initializes_and_starts_local_server(monkeypatch) -> None:
-    ensure_dirs = Mock()
-    open_browser = Mock()
-    uvicorn_run = Mock()
-    timer = Mock()
-    timer.start = Mock()
+def test_release_instance_lock_clears_module_holder(monkeypatch) -> None:
+    lock = Mock()
+    monkeypatch.setattr(desktop, "_instance_lock", lock)
 
-    monkeypatch.setattr(desktop, "_server_is_running", lambda _port: False)
-    monkeypatch.setattr(desktop, "ensure_dirs", ensure_dirs)
-    monkeypatch.setattr(desktop.webbrowser, "open", open_browser)
-    monkeypatch.setattr(desktop.uvicorn, "run", uvicorn_run)
-    monkeypatch.setattr(desktop.threading, "Timer", lambda *_args: timer)
-    monkeypatch.setattr(desktop, "_available_port", lambda _port: 8787)
+    desktop.release_instance_lock()
 
-    desktop.main()
-
-    ensure_dirs.assert_called_once_with()
-    timer.start.assert_called_once_with()
-    uvicorn_run.assert_called_once_with(
-        desktop.app, host="127.0.0.1", port=8787, log_level="warning"
-    )
+    lock.release.assert_called_once_with()
+    assert desktop._instance_lock is None

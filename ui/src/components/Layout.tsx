@@ -2,14 +2,15 @@ import { useState, type ReactNode } from "react";
 
 import { api, canWrite } from "../lib/dataSource";
 import { hashHref, useHashPath } from "../lib/router";
-import { PipelineBar } from "./PipelineBar";
 
 const LINKS = [
   { to: "/", label: "Overview" },
+  { to: "/ingestion", label: "Ingestion", writeOnly: true },
   { to: "/transactions", label: "Transactions" },
   { to: "/categories", label: "Categories" },
   { to: "/recurring", label: "Recurring" },
   { to: "/merchants", label: "Merchants" },
+  { to: "/ai-assistant", label: "AI assistant", writeOnly: true },
   { to: "/review", label: "Review", writeOnly: true },
   { to: "/rules", label: "Rules", writeOnly: true },
 ];
@@ -70,9 +71,6 @@ export function Layout({ children }: { children: ReactNode }) {
           </div>
         )}
       </header>
-
-      {canWrite && <PipelineBar />}
-
       <main>
         {children}
       </main>

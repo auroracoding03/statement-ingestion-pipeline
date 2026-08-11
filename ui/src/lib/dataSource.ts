@@ -8,7 +8,10 @@
  * `canWrite` to decide whether to render mutating controls.
  */
 import type {
+  AiProposal,
+  AiStatus,
   CategoryMonthly,
+  ContextTag,
   Job,
   JobStart,
   Merchant,
@@ -77,7 +80,28 @@ export interface UpdateStatus {
   message: string;
 }
 
+export interface UploadInspection {
+  token: string;
+  name: string;
+  issuer: string | null;
+  product: string | null;
+  confidence: string;
+  message: string;
+  needs_manual_details: boolean;
+}
+
 export const api = {
+  async aiStatus(warmup = false): Promise<AiStatus> {
+    if (!canWrite) throw new DataError("Local AI setup is only available in the desktop app.");
+    return req<AiStatus>(`/api/ai/status${warmup ? "?warmup=true" : ""}`);
+  },
+
+  async aiProposals(kind?: "merchant" | "category") {
+    if (!canWrite) return { total: 0, items: [] as AiProposal[] };
+    const suffix = kind ? `&kind=${kind}` : "";
+    return req<{ total: number; items: AiProposal[] }>(`/api/ai/proposals?status=pending${suffix}`);
+  },
+
   async status(): Promise<Status> {
     if (canWrite) return req<Status>("/api/status");
     const summary = await staticJSON<StaticSummary | null>("summary", null);
@@ -150,14 +174,23 @@ export const api = {
   async reviewQueue(): Promise<ReviewQueue> {
     if (!canWrite) {
       const items = await staticJSON<Transaction[]>("uncategorized", []);
-      return { total: items.length, items, categories: [] };
+      return { total: items.length, items, categories: [], subcategories: {} };
     }
     return req<ReviewQueue>("/api/review/queue");
   },
 
-  async rules(): Promise<{ categories: string[]; rules: Rule[] }> {
-    if (!canWrite) return { categories: [], rules: [] };
-    return req<{ categories: string[]; rules: Rule[] }>("/api/rules");
+  async rules(): Promise<{
+    categories: string[];
+    subcategories: Record<string, string[]>;
+    rules: Rule[];
+  }> {
+    if (!canWrite) return { categories: [], subcategories: {}, rules: [] };
+    return req<{ categories: string[]; subcategories: Record<string, string[]>; rules: Rule[] }>("/api/rules");
+  },
+
+  async tags(): Promise<{ total: number; items: ContextTag[] }> {
+    if (!canWrite) return { total: 0, items: [] };
+    return req<{ total: number; items: ContextTag[] }>("/api/tags");
   },
 
   async updates(): Promise<UpdateStatus> {
@@ -172,14 +205,81 @@ export const api = {
     return req<UpdateStatus>("/api/updates");
   },
 
+  async inspectUploads(files: FileList | File[]) {
+    const form = new FormData();
+    Array.from(files).forEach((file) => form.append("files", file));
+    const res = await fetch("/api/uploads/inspect", { method: "POST", body: form });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new DataError(String(body?.detail ?? `Upload failed: ${res.status}`));
+    }
+    return res.json() as Promise<{ items: UploadInspection[] }>;
+  },
+
+  commitUploads(items: { token: string; issuer?: string; product?: string }[]) {
+    return req<{ written: string[] }>("/api/uploads/commit", { method: "POST", body: JSON.stringify({ items }) });
+  },
+
+  async cardProducts(): Promise<{ products: Record<string, string[]> }> {
+    if (!canWrite) return { products: {} };
+    return req<{ products: Record<string, string[]> }>("/api/card-products");
+  },
+
+  addCardProduct(issuer: string, product: string) {
+    if (!canWrite) writeGuard();
+    return req<{ products: Record<string, string[]> }>("/api/card-products", {
+      method: "POST",
+      body: JSON.stringify({ issuer, product }),
+    });
+  },
+
   // ---------------------------------------------------------------- mutations
 
   submitReview(
     txnId: string,
-    body: { category: string; subcategory?: string; create_rule?: boolean; rule_scope?: string },
+    body: {
+      category: string;
+      subcategory?: string;
+      tags?: string[];
+      create_rule?: boolean;
+      rule_scope?: string;
+    },
   ) {
     if (!canWrite) writeGuard();
-    return req<unknown>(`/api/review/${txnId}`, { method: "POST", body: JSON.stringify(body) });
+    return req<{
+      txn_id: string;
+      category: string;
+      subcategory?: string;
+      tags?: string[];
+      rule?: unknown;
+      applied_txn_ids?: string[];
+    }>(`/api/review/${txnId}`, { method: "POST", body: JSON.stringify(body) });
+  },
+
+  createTag(body: { label: string; kind?: string; id?: string }) {
+    if (!canWrite) writeGuard();
+    return req<{ tag: ContextTag }>("/api/tags", { method: "POST", body: JSON.stringify(body) });
+  },
+
+  deleteTag(tagId: string) {
+    if (!canWrite) writeGuard();
+    return req<unknown>(`/api/tags/${encodeURIComponent(tagId)}`, { method: "DELETE" });
+  },
+
+  addCategory(category: string) {
+    if (!canWrite) writeGuard();
+    return req<{ categories: string[]; subcategories: Record<string, string[]> }>("/api/categories", {
+      method: "POST",
+      body: JSON.stringify({ category }),
+    });
+  },
+
+  addSubcategory(category: string, subcategory: string) {
+    if (!canWrite) writeGuard();
+    return req<{ subcategories: Record<string, string[]> }>("/api/subcategories", {
+      method: "POST",
+      body: JSON.stringify({ category, subcategory }),
+    });
   },
 
   saveMerchant(body: {
@@ -209,6 +309,11 @@ export const api = {
     return req<unknown>("/api/rules", { method: "POST", body: JSON.stringify(body) });
   },
 
+  updateRule(index: number, body: { category: string; subcategory?: string }) {
+    if (!canWrite) writeGuard();
+    return req<unknown>(`/api/rules/${index}`, { method: "PATCH", body: JSON.stringify(body) });
+  },
+
   deleteRule(index: number) {
     if (!canWrite) writeGuard();
     return req<unknown>(`/api/rules/${index}`, { method: "DELETE" });
@@ -230,6 +335,36 @@ export const api = {
   startBuild() {
     if (!canWrite) writeGuard();
     return req<JobStart>("/api/build", { method: "POST" });
+  },
+
+  startAiModelPull() {
+    if (!canWrite) writeGuard();
+    return req<JobStart>("/api/ai/model/pull", { method: "POST" });
+  },
+
+  startAiAnalysis(mode: "full" | "incremental" = "incremental") {
+    if (!canWrite) writeGuard();
+    return req<JobStart>("/api/ai/analyze", { method: "POST", body: JSON.stringify({ mode }) });
+  },
+
+  decideAiProposals(
+    decisions: {
+      proposal_id: string;
+      action?: "accept" | "reject" | "defer";
+      recommendation?: Record<string, string>;
+      save_as_rule?: boolean;
+    }[],
+  ) {
+    if (!canWrite) writeGuard();
+    return req<{ batch_id?: string; applied?: string[] }>("/api/ai/proposals/decide", {
+      method: "POST",
+      body: JSON.stringify({ decisions }),
+    });
+  },
+
+  rollbackAiApplication() {
+    if (!canWrite) writeGuard();
+    return req<{ rolled_back: string }>("/api/ai/applications/rollback", { method: "POST" });
   },
 
   installUpdate() {

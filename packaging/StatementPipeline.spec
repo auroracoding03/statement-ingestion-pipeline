@@ -16,6 +16,7 @@ WINDOWS_ICON = PROJECT / "packaging" / "assets" / "statement-pipeline.ico"
 datas = [
     (str(PROJECT / "ui" / "dist"), "ui/dist"),
     (str(PROJECT / "dashboard" / "public"), "dashboard/public"),
+    (str(WINDOWS_ICON), "packaging/assets"),
 ]
 
 # Configuration is seeded into the user's app-data directory on first launch.
@@ -23,6 +24,8 @@ for config_file in (PROJECT / "config").glob("*.yaml"):
     datas.append((str(config_file), "config"))
 
 hiddenimports = collect_submodules("config")
+if sys.platform == "win32":
+    hiddenimports += collect_submodules("webview")
 
 a = Analysis(
     [str(PROJECT / "src" / "desktop.py")],

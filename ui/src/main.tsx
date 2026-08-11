@@ -5,6 +5,8 @@ import { Layout } from "./components/Layout";
 import { canWrite } from "./lib/dataSource";
 import { useHashPath } from "./lib/router";
 import { Categories } from "./pages/Categories";
+import { AiAssistant } from "./pages/AiAssistant";
+import { Ingestion } from "./pages/Ingestion";
 import { Merchants } from "./pages/Merchants";
 import { Overview } from "./pages/Overview";
 import { Recurring } from "./pages/Recurring";
@@ -17,10 +19,12 @@ function App() {
   const path = useHashPath();
   const page = {
     "/": <Overview />,
+    "/ingestion": canWrite ? <Ingestion /> : <Overview />,
     "/transactions": <Transactions />,
     "/categories": <Categories />,
     "/recurring": <Recurring />,
     "/merchants": <Merchants />,
+    "/ai-assistant": canWrite ? <AiAssistant /> : <Overview />,
     "/review": canWrite ? <Review /> : <Overview />,
     "/rules": canWrite ? <Rules /> : <Overview />,
   }[path] ?? <Overview />;

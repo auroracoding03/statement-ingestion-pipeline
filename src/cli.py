@@ -44,10 +44,22 @@ def _print_counts(counts: dict) -> None:
 def ingest() -> None:
     """Extract, normalize, canonicalize, and dedup inbox statements."""
     result = pipeline.run_ingest()
-    if not result.get("ingested"):
-        console.print(f"[yellow]{result.get('message', 'Nothing ingested.')}[/yellow]")
+    if result.get("error"):
+        console.print(f"[red]{result['error']}[/red]")
+        for detail in result.get("details") or []:
+            console.print(f"[red]  {detail}[/red]")
         raise typer.Exit(code=1)
-    console.print(f"[green]Ingested {result['ingested']} unique transactions → {result['path']}[/green]")
+    ingested = int(result.get("ingested") or 0)
+    total = int(result.get("total") or 0)
+    if ingested == 0:
+        message = result.get("message") or (
+            f"No new transactions ({total} already in ledger)." if total else "Nothing ingested."
+        )
+        console.print(f"[yellow]{message}[/yellow]")
+        raise typer.Exit(code=0 if total else 1)
+    console.print(
+        f"[green]Ingested {ingested} new transactions ({total} total) → {result['path']}[/green]"
+    )
 
 
 @app.command()

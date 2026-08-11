@@ -8,6 +8,7 @@ read-only static export.
 from __future__ import annotations
 
 import math
+import os
 import re
 import uuid
 from pathlib import Path
@@ -20,17 +21,49 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from src import pipeline
+from src import ai_review
 from src.ai_suggest import ollama_available
 from src.atomic import atomic_copy_stream
 from src.api import jobs
-from src.api.schemas import ClassifyRequest, MerchantIn, ReviewDecision, RuleIn
-from src.classify import append_rule, delete_rule, load_rules
+from src.api.schemas import (
+    AIAnalyzeRequest,
+    AIProposalDecisionsRequest,
+    CardProductIn,
+    CategoryIn,
+    ClassifyRequest,
+    MerchantIn,
+    ReviewDecision,
+    RuleIn,
+    RuleUpdate,
+    SubcategoryIn,
+    TagIn,
+    UploadCommitRequest,
+)
+from src.classify import (
+    append_category,
+    append_rule,
+    append_subcategory,
+    delete_rule,
+    list_subcategories,
+    load_rules,
+    rule_pattern_from_merchant,
+    update_rule,
+)
 from src.extract import iter_statement_files
 from src.merchants import append_merchant, delete_merchant, load_merchants
-from src.paths import DASHBOARD, EXPORT_DIR, FINANCE_DB, INBOX, UI, ensure_dirs
+from src.paths import DASHBOARD, EXPORT_DIR, FINANCE_DB, INBOX, PENDING_UPLOADS, UI, ensure_dirs
 from src.review import needs_review
+from src.statement_identity import detect_statement_identity
+from src.tags import create_tag, delete_tag, list_tags, normalize_tag_ids
 from src.updater import UpdateError, check_for_update, install_latest_update
-from src.upload_context import card_key, normalize_issuer, normalize_product, write_upload_context
+from src.upload_context import (
+    append_card_product,
+    card_key,
+    list_card_products,
+    normalize_issuer,
+    normalize_product,
+    write_upload_context,
+)
 from src.version import APP_VERSION
 
 app = FastAPI(title="Statement Ingestion Pipeline", version=APP_VERSION)
@@ -56,6 +89,15 @@ def _jsonable(value: Any) -> Any:
         return value.isoformat()
     if value is pd.NaT:
         return None
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    if hasattr(value, "tolist") and not isinstance(value, (str, bytes)):
+        try:
+            as_list = value.tolist()
+            if isinstance(as_list, list):
+                return [_jsonable(v) for v in as_list]
+        except (TypeError, ValueError):
+            pass
     if hasattr(value, "item") and not isinstance(value, (str, bytes)):
         try:
             return value.item()
@@ -77,6 +119,12 @@ def _records(frame: pd.DataFrame) -> list[dict]:
 
 
 # --------------------------------------------------------------------------- status
+
+
+@app.get("/api/health")
+def get_health() -> dict:
+    """Lightweight liveness probe for the desktop launcher readiness wait."""
+    return {"ok": True, "version": APP_VERSION}
 
 
 @app.get("/api/status")
@@ -102,6 +150,54 @@ def get_status() -> dict:
         "exports": EXPORT_DIR.exists(),
         "ollama_available": ollama_available(),
     }
+
+
+# --------------------------------------------------------------------------- local AI
+
+
+@app.get("/api/ai/status")
+def get_ai_status(warmup: bool = False) -> dict:
+    """Report local runtime/model state; no financial data leaves the machine."""
+    return ai_review.ai_status(warmup=warmup)
+
+
+@app.post("/api/ai/model/pull")
+def post_ai_model_pull(background: BackgroundTasks) -> dict:
+    return _start("ai-model-pull", ai_review.pull_model, background)
+
+
+@app.post("/api/ai/analyze")
+def post_ai_analyze(body: AIAnalyzeRequest, background: BackgroundTasks) -> dict:
+    return _start("ai-analyze", lambda: pipeline.run_ai_analysis(body.mode), background)
+
+
+@app.get("/api/ai/proposals")
+def get_ai_proposals(
+    status: str | None = Query("pending", pattern="^(pending|deferred|applied|rejected)$"),
+    kind: str | None = Query(None, pattern="^(merchant|category)$"),
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    return ai_review.list_proposals(status=status, kind=kind, limit=limit, offset=offset)
+
+
+@app.post("/api/ai/proposals/decide")
+def post_ai_proposal_decisions(body: AIProposalDecisionsRequest) -> dict:
+    try:
+        result = pipeline.apply_ai_decisions([item.model_dump(exclude_none=True) for item in body.decisions])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if result.get("error"):
+        raise HTTPException(status_code=409, detail=result["error"])
+    return result
+
+
+@app.post("/api/ai/applications/rollback")
+def post_ai_rollback() -> dict:
+    result = pipeline.rollback_ai_application()
+    if result.get("error"):
+        raise HTTPException(status_code=409, detail=result["error"])
+    return result
 
 
 # --------------------------------------------------------------------------- updates
@@ -163,6 +259,93 @@ def get_job(job_id: str) -> dict:
 # --------------------------------------------------------------------------- upload
 
 
+def _safe_upload_name(upload: UploadFile) -> tuple[str, str]:
+    name = SAFE_NAME.sub("-", Path(upload.filename or "statement").name)
+    suffix = Path(name).suffix.lower()
+    if suffix not in {".csv", ".pdf"}:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {upload.filename}")
+    return name, suffix
+
+
+def _unique_target(directory: Path, name: str) -> Path:
+    target = directory / name
+    if target.exists():
+        original = Path(name)
+        target = directory / f"{original.stem}-{uuid.uuid4().hex[:8]}{original.suffix}"
+    return target
+
+
+@app.post("/api/uploads/inspect")
+async def inspect_uploads(files: list[UploadFile] = ()) -> dict:
+    """Stage documents and return automatic identity detection for each one."""
+    ensure_dirs()
+    if not files:
+        raise HTTPException(status_code=400, detail="Select at least one CSV or PDF statement.")
+
+    staged: list[dict] = []
+    for upload in files:
+        name, suffix = _safe_upload_name(upload)
+        token = uuid.uuid4().hex
+        target = PENDING_UPLOADS / f"{token}--{name}"
+        try:
+            atomic_copy_stream(target, upload.file)
+            identity = detect_statement_identity(target)
+        except OSError as exc:
+            target.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail=f"Could not save {name}: {exc}") from exc
+        staged.append(
+            {
+                "token": token,
+                "name": name,
+                "issuer": identity.issuer,
+                "product": identity.product,
+                "confidence": identity.confidence,
+                "message": identity.message,
+                "needs_manual_details": identity.needs_manual_details,
+            }
+        )
+    return {"items": staged}
+
+
+@app.post("/api/uploads/commit")
+def commit_uploads(body: UploadCommitRequest) -> dict:
+    """Move inspected statements into their durable issuer folders."""
+    ensure_dirs()
+    prepared: list[tuple[Path, str, str, str | None, str]] = []
+    for item in body.items:
+        candidates = list(PENDING_UPLOADS.glob(f"{item.token}--*"))
+        if len(candidates) != 1:
+            raise HTTPException(status_code=404, detail="An upload has expired. Select the file again.")
+        staged = candidates[0]
+        identity = detect_statement_identity(staged)
+        try:
+            issuer = normalize_issuer(item.issuer) if item.issuer else identity.issuer
+            raw_product = item.product if item.product is not None else identity.product
+            product = normalize_product(issuer, raw_product)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if not issuer:
+            raise HTTPException(status_code=422, detail=f"Select an issuer for {staged.name[34:]}")
+        if issuer == "American Express" and staged.suffix.lower() == ".csv" and not product:
+            raise HTTPException(
+                status_code=422,
+                detail="American Express CSV files need a card product because the export does not include it.",
+            )
+        card = card_key(issuer, product) if issuer != "Generic" else "generic"
+        prepared.append((staged, issuer, card, product, staged.name[34:]))
+
+    written: list[str] = []
+    for staged, issuer, card, product, original_name in prepared:
+        destination_dir = INBOX / card
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        target = _unique_target(destination_dir, original_name)
+        os.replace(staged, target)
+        if issuer != "Generic":
+            write_upload_context(target, issuer=issuer, product=product)
+        written.append(f"{card}/{target.name}")
+    return {"written": written}
+
+
 @app.post("/api/upload")
 async def post_upload(
     card: str = Query("generic"),
@@ -173,7 +356,7 @@ async def post_upload(
     ensure_dirs()
     try:
         selected_issuer = normalize_issuer(issuer) if issuer else None
-        selected_product = normalize_product(product)
+        selected_product = normalize_product(selected_issuer, product)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if selected_issuer == "American Express" and not selected_product:
@@ -188,16 +371,11 @@ async def post_upload(
 
     written: list[str] = []
     for upload in files:
-        name = SAFE_NAME.sub("-", Path(upload.filename or "statement").name)
-        if not name.lower().endswith((".csv", ".pdf")):
-            raise HTTPException(status_code=400, detail=f"Unsupported file type: {upload.filename}")
-        target = dest_dir / name
-        if target.exists():
-            original = Path(name)
-            target = dest_dir / f"{original.stem}-{uuid.uuid4().hex[:8]}{original.suffix}"
+        name, _suffix = _safe_upload_name(upload)
+        target = _unique_target(dest_dir, name)
+        atomic_copy_stream(target, upload.file)
         if selected_issuer:
             write_upload_context(target, issuer=selected_issuer, product=selected_product)
-        atomic_copy_stream(target, upload.file)
         written.append(f"{safe_card}/{target.name}")
 
     return {"card": safe_card, "written": written}
@@ -210,6 +388,7 @@ async def post_upload(
 def get_transactions(
     q: str | None = None,
     category: str | None = None,
+    tag: str | None = None,
     card: str | None = None,
     merchant: str | None = None,
     unclassified: bool = False,
@@ -221,6 +400,13 @@ def get_transactions(
         return {"total": 0, "items": []}
 
     frame = ledger
+    if "tags" not in frame.columns:
+        frame = frame.copy()
+        frame["tags"] = [[] for _ in range(len(frame))]
+    else:
+        frame = frame.copy()
+        frame["tags"] = frame["tags"].apply(normalize_tag_ids)
+
     if q:
         needle = q.lower()
         haystack = (
@@ -233,6 +419,8 @@ def get_transactions(
         frame = frame[haystack.str.contains(re.escape(needle), na=False)]
     if category:
         frame = frame[frame["category"].fillna("Uncategorized") == category]
+    if tag:
+        frame = frame[frame["tags"].apply(lambda values: tag in values)]
     if card:
         frame = frame[frame["card"] == card]
     if merchant:
@@ -252,7 +440,7 @@ def get_transactions(
 def get_review_queue(limit: int = Query(100, le=1000)) -> dict:
     ledger = pipeline.load_ledger()
     if ledger.empty:
-        return {"total": 0, "items": [], "categories": []}
+        return {"total": 0, "items": [], "categories": [], "subcategories": {}}
 
     pending = ledger[ledger.apply(needs_review, axis=1)].sort_values("amount", ascending=False)
     categories = load_rules().get("categories") or []
@@ -260,6 +448,7 @@ def get_review_queue(limit: int = Query(100, le=1000)) -> dict:
         "total": int(len(pending)),
         "items": _records(pending.head(limit)),
         "categories": categories,
+        "subcategories": list_subcategories(),
     }
 
 
@@ -272,12 +461,19 @@ def post_review(txn_id: str, body: ReviewDecision) -> dict:
     row = match.iloc[0]
 
     result = pipeline.apply_review_decision(
-        txn_id, category=body.category, subcategory=body.subcategory
+        txn_id,
+        category=body.category,
+        subcategory=body.subcategory,
+        tags=body.tags,
     )
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
 
+    if body.subcategory.strip():
+        append_subcategory(body.category, body.subcategory)
+
     rule = None
+    applied_txn_ids: list[str] = []
     if body.create_rule and body.rule_scope != "none":
         canonical = row.get("canonical_merchant")
         has_canonical = bool(canonical) and not pd.isna(canonical)
@@ -289,15 +485,14 @@ def post_review(txn_id: str, body: ReviewDecision) -> dict:
                 subcategory=body.subcategory,
             )
         else:
-            tokens = [re.escape(t) for t in str(row["normalized_merchant"]).split() if t]
-            pattern = "(?i)" + r"\s+".join(tokens) if tokens else "(?i)."
             rule = append_rule(
-                merchant_regex=pattern,
+                merchant_regex=rule_pattern_from_merchant(row["normalized_merchant"]),
                 category=body.category,
                 subcategory=body.subcategory,
             )
+        applied_txn_ids = pipeline.apply_rule_to_open_review(rule)
 
-    return {**result, "rule": rule}
+    return {**result, "rule": rule, "applied_txn_ids": applied_txn_ids}
 
 
 @app.get("/api/recurring")
@@ -428,6 +623,7 @@ def get_rules() -> dict:
     doc = load_rules()
     return {
         "categories": doc.get("categories") or [],
+        "subcategories": list_subcategories(),
         "rules": [{"index": i, **r} for i, r in enumerate(doc.get("rules") or [])],
     }
 
@@ -450,6 +646,92 @@ def remove_rule(index: int) -> dict:
     if not delete_rule(index):
         raise HTTPException(status_code=404, detail="Unknown rule index")
     return {"deleted": index}
+
+
+@app.patch("/api/rules/{index}")
+def patch_rule(index: int, body: RuleUpdate) -> dict:
+    try:
+        rule = update_rule(index, category=body.category, subcategory=body.subcategory)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Unknown rule index")
+    return {"rule": {"index": index, **rule}}
+
+
+@app.post("/api/categories")
+def post_category(body: CategoryIn) -> dict:
+    ensure_dirs()
+    try:
+        categories = append_category(body.category)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"categories": categories, "subcategories": list_subcategories()}
+
+
+@app.post("/api/subcategories")
+def post_subcategory(body: SubcategoryIn) -> dict:
+    ensure_dirs()
+    try:
+        subcategories = append_subcategory(body.category, body.subcategory)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"subcategories": subcategories}
+
+
+# --------------------------------------------------------------------------- tags
+
+
+def _tag_in_use(tag_id: str) -> bool:
+    ledger = pipeline.load_ledger()
+    if ledger.empty or "tags" not in ledger.columns:
+        return False
+    return bool(ledger["tags"].apply(lambda values: tag_id in normalize_tag_ids(values)).any())
+
+
+@app.get("/api/tags")
+def get_tags() -> dict:
+    ensure_dirs()
+    return {"total": len(list_tags()), "items": list_tags()}
+
+
+@app.post("/api/tags")
+def post_tag(body: TagIn) -> dict:
+    ensure_dirs()
+    try:
+        entry = create_tag(label=body.label, kind=body.kind, tag_id=body.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"tag": entry}
+
+
+@app.delete("/api/tags/{tag_id}")
+def remove_tag(tag_id: str) -> dict:
+    ensure_dirs()
+    if _tag_in_use(tag_id):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Tag {tag_id!r} is still used on ledger transactions.",
+        )
+    if not delete_tag(tag_id):
+        raise HTTPException(status_code=404, detail="Unknown tag")
+    return {"deleted": tag_id}
+
+
+@app.get("/api/card-products")
+def get_card_products() -> dict:
+    ensure_dirs()
+    return {"products": list_card_products()}
+
+
+@app.post("/api/card-products")
+def post_card_product(body: CardProductIn) -> dict:
+    ensure_dirs()
+    try:
+        products = append_card_product(body.issuer, body.product)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"products": products}
 
 
 # --------------------------------------------------------------------------- static UI

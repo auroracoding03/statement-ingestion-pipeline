@@ -20,6 +20,8 @@ CONFIG_FILES = (
     "expected_recurring.yaml",
     "publish.yaml",
     "ollama.yaml",
+    "tags.yaml",
+    "card_products.yaml",
 )
 
 
@@ -72,16 +74,22 @@ MERCHANTS_PATH = CONFIG / "merchants.yaml"
 EXPECTED_RECURRING_PATH = CONFIG / "expected_recurring.yaml"
 PUBLISH_PATH = CONFIG / "publish.yaml"
 OLLAMA_PATH = CONFIG / "ollama.yaml"
+TAGS_PATH = CONFIG / "tags.yaml"
+CARD_PRODUCTS_PATH = CONFIG / "card_products.yaml"
 
 LEDGER_PARQUET = DATA / "ledger.parquet"
 LEDGER_LOCK = DATA / "ledger.lock"
 FINANCE_DB = DATA / "finance.duckdb"
 PROPOSALS_PARQUET = DATA / "proposals.parquet"
+AI_PROPOSALS_PARQUET = DATA / "ai_proposals.parquet"
+AI_APPLICATIONS_PATH = DATA / "ai_applications.json"
+AI_SNAPSHOTS = DATA / "ai_snapshots"
 INGEST_MANIFEST = DATA / "ingestion_manifest.parquet"
 TRANSACTION_SOURCES_PARQUET = DATA / "transaction_sources.parquet"
 RECURRING_PARQUET = DATA / "recurring.parquet"
 RECONCILE_PARQUET = DATA / "reconciliation.parquet"
 EXPORT_DIR = DATA / "export"
+PENDING_UPLOADS = DATA / "pending_uploads"
 
 
 def seed_default_config(
@@ -101,4 +109,6 @@ def ensure_dirs() -> None:
     INBOX.mkdir(parents=True, exist_ok=True)
     DATA.mkdir(parents=True, exist_ok=True)
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    PENDING_UPLOADS.mkdir(parents=True, exist_ok=True)
+    AI_SNAPSHOTS.mkdir(parents=True, exist_ok=True)
     seed_default_config()

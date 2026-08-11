@@ -13,17 +13,38 @@ import pandas as pd
 
 
 def _fsync_file(path: Path) -> None:
-    with path.open("rb") as handle:
-        os.fsync(handle.fileno())
+    """Best-effort file durability after an external writer closes the path.
+
+    Windows ``FlushFileBuffers`` requires a write-capable handle, so reopening
+    read-only and calling ``os.fsync`` raises ``EBADF`` (seen as
+    ``OSError: [Errno 9] Bad file descriptor`` during ledger parquet writes).
+    Prefer a read/write reopen; if sync is still unsupported, the writer has
+    already flushed bytes to the filesystem.
+    """
+    try:
+        with path.open("rb+") as handle:
+            os.fsync(handle.fileno())
+    except OSError:
+        return
 
 
 def _fsync_directory(path: Path) -> None:
+    """Best-effort directory durability.
+
+    POSIX filesystems support syncing a directory after a rename. Windows does
+    not, and calling ``fsync`` on its directory handle raises ``EBADF``. The
+    file itself has already been synced before the rename, so skip only this
+    unsupported final durability hint.
+    """
     try:
         fd = os.open(path, os.O_RDONLY)
     except OSError:
         return
     try:
-        os.fsync(fd)
+        try:
+            os.fsync(fd)
+        except OSError:
+            return
     finally:
         os.close(fd)
 

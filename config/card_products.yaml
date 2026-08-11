@@ -1,0 +1,15 @@
+# Managed vocabulary of card products per issuer.
+# Used by the Ingestion product select when a statement needs a product.
+
+products:
+  American Express:
+    - Platinum
+    - Delta Gold
+    - Gold
+    - Delta SkyMiles
+  Wells Fargo:
+    - Autograph Visa Signature
+  Chase: []
+  Bank of America: []
+  Capital One: []
+  Generic: []

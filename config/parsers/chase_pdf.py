@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -33,9 +33,10 @@ NON_ACTIVITY_HEADINGS = {
     "account activity continued",
 }
 NON_NAME_WORDS = {
-    "ACCOUNT", "ACTIVITY", "AMAZON", "CHASE", "CARDMEMBER", "CREDITS", "FEES",
-    "INTEREST", "ORDER", "PAYMENTS", "PRIME", "PURCHASE", "PURCHASES", "REWARDS", "SERVICE",
-    "VISA", "YOUR",
+    "ACCOUNT", "ACTIVITY", "ADVANCES", "AMAZON", "BALANCE", "CASH", "CHASE", "CARDMEMBER",
+    "CREDITS", "FEES", "IMPORTANT", "INTEREST", "MESSAGES", "NEWS", "ORDER", "PAYMENTS",
+    "POINTS", "PRIME", "PURCHASE", "PURCHASES", "REWARDS", "SERVICE", "SHOP", "SUMMARY",
+    "TRANSFERS", "VISA", "YOUR",
 }
 
 
@@ -65,9 +66,44 @@ def _clean(text: str) -> str:
     return " ".join(str(text or "").split())
 
 
+def _collapse_doubled_glyphs(text: str) -> str:
+    """Undo Chase PDF extractions that emit each letter twice (ACCOUNT → AACCCCOOUUUNNTT).
+
+    Intentional double letters become quadruples under that encoding, so runs are
+    halved (CCCC→CC) rather than fully deduped. Ordinary names like AARON stay
+    untouched because their consecutive-duplication density stays low.
+    """
+    raw = str(text or "")
+    letters = [ch for ch in raw if ch.isalpha()]
+    if len(letters) < 4:
+        return raw
+    dups = sum(1 for a, b in zip(letters, letters[1:]) if a.lower() == b.lower())
+    if dups / (len(letters) - 1) < 0.35:
+        return raw
+    out: list[str] = []
+    i = 0
+    while i < len(raw):
+        ch = raw[i]
+        if not ch.isalpha():
+            out.append(ch)
+            i += 1
+            continue
+        j = i + 1
+        while j < len(raw) and raw[j].isalpha() and raw[j].lower() == ch.lower():
+            j += 1
+        keep = max(1, (j - i) // 2)
+        out.extend(raw[i : i + keep])
+        i = j
+    return "".join(out)
+
+
 def _lines(words: Iterable[dict[str, Any]], tolerance: float = 2.5) -> list[Line]:
     positioned = sorted(
-        (Word(str(word["text"]), float(word["x0"]), float(word["top"])) for word in words if str(word.get("text") or "").strip()),
+        (
+            Word(_collapse_doubled_glyphs(str(word["text"])), float(word["x0"]), float(word["top"]))
+            for word in words
+            if str(word.get("text") or "").strip()
+        ),
         key=lambda word: (word.top, word.x0),
     )
     out: list[Line] = []
@@ -134,6 +170,10 @@ def _resolve_date(value: str, start: date, end: date) -> date:
     candidates = [date(year, parsed.month, parsed.day) for year in range(start.year - 1, end.year + 2)]
     matching = [candidate for candidate in candidates if start <= candidate <= end]
     if len(matching) != 1:
+        # Chase occasionally prints a transaction one day outside the labeled cycle.
+        grace_start, grace_end = start - timedelta(days=1), end + timedelta(days=1)
+        matching = [candidate for candidate in candidates if grace_start <= candidate <= grace_end]
+    if len(matching) != 1:
         raise ValueError(f"Chase row date {value!r} is outside the statement period")
     return matching[0]
 
@@ -153,8 +193,13 @@ def _parse_row(line: Line, bounds: Bounds, start: date, end: date, section: str,
     amounts = AMOUNT_RE.findall(amount_text)
     if not amounts:
         return None
+    try:
+        posted_date = _resolve_date(date_text, start, end)
+    except ValueError:
+        # Far outside the cycle (and grace window): skip rather than fail the statement.
+        return None
     return {
-        "posted_date": _resolve_date(date_text, start, end),
+        "posted_date": posted_date,
         "amount": coerce_amount(amounts[-1]),
         "raw_description": description,
         "card_issuer": ISSUER,

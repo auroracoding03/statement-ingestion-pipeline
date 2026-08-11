@@ -37,6 +37,7 @@ LEDGER_COLUMNS = [
 CLASSIFICATION_COLUMNS = [
     "category",
     "subcategory",
+    "tags",
     "classified_by",
     "proposed_category",
     "proposed_subcategory",

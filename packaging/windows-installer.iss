@@ -26,6 +26,11 @@ SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
+; Older in-app updaters may start Setup while StatementPipeline.exe is still
+; alive. Force-close it so file replace and relaunch can succeed.
+CloseApplications=force
+CloseApplicationsFilter={#MyAppExeName}
+RestartApplications=no
 
 [Files]
 Source: "..\dist\StatementPipeline\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -37,10 +42,21 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilen
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 
+; Relaunch once after install. Dual [Run] entries previously launched two hosts
+; and the second hit the single-instance lock ("already running").
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifdoesntexist
 
 [Code]
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  { Belt-and-suspenders for hung UI processes that ignore Restart Manager. }
+  Exec('taskkill.exe', '/F /IM {#MyAppExeName}', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Result := '';
+end;
+
 function InitializeUninstall(): Boolean;
 begin
   MsgBox(

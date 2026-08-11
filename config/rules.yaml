@@ -17,6 +17,41 @@ categories:
   - Income
   - Uncategorized
 
+# Managed vocabulary of subcategories per primary. Keep strings consistent.
+subcategories:
+  Housing:
+    - Mortgage
+  Utilities:
+    - Electric
+    - InternetPhone
+    - NaturalGas
+  Food:
+    - FastFood
+    - Groceries
+    - Restaurant
+    - Coffee
+  Travel:
+    - Lodging
+    - Transit
+  Entertainment: []
+  Shopping:
+    - Retail
+    - Warehouse
+  Health: []
+  Transport:
+    - Gas
+    - Rideshare
+  Subscriptions:
+    - Streaming
+    - Fitness
+  Personal: []
+  Transfers:
+    - CardPayment
+  Fees:
+    - CardFee
+  Income: []
+  Uncategorized: []
+
 rules:
   - match:
       merchant_regex: "(?i)chick[- ]?fil[- ]?a|mcdonald'?s|wendy'?s|taco bell|chipotle|starbucks|dunkin"
@@ -29,7 +64,7 @@ rules:
     subcategory: Rideshare
 
   - match:
-      merchant_regex: "(?i)shell|exxon|chevron|bp\\b|circle k|speedway|costco gas"
+      merchant_regex: "(?i)shell|exxon|chevron|bp\\b|circle k|speedway|costco gas|love'?s|loves\\b|sheetz|quik\\s?trip|\\bqt\\b|wawa|racetrac(?:k)?|pilot\\b|flying j|murphy express|casey'?s|kum\\s?&\\s?go"
     category: Transport
     subcategory: Gas
 
