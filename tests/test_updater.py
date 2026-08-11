@@ -60,17 +60,22 @@ def test_launch_installer_uses_bounded_handoff_before_relaunch(tmp_path: Path, m
     updater._launch_installer(installer)
 
     command = popen.call_args.args[0]
-    assert command[:5] == [
+    assert command[:4] == ["cmd.exe", "/c", "start", ""]
+    assert command[4] == "/MIN"
+    assert command[5:10] == [
         "powershell.exe",
         "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
-        "-Command",
+        "-File",
     ]
-    script = command[5]
+    script_path = Path(command[10])
+    assert script_path.exists()
+    script = script_path.read_text(encoding="utf-8-sig")
     assert "Get-Process -Name" in script
     assert "StatementPipeline" in script
     assert "force-stop" in script
+    assert "taskkill" in script
     assert "Stop-Process -Id $targetId -Force" in script
     assert "install-start" in script
     assert "relaunch-delegated-to-installer" in script
@@ -78,7 +83,6 @@ def test_launch_installer_uses_bounded_handoff_before_relaunch(tmp_path: Path, m
     assert "/VERYSILENT" in script
     assert json.dumps(str(installer)) in script
     assert json.dumps(str(tmp_path / "updates" / "update.log")) in script
-    assert "cmd.exe" not in command
     assert (tmp_path / "updates" / "update.log").exists()
 
 
@@ -111,7 +115,7 @@ def test_install_update_verifies_checksum_before_launching(tmp_path: Path, monke
     )
     monkeypatch.setattr(updater, "_launch_installer", launch)
     monkeypatch.setattr(updater.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(updater.os, "_exit", lambda code: exit_calls.append(code))
+    monkeypatch.setattr(updater, "_force_exit_process_tree", lambda: exit_calls.append(0))
     monkeypatch.setattr(updater, "_start_install_worker", updater._install_worker)
 
     result = updater.install_latest_update()

@@ -26,6 +26,8 @@ PROCESS_NAME = "StatementPipeline"
 GRACEFUL_EXIT_SECONDS = 8
 FORCE_STOP_WAIT_SECONDS = 15
 NETWORK_TIMEOUT_SECONDS = 30
+# Survive parent process/job teardown when the frozen WebView host exits.
+CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 
 
 class UpdateError(RuntimeError):
@@ -34,6 +36,14 @@ class UpdateError(RuntimeError):
 
 def _windows_desktop_build() -> bool:
     return sys.platform == "win32" and bool(getattr(sys, "frozen", False))
+
+
+def _detach_creationflags() -> int:
+    return (
+        int(getattr(subprocess, "DETACHED_PROCESS", 0))
+        | int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+        | CREATE_BREAKAWAY_FROM_JOB
+    )
 
 
 def _version_key(value: str) -> tuple[int, int, int]:
@@ -57,30 +67,6 @@ def _write_update_progress(message: str) -> None:
             handle.write(line)
     except OSError:
         pass
-    # #region agent log
-    try:
-        payload = {
-            "sessionId": "a4748f",
-            "runId": "updater-runtime",
-            "hypothesisId": "H1",
-            "location": "updater.py:_write_update_progress",
-            "message": message,
-            "data": {"pid": os.getpid()},
-            "timestamp": int(time.time() * 1000),
-        }
-        for target in (
-            Path(__file__).resolve().parents[1] / "debug-a4748f.log",
-            path.parent / "debug-a4748f.log",
-        ):
-            try:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with target.open("a", encoding="utf-8") as handle:
-                    handle.write(json.dumps(payload) + "\n")
-            except OSError:
-                continue
-    except Exception:
-        pass
-    # #endregion
 
 
 def _request_json(url: str) -> dict[str, Any]:
@@ -189,7 +175,7 @@ def _installed_executable() -> Path:
     return Path(sys.executable).resolve()
 
 
-def _installer_command(
+def _handoff_script_text(
     installer: Path,
     installed_exe: Path,
     *,
@@ -197,21 +183,14 @@ def _installer_command(
     process_name: str = PROCESS_NAME,
     graceful_seconds: int = GRACEFUL_EXIT_SECONDS,
     force_wait_seconds: int = FORCE_STOP_WAIT_SECONDS,
-) -> list[str]:
-    """Snapshot live app PIDs, stop survivors, then install once.
-
-    Relaunch is owned by the Inno installer (silent postinstall run). Older
-    updaters that started Setup while the app was still alive raced the
-    single-instance lock; Setup now force-closes StatementPipeline.exe before
-    copying files, so this handoff only needs to clear leftovers and run Setup.
-    ``installed_exe`` is retained for callers/tests and recorded in the log.
-    """
+) -> str:
+    """PowerShell that waits for the app to exit, force-kills leftovers, then runs Setup."""
     installer_literal = json.dumps(str(installer))
     exe_literal = json.dumps(str(installed_exe))
     log_literal = json.dumps(str(log_path))
     process_literal = json.dumps(process_name)
-    script = f"""
-$ErrorActionPreference = 'Stop'
+    image_literal = json.dumps(f"{process_name}.exe")
+    return f"""$ErrorActionPreference = 'Stop'
 $logPath = {log_literal}
 function Write-UpdateLog([string]$Message) {{
   $line = '{{0:u}} {{1}}' -f (Get-Date).ToUniversalTime(), $Message
@@ -235,16 +214,21 @@ try {{
     foreach ($targetId in $survivors) {{
       Stop-Process -Id $targetId -Force -ErrorAction SilentlyContinue
     }}
+    # WebView hosts often ignore Stop-Process; taskkill /T clears the tree.
+    # Do not let a "not found" exit code abort the handoff under -ErrorAction Stop.
+    cmd.exe /c ("taskkill /F /IM " + {image_literal} + " /T >nul 2>&1") | Out-Null
     $forceDeadline = (Get-Date).AddSeconds({int(force_wait_seconds)})
     while ((Get-Date) -lt $forceDeadline) {{
-      $alive = @($survivors | Where-Object {{ Get-Process -Id $_ -ErrorAction SilentlyContinue }})
+      $alive = @(Get-Process -Name {process_literal} -ErrorAction SilentlyContinue)
       if ($alive.Count -eq 0) {{ break }}
       Start-Sleep -Milliseconds 400
     }}
-    $stillAlive = @($survivors | Where-Object {{ Get-Process -Id $_ -ErrorAction SilentlyContinue }})
+    $stillAlive = @(Get-Process -Name {process_literal} -ErrorAction SilentlyContinue)
     if ($stillAlive.Count -gt 0) {{
-      throw ('Unable to stop process(es): ' + ($stillAlive -join ','))
+      throw ('Unable to stop process(es): ' + (($stillAlive | ForEach-Object {{ $_.Id }}) -join ','))
     }}
+  }} else {{
+    cmd.exe /c ("taskkill /F /IM " + {image_literal} + " /T >nul 2>&1") | Out-Null
   }}
   Write-UpdateLog 'install-start'
   $p = Start-Process -FilePath {installer_literal} -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru -Wait
@@ -259,13 +243,43 @@ try {{
   exit 1
 }}
 """
+
+
+def _installer_command(
+    installer: Path,
+    installed_exe: Path,
+    *,
+    log_path: Path,
+    process_name: str = PROCESS_NAME,
+    graceful_seconds: int = GRACEFUL_EXIT_SECONDS,
+    force_wait_seconds: int = FORCE_STOP_WAIT_SECONDS,
+) -> list[str]:
+    """Write a handoff script to disk and return a powershell -File invocation.
+
+    Inline ``-Command`` scripts launched from the frozen WebView host were dying
+    before ``handoff-start`` could be written. A on-disk ``.ps1`` plus ``-File``
+    survives parent teardown much more reliably.
+    """
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path = log_path.parent / "update-handoff.ps1"
+    script_path.write_text(
+        _handoff_script_text(
+            installer,
+            installed_exe,
+            log_path=log_path,
+            process_name=process_name,
+            graceful_seconds=graceful_seconds,
+            force_wait_seconds=force_wait_seconds,
+        ),
+        encoding="utf-8-sig",
+    )
     return [
         "powershell.exe",
         "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
-        "-Command",
-        script,
+        "-File",
+        str(script_path),
     ]
 
 
@@ -274,13 +288,38 @@ def _launch_installer(installer: Path) -> None:
     installed_exe = _installed_executable()
     log_path = _update_log_path()
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    command = _installer_command(installer, installed_exe, log_path=log_path)
+    # ``cmd /c start`` breaks away from the parent console/job so the handoff
+    # keeps running after the WebView host is force-killed.
+    wrapped = ["cmd.exe", "/c", "start", "", "/MIN", *command]
     _write_update_progress(f"launch-handoff installer={installer}")
     subprocess.Popen(
-        _installer_command(installer, installed_exe, log_path=log_path),
+        wrapped,
         close_fds=True,
-        creationflags=flags,
+        creationflags=_detach_creationflags(),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
+
+
+def _force_exit_process_tree() -> None:
+    """Exit even when ``os._exit`` is ignored by a frozen WebView host thread."""
+    pid = os.getpid()
+    _write_update_progress(f"self-exit pid={pid}")
+    try:
+        subprocess.Popen(
+            ["taskkill.exe", "/F", "/PID", str(pid), "/T"],
+            close_fds=True,
+            creationflags=_detach_creationflags(),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        pass
+    time.sleep(0.3)
+    os._exit(0)
 
 
 def _install_worker(release: dict[str, Any]) -> None:
@@ -301,9 +340,9 @@ def _install_worker(release: dict[str, Any]) -> None:
         _write_update_progress("checksum-ok")
         _launch_installer(installer)
         _write_update_progress("exit-scheduled")
-        # Hard-exit in this worker thread — more reliable than Timer in frozen WebView builds.
-        time.sleep(0.5)
-        os._exit(0)
+        # Give the breakaway handoff a moment to write handoff-start before we die.
+        time.sleep(1.5)
+        _force_exit_process_tree()
     except Exception as exc:  # noqa: BLE001 — log and keep the running app usable
         _write_update_progress(f"worker-error {type(exc).__name__}: {exc}")
 

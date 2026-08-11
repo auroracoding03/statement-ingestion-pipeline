@@ -44,8 +44,10 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 
 ; Relaunch after silent in-app upgrades too. The PowerShell handoff deliberately
 ; does not start the exe, so Setup is the single relaunch authority.
+; A second cmd-start entry covers silent installs where the direct Run entry is skipped.
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifdoesntexist
+Filename: "{cmd}"; Parameters: "/C start """" ""{app}\{#MyAppExeName}"""; Flags: nowait postinstall skipifdoesntexist runhidden
 
 [Code]
 function PrepareToInstall(var NeedsRestart: Boolean): String;
