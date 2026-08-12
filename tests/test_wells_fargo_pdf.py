@@ -131,6 +131,22 @@ def test_wells_fargo_parser_skips_dates_far_outside_period():
     assert parsed["amount"].tolist() == [4.50]
 
 
+def test_wells_fargo_parser_keeps_leap_day_in_leap_year_cycle():
+    words: list[dict] = []
+    _line(words, 10, [(75, "WELLS FARGO AUTOGRAPH VISA SIGNATURE® CARD")])
+    _line(words, 15, [(75, "Statement Period 02/25/2024 to 03/24/2024")])
+    _line(words, 20, [(75, "ALEX N EXAMPLE")])
+    _line(words, 30, [(75, "Transactions")])
+    _header(words, 35)
+    _line(words, 40, [(75, "Purchases, Balance Transfers & Other Charges")])
+    _row(words, 45, "02/29", "02/29", "ABC100", "LEAP DAY MERCHANT GA", charge="6.50")
+    _row(words, 50, "03/01", "03/01", "ABC101", "IN PERIOD MERCHANT GA", charge="4.25")
+
+    parsed = _parse_pages([_Page(words)], card="wellsfargo-autograph", source_file="wells/leap.pdf")
+
+    assert parsed["posted_date"].astype(str).tolist() == ["2024-02-29", "2024-03-01"]
+
+
 def test_wells_fargo_parser_rejects_image_only_statement():
     with pytest.raises(ValueError, match="no extractable text"):
         _parse_pages([_Page([])], card="wellsfargo", source_file="wells/image.pdf")

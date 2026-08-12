@@ -18,7 +18,7 @@ from typing import Any, Iterable
 import pdfplumber
 import pandas as pd
 
-from .base import coerce_amount, finalize, resolve_cycle_date
+from .base import coerce_amount, finalize, parse_month_day, resolve_cycle_date
 
 PARSER_ID = "capital_one_pdf_v1"
 ISSUER = "Capital One"
@@ -157,8 +157,10 @@ def _last_amount(text: str) -> float | None:
 
 def _infer_cycle_date(value: str, cycle_start: date, cycle_end: date) -> date | None:
     """Resolve Capital One's month/day rows onto the billing cycle (with grace)."""
-    parsed = datetime.strptime(_clean_text(value), "%b %d")
-    return resolve_cycle_date(parsed.month, parsed.day, cycle_start, cycle_end)
+    parsed = parse_month_day(_clean_text(value))
+    if parsed is None:
+        return None
+    return resolve_cycle_date(parsed[0], parsed[1], cycle_start, cycle_end)
 
 
 def _section_heading(text: str) -> tuple[str, str | None] | None:

@@ -131,7 +131,9 @@ Precedence, first match wins:
 
 `txn_id` = sha256(`card|posted_date|amount|raw_description|occurrence`)[:16].
 
-It is deliberately hashed from immutable source text rather than a derived merchant field, so retuning normalization or canonicalization never churns ids. Each statement file is fingerprinted by SHA-256 and recorded in `data/ingestion_manifest.parquet`; `data/transaction_sources.parquet` records every document-to-transaction link. Identical files are skipped. For distinct, overlapping exports, transactions are reconciled as a multiset: two genuine identical purchases survive, but a second statement containing the same two purchases does not double-count them. If any statement fails validation, the full batch is rejected and the existing ledger remains untouched.
+It is deliberately hashed from immutable source text rather than a derived merchant field, so retuning normalization or canonicalization never churns ids. Each statement file is fingerprinted by SHA-256 and recorded in `data/ingestion_manifest.parquet`; `data/transaction_sources.parquet` records every document-to-transaction link.
+
+The ledger is the system of record. The active inbox is a landing queue: ingest parses those files, appends transactions whose `txn_id` is not already present, then moves successful statements to `inbox/_ingested/`. Failed files stay in the queue so you can retry or remove them; they do not block siblings. Identical files and overlapping exports still dedupe by `txn_id` (two genuine identical purchases survive, but a second statement containing the same two purchases does not double-count them). Parser changes affect future uploads only; they do not rewrite historical ledger rows. Rules and merchant groups live in `config/` and are independent of ingest.
 
 Ledgers written before this change are upgraded automatically on load, or explicitly:
 
@@ -161,7 +163,8 @@ Put Cloudflare Access in front of the Pages project before sharing the URL.
 ## Layout
 
 ```
-inbox/<card>/*.csv|pdf   # immutable inputs (gitignored)
+inbox/<card>/*.csv|pdf   # landing queue (gitignored)
+inbox/_ingested/         # successfully ingested originals (gitignored)
 config/rules.yaml        # durable classification asset
 config/merchants.yaml    # durable canonical merchant asset
 config/expected_recurring.yaml

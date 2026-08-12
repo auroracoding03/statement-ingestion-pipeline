@@ -11,10 +11,11 @@ import yaml
 import src.pipeline as pipeline
 import src.store as store
 from config.parsers.generic_csv import parse_generic_csv
-from src.extract import ExtractionError, extract_statements
+from src.extract import extract_statements
 from src.normalize import normalize, transaction_sources
 from src.recurring import detect_recurring
 from src.store import export_for_dashboard
+from src.upload_context import sidecar_path, write_upload_context
 
 
 def test_generic_debit_credit_keeps_signs_and_never_zeroes_blanks(tmp_path: Path):
@@ -116,15 +117,13 @@ def test_underscore_inbox_dirs_are_ignored(tmp_path: Path):
     assert Path(result.manifest.iloc[0]["source_file"]).as_posix() == "generic/ok.csv"
 
 
-def test_parser_failure_does_not_replace_existing_ledger(tmp_path: Path, monkeypatch):
-    inbox = tmp_path / "inbox"
+def test_parser_failure_does_not_block_sibling_documents(tmp_path: Path, monkeypatch):
+    inbox, ledger_path = _patch_ingest_paths(tmp_path, monkeypatch)
     card_dir = inbox / "generic"
     card_dir.mkdir(parents=True)
     (card_dir / "valid.csv").write_text("Date,Description,Amount\n2026-01-01,Coffee,10.00\n")
     (card_dir / "broken.csv").write_text("Date,Description\n2026-01-02,Bad row\n")
 
-    ledger_path = tmp_path / "ledger.parquet"
-    lock_path = tmp_path / "ledger.lock"
     old = normalize(
         pd.DataFrame(
             [
@@ -139,20 +138,18 @@ def test_parser_failure_does_not_replace_existing_ledger(tmp_path: Path, monkeyp
         )
     )
     old.to_parquet(ledger_path, index=False)
-    before = ledger_path.read_bytes()
-    manifests: list[pd.DataFrame] = []
-
-    monkeypatch.setattr(pipeline, "INBOX", inbox)
-    monkeypatch.setattr(pipeline, "LEDGER_PARQUET", ledger_path)
-    monkeypatch.setattr(pipeline, "LEDGER_LOCK", lock_path)
-    monkeypatch.setattr(pipeline, "ensure_dirs", lambda: None)
-    monkeypatch.setattr(pipeline, "write_ingest_manifest", lambda frame: manifests.append(frame.copy()))
 
     result = pipeline.run_ingest()
 
-    assert "error" in result
-    assert ledger_path.read_bytes() == before
-    assert manifests and "failed" in set(manifests[0]["status"])
+    assert "error" not in result
+    assert result["ingested"] == 1
+    assert result["failed"]
+    assert (card_dir / "broken.csv").exists()
+    assert not (card_dir / "valid.csv").exists()
+    assert (inbox / "_ingested" / "generic" / "valid.csv").exists()
+    ledger = pd.read_parquet(ledger_path)
+    assert "EXISTING" in set(ledger["raw_description"])
+    assert "Coffee" in set(ledger["raw_description"])
 
 
 def test_recurring_returns_empty_schema_for_singleton_merchants():
@@ -253,3 +250,141 @@ def test_aggregate_export_never_contains_transaction_rows_or_stale_full_files(tm
     assert "PRIVATE COFFEE ORDER" not in published
     assert "/Users/me/private.csv" not in published
     assert "PRIVATE COFFEE" not in published
+
+
+def _patch_ingest_paths(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
+    inbox = tmp_path / "inbox"
+    data = tmp_path / "data"
+    inbox.mkdir()
+    data.mkdir()
+    ledger = data / "ledger.parquet"
+    monkeypatch.setattr(pipeline, "INBOX", inbox)
+    monkeypatch.setattr(pipeline, "LEDGER_PARQUET", ledger)
+    monkeypatch.setattr(pipeline, "LEDGER_LOCK", data / "ledger.lock")
+    monkeypatch.setattr(pipeline, "INGEST_MANIFEST", data / "ingestion_manifest.parquet")
+    monkeypatch.setattr(pipeline, "TRANSACTION_SOURCES_PARQUET", data / "transaction_sources.parquet")
+    monkeypatch.setattr(pipeline, "ensure_dirs", lambda: None)
+    return inbox, ledger
+
+
+def _write_csv(path: Path, body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("Date,Description,Amount\n" + body)
+
+
+def test_ingest_appends_without_dropping_classified_rows(tmp_path: Path, monkeypatch):
+    inbox, ledger_path = _patch_ingest_paths(tmp_path, monkeypatch)
+    _write_csv(inbox / "generic" / "jan.csv", "2026-01-01,Coffee,10.00\n")
+    first = pipeline.run_ingest()
+    assert first["ingested"] == 1
+
+    ledger = pd.read_parquet(ledger_path)
+    ledger["category"] = "Food"
+    ledger["classified_by"] = "manual"
+    ledger["canonical_merchant"] = "Coffee Cart"
+    ledger["merchant_source"] = "manual"
+    ledger.to_parquet(ledger_path, index=False)
+
+    _write_csv(inbox / "generic" / "feb.csv", "2026-01-01,Coffee,10.00\n2026-02-01,Tea,4.00\n")
+    second = pipeline.run_ingest()
+
+    assert second["ingested"] == 1
+    updated = pd.read_parquet(ledger_path)
+    coffee = updated[updated["raw_description"] == "Coffee"].iloc[0]
+    assert coffee["category"] == "Food"
+    assert coffee["classified_by"] == "manual"
+    assert coffee["canonical_merchant"] == "Coffee Cart"
+    assert "Tea" in set(updated["raw_description"])
+
+
+def test_ingest_normalizes_overlapping_pending_documents_as_one_batch(tmp_path: Path, monkeypatch):
+    inbox, ledger_path = _patch_ingest_paths(tmp_path, monkeypatch)
+    _write_csv(inbox / "generic" / "a.csv", "2026-01-06,COFFEE CART,4.25\n2026-01-06,COFFEE CART,4.25\n")
+    _write_csv(inbox / "generic" / "b.csv", "2026-01-06,COFFEE CART,4.25\n")
+
+    result = pipeline.run_ingest()
+
+    assert result["ingested"] == 2
+    ledger = pd.read_parquet(ledger_path)
+    assert len(ledger) == 2
+    assert ledger["txn_id"].nunique() == 2
+
+
+def test_reupload_of_same_bytes_adds_zero_rows_and_archives(tmp_path: Path, monkeypatch):
+    inbox, ledger_path = _patch_ingest_paths(tmp_path, monkeypatch)
+    body = "2026-01-01,Coffee,10.00\n"
+    _write_csv(inbox / "generic" / "jan.csv", body)
+    pipeline.run_ingest()
+    _write_csv(inbox / "generic" / "copy.csv", body)
+
+    result = pipeline.run_ingest()
+
+    assert result["ingested"] == 0
+    assert len(pd.read_parquet(ledger_path)) == 1
+    assert not (inbox / "generic" / "copy.csv").exists()
+    assert (inbox / "_ingested" / "generic" / "copy.csv").exists()
+
+
+def test_all_failed_documents_leave_ledger_untouched(tmp_path: Path, monkeypatch):
+    inbox, ledger_path = _patch_ingest_paths(tmp_path, monkeypatch)
+    _write_csv(inbox / "generic" / "ok.csv", "2026-01-01,Coffee,10.00\n")
+    pipeline.run_ingest()
+    before = ledger_path.read_bytes()
+    (inbox / "generic" / "broken.csv").write_text("Date,Description\n2026-01-02,Bad row\n")
+
+    result = pipeline.run_ingest()
+
+    assert "error" in result
+    assert ledger_path.read_bytes() == before
+    assert (inbox / "generic" / "broken.csv").exists()
+
+
+def test_retry_after_archive_failure_does_not_duplicate_transactions(tmp_path: Path, monkeypatch):
+    inbox, ledger_path = _patch_ingest_paths(tmp_path, monkeypatch)
+    _write_csv(inbox / "generic" / "jan.csv", "2026-01-01,Coffee,10.00\n")
+
+    def fail_archive(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(pipeline, "archive_statement", fail_archive)
+    first = pipeline.run_ingest()
+    assert first["ingested"] == 1
+    assert (inbox / "generic" / "jan.csv").exists()
+
+    import src.extract as extract
+
+    monkeypatch.setattr(pipeline, "archive_statement", extract.archive_statement)
+    second = pipeline.run_ingest()
+
+    assert second["ingested"] == 0
+    assert len(pd.read_parquet(ledger_path)) == 1
+    assert not (inbox / "generic" / "jan.csv").exists()
+
+
+def test_successful_sidecar_moves_with_statement(tmp_path: Path, monkeypatch):
+    inbox, _ledger_path = _patch_ingest_paths(tmp_path, monkeypatch)
+    statement = inbox / "generic" / "jan.csv"
+    _write_csv(statement, "2026-01-01,Coffee,10.00\n")
+    write_upload_context(statement, issuer="Chase", product="Sapphire Preferred")
+
+    pipeline.run_ingest()
+
+    archived = inbox / "_ingested" / "generic" / "jan.csv"
+    assert archived.exists()
+    assert sidecar_path(archived).exists()
+    assert not statement.exists()
+    assert not sidecar_path(statement).exists()
+
+
+def test_ingest_does_not_touch_rules_or_merchants(tmp_path: Path, monkeypatch):
+    import src.paths as paths
+
+    inbox, _ledger_path = _patch_ingest_paths(tmp_path, monkeypatch)
+    _write_csv(inbox / "generic" / "jan.csv", "2026-01-01,Coffee,10.00\n")
+    rules = paths.RULES_PATH.read_text(encoding="utf-8")
+    merchants = paths.MERCHANTS_PATH.read_text(encoding="utf-8")
+
+    pipeline.run_ingest()
+
+    assert paths.RULES_PATH.read_text(encoding="utf-8") == rules
+    assert paths.MERCHANTS_PATH.read_text(encoding="utf-8") == merchants

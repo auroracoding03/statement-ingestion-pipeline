@@ -27,6 +27,10 @@ export function PipelineBar() {
         setError(`${job.error ?? "Job failed"}${detailText}`);
       } else {
         setMessage(summarize(stage, job.result));
+        if (stage === "ingest") {
+          const failed = ingestFailures(job.result);
+          if (failed.length) setError(failed.join(" | "));
+        }
         window.dispatchEvent(new CustomEvent("ledger-changed"));
       }
     } catch (err) {
@@ -40,7 +44,10 @@ export function PipelineBar() {
   return (
     <section className="pipeline-panel" aria-labelledby="pipeline-title">
       <h2 id="pipeline-title">Process statements</h2>
-      <p className="muted">After adding statements, run each stage in order to refresh your ledger.</p>
+      <p className="muted">
+        Ingest adds new transactions to your ledger, then moves successful files out of the queue.
+        Classify applies your rules to anything still uncategorized.
+      </p>
       <div className="pipeline-actions">
         <button className="btn" disabled={busy} onClick={() => run("ingest", api.startIngest)}>
           {running === "ingest" ? "Ingesting…" : "Ingest"}
@@ -66,17 +73,36 @@ export function PipelineBar() {
   );
 }
 
+function ingestFailures(result: unknown): string[] {
+  const r = (result ?? {}) as { failed?: unknown; details?: unknown };
+  if (Array.isArray(r.failed) && r.failed.every((item) => typeof item === "string")) {
+    return r.failed as string[];
+  }
+  if (Array.isArray(r.details) && r.details.every((item) => typeof item === "string")) {
+    return r.details as string[];
+  }
+  return [];
+}
+
 function summarize(stage: string, result: unknown): string {
-  const r = (result ?? {}) as Record<string, number | string>;
+  const r = (result ?? {}) as Record<string, number | string | string[]>;
   if (stage === "ingest") {
     const ingested = Number(r.ingested ?? 0);
     const total = Number(r.total ?? 0);
+    const archived = Array.isArray(r.archived) ? r.archived.length : Number(r.archived ?? 0);
+    const failed = ingestFailures(result).length;
     if (typeof r.message === "string" && r.message.trim()) return r.message;
-    if (ingested === 0 && total > 0) {
-      return `No new transactions (${total} already in ledger)`;
+    const parts: string[] = [];
+    if (ingested > 0) {
+      parts.push(`Ingested ${ingested} new transactions (${total} total in ledger)`);
+    } else if (total > 0) {
+      parts.push(`No new transactions (${total} already in ledger)`);
+    } else {
+      parts.push("Ingested 0 transactions");
     }
-    if (ingested === 0) return "Ingested 0 transactions";
-    return `Ingested ${ingested} new transactions (${total} total in ledger)`;
+    if (archived > 0) parts.push(`processed ${archived} statements`);
+    if (failed > 0) parts.push(`${failed} need attention`);
+    return parts.join("; ");
   }
   if (stage.startsWith("classify")) {
     return `rule ${r.rule ?? 0} · merchant ${r.merchant ?? 0} · ai ${r.ai ?? 0} · manual ${r.manual ?? 0} · open ${r.open ?? 0}`;

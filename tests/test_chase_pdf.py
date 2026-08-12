@@ -112,6 +112,21 @@ def test_chase_parser_keeps_dates_within_one_day_grace():
     assert parsed["posted_date"].astype(str).tolist() == ["2024-11-24", "2024-12-01"]
 
 
+def test_chase_parser_keeps_leap_day_in_leap_year_cycle():
+    words: list[dict] = []
+    _line(words, 10, [(50, "amazon | CHASE"), (250, "YOUR PRIME VISA POINTS")])
+    _line(words, 15, [(50, "Opening/Closing Date"), (250, "02/25/24 - 03/24/24")])
+    _line(words, 20, [(50, "ALEX EXAMPLE")])
+    _line(words, 30, [(50, "PURCHASE")])
+    _header(words, 40)
+    _row(words, 50, "02/29", "LEAP DAY COFFEE", "6.50")
+    _row(words, 60, "03/01", "IN PERIOD COFFEE", "4.25")
+
+    parsed = _parse_pages([_Page(words)], card="chase-amazon", source_file="chase/leap.pdf")
+
+    assert parsed["posted_date"].astype(str).tolist() == ["2024-02-29", "2024-03-01"]
+
+
 def test_chase_parser_skips_dates_far_outside_period():
     words: list[dict] = []
     _line(words, 10, [(50, "amazon | CHASE"), (250, "YOUR PRIME VISA POINTS")])

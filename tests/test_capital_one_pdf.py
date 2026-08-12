@@ -168,6 +168,28 @@ def test_capital_one_parser_skips_dates_far_outside_period():
     assert parsed["amount"].tolist() == [4.50]
 
 
+def test_capital_one_parser_keeps_leap_day_in_leap_year_cycle():
+    words: list[dict] = []
+    _add_line(
+        words,
+        10,
+        [
+            (50, "Capital One"),
+            (180, "Savor Credit Card | World Elite Mastercard"),
+            (430, "Feb 25, 2024 - Mar 24, 2024"),
+        ],
+    )
+    _add_line(words, 20, [(50, "Alex Example : Transactions")])
+    _header(words, 25)
+    _activity_row(words, 30, "Feb 29", "Feb 29", "LEAP DAY MERCHANT", "$6.50")
+    _activity_row(words, 35, "Mar 01", "Mar 01", "IN PERIOD MERCHANT", "$4.25")
+    _add_line(words, 40, [(50, "Total Transactions"), (530, "$10.75")])
+
+    parsed = _parse_pages([_Page(words)], card="capitalone", source_file="capitalone/leap.pdf")
+
+    assert parsed["posted_date"].astype(str).tolist() == ["2024-02-29", "2024-03-01"]
+
+
 def test_capital_one_parser_rejects_image_only_documents():
     with pytest.raises(ValueError, match="no extractable text"):
         _parse_pages([_Page([])], card="capitalone", source_file="capitalone/image.pdf")

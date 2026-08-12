@@ -42,24 +42,34 @@ def _print_counts(counts: dict) -> None:
 
 @app.command()
 def ingest() -> None:
-    """Extract, normalize, canonicalize, and dedup inbox statements."""
+    """Parse new inbox statements and append unknown transactions to the ledger."""
     result = pipeline.run_ingest()
     if result.get("error"):
         console.print(f"[red]{result['error']}[/red]")
-        for detail in result.get("details") or []:
+        for detail in result.get("details") or result.get("failed") or []:
             console.print(f"[red]  {detail}[/red]")
         raise typer.Exit(code=1)
     ingested = int(result.get("ingested") or 0)
     total = int(result.get("total") or 0)
-    if ingested == 0:
+    archived = result.get("archived") or []
+    failed = result.get("failed") or []
+    if ingested:
+        console.print(
+            f"[green]Ingested {ingested} new transactions ({total} total) → {result.get('path')}[/green]"
+        )
+    else:
         message = result.get("message") or (
             f"No new transactions ({total} already in ledger)." if total else "Nothing ingested."
         )
         console.print(f"[yellow]{message}[/yellow]")
+    if archived:
+        console.print(f"[dim]Processed {len(archived)} statement(s); successful files left the active inbox.[/dim]")
+    if failed:
+        console.print(f"[red]{len(failed)} statement(s) need attention:[/red]")
+        for detail in failed:
+            console.print(f"[red]  {detail}[/red]")
+    if ingested == 0 and not archived:
         raise typer.Exit(code=0 if total else 1)
-    console.print(
-        f"[green]Ingested {ingested} new transactions ({total} total) → {result['path']}[/green]"
-    )
 
 
 @app.command()

@@ -116,7 +116,7 @@ export function Ingestion() {
     <>
       <PageHeader
         title="Ingest statements"
-        lede="Add PDF or CSV statements, confirm only anything the app cannot identify, then process them into your ledger."
+        lede="Add PDF or CSV statements, confirm only anything the app cannot identify, then ingest them. Successful files leave the queue; your ledger keeps growing."
       />
       <section
         className="ingestion-dropzone"

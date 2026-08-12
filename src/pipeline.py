@@ -15,11 +15,19 @@ from src.ai_suggest import propose_canonicals_for_clusters, suggest
 from src import ai_review
 from src.atomic import atomic_write_parquet
 from src.classify import classify as apply_rules
-from src.extract import ExtractionError, extract_statements
+from src.extract import archive_statement, extract_statements
 from src.merchants import canonicalize, cluster_unknowns
 from src.migrate import migrate_ledger, needs_migration
 from src.normalize import CLASSIFICATION_COLUMNS, LEDGER_COLUMNS, normalize, transaction_sources
-from src.paths import INBOX, LEDGER_LOCK, LEDGER_PARQUET, PROPOSALS_PARQUET, ensure_dirs
+from src.paths import (
+    INBOX,
+    INGEST_MANIFEST,
+    LEDGER_LOCK,
+    LEDGER_PARQUET,
+    PROPOSALS_PARQUET,
+    TRANSACTION_SOURCES_PARQUET,
+    ensure_dirs,
+)
 from src.recurring import detect_recurring, reconcile
 from src.store import (
     export_for_dashboard,
@@ -69,43 +77,90 @@ def _ensure_columns(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def run_ingest() -> dict:
-    """Extract, validate, normalize, and atomically refresh the ledger."""
+    """Parse the active inbox and append unknown transactions to the ledger."""
     ensure_dirs()
-    try:
-        extraction = extract_statements(INBOX)
-    except ExtractionError as exc:
-        # The prior ledger deliberately survives a failed batch. Keep the
-        # manifest so the UI/CLI can explain exactly which document failed.
+    extraction = extract_statements(INBOX)
+    failed = list(extraction.errors)
+
+    if extraction.manifest.empty:
+        prior = load_ledger() if LEDGER_PARQUET.exists() else pd.DataFrame(columns=ALL_COLUMNS)
+        return {
+            "ingested": 0,
+            "total": len(prior),
+            "failed": [],
+            "archived": [],
+            "message": "No statement files found.",
+        }
+
+    if not extraction.successful and failed:
         with ledger_lock():
-            write_ingest_manifest(exc.manifest)
-        return {"error": "Statement parsing failed; ledger was not changed.", "details": exc.errors}
+            write_ingest_manifest(extraction.manifest, path=INGEST_MANIFEST)
+        prior = load_ledger() if LEDGER_PARQUET.exists() else pd.DataFrame(columns=ALL_COLUMNS)
+        return {
+            "error": "Statement parsing failed; ledger was not changed.",
+            "details": failed,
+            "failed": failed,
+            "ingested": 0,
+            "total": len(prior),
+            "archived": [],
+        }
 
     raw = extraction.frame
-    if raw.empty:
-        return {"ingested": 0, "total": 0, "message": "No statement files found."}
-
-    frame = normalize(raw)
-    source_links = transaction_sources(raw)
-
     with ledger_lock():
-        prior = pd.DataFrame(columns=ALL_COLUMNS)
-        if LEDGER_PARQUET.exists():
-            prior = load_ledger()
-            carry = ["txn_id", *CLASSIFICATION_COLUMNS, "canonical_merchant", "merchant_source"]
-            existing = [c for c in carry if c in prior.columns]
-            frame = frame.drop(
-                columns=[c for c in ("canonical_merchant", "merchant_source") if c in frame.columns]
-            ).merge(prior[existing], on="txn_id", how="left")
+        prior = load_ledger() if LEDGER_PARQUET.exists() else pd.DataFrame(columns=ALL_COLUMNS)
+        prior = _ensure_columns(prior)
+        prior_ids = set(prior["txn_id"].dropna()) if not prior.empty else set()
+        combined = prior
+        path = LEDGER_PARQUET if LEDGER_PARQUET.exists() else None
+        if not raw.empty:
+            incoming = normalize(raw)
+            source_links = transaction_sources(raw)
+            new_rows = incoming[~incoming["txn_id"].isin(prior_ids)].copy()
+            if not new_rows.empty:
+                new_rows = canonicalize(_ensure_columns(new_rows))
+                if prior.empty:
+                    combined = new_rows
+                else:
+                    combined = pd.concat([prior, new_rows], ignore_index=True)
+                combined = combined.drop_duplicates(subset=["txn_id"], keep="first")
+                combined = _ensure_columns(combined)
+                combined["posted_date"] = pd.to_datetime(combined["posted_date"]).dt.date
+                path = write_ledger(combined, path=LEDGER_PARQUET)
+            write_transaction_sources(source_links, path=TRANSACTION_SOURCES_PARQUET)
+        write_ingest_manifest(extraction.manifest, path=INGEST_MANIFEST)
 
-        frame = _ensure_columns(frame)
-        frame = canonicalize(frame)
-        path = write_ledger(frame)
-        write_ingest_manifest(extraction.manifest)
-        write_transaction_sources(source_links)
+    archived: list[str] = []
+    for card, statement in extraction.successful:
+        try:
+            archived.append(str(archive_statement(statement, inbox=INBOX, card=card)))
+        except OSError as exc:
+            failed.append(f"{statement.name}: {type(exc).__name__}: {exc}")
 
-    prior_ids = set(prior.get("txn_id", pd.Series(dtype=str)).dropna())
-    new_count = int((~frame["txn_id"].isin(prior_ids)).sum())
-    return {"ingested": new_count, "total": len(frame), "path": str(path)}
+    new_count = 0
+    if not combined.empty:
+        new_count = int((~combined["txn_id"].isin(prior_ids)).sum())
+
+    result = {
+        "ingested": new_count,
+        "total": len(combined),
+        "failed": failed,
+        "archived": archived,
+        "details": failed,
+    }
+    if path is not None:
+        result["path"] = str(path)
+    if failed:
+        result["message"] = (
+            f"Ingested {new_count} new transactions; processed {len(archived)} statements; "
+            f"{len(failed)} need attention."
+        )
+    elif new_count == 0:
+        result["message"] = (
+            f"No new transactions ({len(combined)} already in ledger)."
+            if len(combined)
+            else "Nothing ingested."
+        )
+    return result
 
 
 def run_classify(with_ai: bool = False) -> dict:

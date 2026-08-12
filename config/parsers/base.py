@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
@@ -61,6 +62,30 @@ def coerce_date(value: Any) -> datetime.date:
     if pd.isna(parsed):
         raise ValueError(f"Unparseable date: {value!r}")
     return parsed.date()
+
+
+_MONTH_DAY_NUMERIC = re.compile(r"^(\d{1,2})/(\d{1,2})$")
+
+
+def parse_month_day(value: str) -> tuple[int, int] | None:
+    """Return (month, day) without using strptime's non-leap year 1900 default.
+
+    ``datetime.strptime("02/29", "%m/%d")`` fails because it fills in 1900.
+    Callers then resolve the year against the statement cycle, which may be a
+    leap year such as 2024.
+    """
+    text = " ".join(str(value or "").split())
+    numeric = _MONTH_DAY_NUMERIC.fullmatch(text)
+    if numeric:
+        month, day = int(numeric.group(1)), int(numeric.group(2))
+        if 1 <= month <= 12 and 1 <= day <= 31:
+            return month, day
+        return None
+    try:
+        parsed = datetime.strptime(f"{text} 2024", "%b %d %Y")
+    except ValueError:
+        return None
+    return parsed.month, parsed.day
 
 
 def resolve_cycle_date(

@@ -11,7 +11,7 @@ from typing import Any, Iterable
 import pdfplumber
 import pandas as pd
 
-from .base import coerce_amount, finalize, resolve_cycle_date
+from .base import coerce_amount, finalize, parse_month_day, resolve_cycle_date
 
 ISSUER = "Wells Fargo"
 PERIOD_RE = re.compile(r"Statement Period\s+(?P<start>\d{2}/\d{2}/\d{4})\s+to\s+(?P<end>\d{2}/\d{2}/\d{4})", re.I)
@@ -130,8 +130,10 @@ def _cardholder(text: str) -> str | None:
 
 
 def _resolve_date(value: str, start: date, end: date) -> date | None:
-    parsed = datetime.strptime(value, "%m/%d")
-    return resolve_cycle_date(parsed.month, parsed.day, start, end)
+    parsed = parse_month_day(value)
+    if parsed is None:
+        return None
+    return resolve_cycle_date(parsed[0], parsed[1], start, end)
 
 
 def _amount(text: str, sign: int) -> float | None:
