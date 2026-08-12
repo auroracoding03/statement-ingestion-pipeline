@@ -51,6 +51,7 @@ from src.classify import (
 )
 from src.extract import iter_statement_files
 from src.merchants import append_merchant, delete_merchant, load_merchants
+from src.overview import build_month_summary, cardholders
 from src.paths import DASHBOARD, EXPORT_DIR, FINANCE_DB, INBOX, PENDING_UPLOADS, UI, ensure_dirs
 from src.review import needs_review
 from src.statement_identity import detect_statement_identity
@@ -146,6 +147,7 @@ def get_status() -> dict:
         "canonical_merchants": canonical,
         "unknown_merchants": unknown,
         "review_pending": int(ledger.apply(needs_review, axis=1).sum()) if not ledger.empty else 0,
+        "cardholders": cardholders(ledger),
         "inbox_files": [{"card": card, "name": path.name} for card, path in files],
         "duckdb": FINANCE_DB.exists(),
         "exports": EXPORT_DIR.exists(),
@@ -536,6 +538,15 @@ def get_categories_monthly() -> list[dict]:
         .sort_values(["month", "category"])
     )
     return _records(frame)
+
+
+@app.get("/api/overview/month")
+def get_overview_month(
+    month: str | None = Query(default=None),
+    cardholder: str | None = Query(default=None),
+) -> dict:
+    ledger = pipeline.load_ledger()
+    return build_month_summary(ledger, month=month, cardholder=cardholder)
 
 
 # --------------------------------------------------------------------------- merchants

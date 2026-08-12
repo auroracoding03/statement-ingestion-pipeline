@@ -142,6 +142,7 @@ def workspace(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setattr(api_app, "PENDING_UPLOADS", tmp_path / "data" / "pending_uploads", raising=False)
     (tmp_path / "data" / "pending_uploads").mkdir()
     monkeypatch.setattr(api_app, "ensure_dirs", lambda: None)
+    paths_mod.EXPECTED_RECURRING_PATH.write_text("bills: []\n")
 
     original_write = store_mod.write_ledger
     monkeypatch.setattr(
@@ -176,6 +177,21 @@ def test_status_reports_counts(client: TestClient):
     body = r.json()
     assert body["ledger_exists"] is True
     assert body["counts"]["total"] == 2
+    assert body["cardholders"] == []
+
+
+def test_overview_month_summarizes_latest_month(client: TestClient):
+    r = client.get("/api/overview/month")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["month"] == "2026-01"
+    assert body["months"] == ["2026-01"]
+    assert body["charge_count"] == 2
+    assert body["spend_total"] == 90.94
+    assert body["spend_delta"] is None
+    assert body["uncategorized_count"] == 2
+    assert body["review_count"] == 2
+    assert body["tagged"] == [{"id": "date", "label": "Date", "kind": "occasion", "total": 6.75}]
 
 
 def test_ai_setup_and_proposal_routes(client: TestClient, monkeypatch):

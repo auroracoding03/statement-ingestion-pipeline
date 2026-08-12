@@ -15,6 +15,7 @@ import type {
   Job,
   JobStart,
   Merchant,
+  OverviewMonth,
   ReconciliationRow,
   RecurringRow,
   ReviewQueue,
@@ -111,6 +112,7 @@ export const api = {
       canonical_merchants: summary?.canonical_count ?? 0,
       unknown_merchants: summary?.unknown_merchant_count ?? 0,
       review_pending: summary?.uncategorized_count ?? 0,
+      cardholders: [],
       inbox_files: [],
       duckdb: false,
       exports: true,
@@ -134,6 +136,35 @@ export const api = {
   async categoriesMonthly(): Promise<CategoryMonthly[]> {
     if (canWrite) return req<CategoryMonthly[]>("/api/categories/monthly");
     return staticJSON<CategoryMonthly[]>("category_monthly", []);
+  },
+
+  async overviewMonth(params: { month?: string; cardholder?: string } = {}): Promise<OverviewMonth> {
+    if (!canWrite) {
+      return {
+        month: params.month ?? null,
+        months: [],
+        cardholder: params.cardholder ?? null,
+        spend_total: 0,
+        prior_spend_total: null,
+        spend_delta: null,
+        spend_delta_pct: null,
+        charge_count: 0,
+        payments_and_refunds: 0,
+        uncategorized_total: 0,
+        uncategorized_count: 0,
+        review_count: 0,
+        categories: [],
+        holders: [],
+        large_charges: [],
+        tagged: [],
+        bills: [],
+      };
+    }
+    const qs = new URLSearchParams();
+    if (params.month) qs.set("month", params.month);
+    if (params.cardholder) qs.set("cardholder", params.cardholder);
+    const suffix = qs.toString() ? `?${qs}` : "";
+    return req<OverviewMonth>(`/api/overview/month${suffix}`);
   },
 
   async recurring(): Promise<RecurringRow[]> {

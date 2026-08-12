@@ -1,8 +1,8 @@
+import { useMemo, useState } from "react";
 import {
   Bar,
   BarChart,
   CartesianGrid,
-  Legend,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -13,20 +13,51 @@ import { ErrorNote, Loading, Metric, PageHeader, StatusPill } from "../component
 import { api, canWrite } from "../lib/dataSource";
 import { compactMoney, money, shortDate } from "../lib/format";
 import { hashHref } from "../lib/router";
+import type { OverviewMonth } from "../lib/types";
 import { useAsync } from "../lib/useAsync";
+
+const COLORS = [
+  "#0f5c4c",
+  "#8a4b12",
+  "#3d5a80",
+  "#8b1e1e",
+  "#5b7553",
+  "#9c6644",
+  "#4a4e69",
+  "#2a9d8f",
+  "#6d597a",
+  "#b5651d",
+];
 
 export function Overview() {
   const status = useAsync(() => api.status(), []);
-  const recon = useAsync(() => api.reconciliation(), []);
-  const monthly = useAsync(() => api.categoriesMonthly(), []);
+  const [month, setMonth] = useState("");
+  const [cardholder, setCardholder] = useState("");
+  const summary = useAsync(
+    () => api.overviewMonth({ month: month || undefined, cardholder: cardholder || undefined }),
+    [month, cardholder],
+  );
 
-  const chart = buildChartData(monthly.data ?? []);
+  const data = summary.data;
+  const months = data?.months ?? [];
+  const selectedMonth = month || data?.month || "";
+  const holders = status.data?.cardholders ?? [];
+  const chartRows = useMemo(
+    () => (data?.categories ?? []).filter((row) => row.total > 0),
+    [data],
+  );
+  const movers = useMemo(() => {
+    return [...(data?.categories ?? [])]
+      .filter((row) => row.delta != null && row.delta !== 0)
+      .sort((a, b) => Math.abs(b.delta ?? 0) - Math.abs(a.delta ?? 0))
+      .slice(0, 6);
+  }, [data]);
 
   return (
     <>
       <PageHeader
         title="Monthly finance overview"
-        lede="Recurring bills, category spend, and how much of the ledger has a resolved merchant identity."
+        lede="Pick a month for a household spend conversation: what changed, what was a one-off, and which bills posted."
       />
 
       {status.error && <ErrorNote error={status.error} />}
@@ -56,100 +87,223 @@ export function Overview() {
         </div>
       )}
 
-      <h2>Spend by category</h2>
-      {monthly.loading && <Loading what="categories" />}
-      {chart.data.length > 0 && (
-        <div className="chart-wrap">
-          <ResponsiveContainer width="100%" height={320}>
-            <BarChart data={chart.data} margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e7dfd2" vertical={false} />
-              <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-              <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => compactMoney(Number(v))} />
-              <Tooltip
-                formatter={(value, name) => [money(Number(value)), String(name ?? "")]}
-                contentStyle={{ fontSize: 13, borderRadius: 4 }}
-              />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
-              {chart.categories.map((category, i) => (
-                <Bar key={category} dataKey={category} stackId="spend" fill={COLORS[i % COLORS.length]} />
+      <div className="toolbar overview-controls">
+        <label>
+          Month
+          <select value={selectedMonth} onChange={(event) => setMonth(event.target.value)} disabled={!months.length}>
+            {months.length === 0 && <option value="">No months yet</option>}
+            {[...months].reverse().map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+        </label>
+        {canWrite && holders.length > 0 && (
+          <label>
+            Spend by
+            <select value={cardholder} onChange={(event) => setCardholder(event.target.value)}>
+              <option value="">All</option>
+              {holders.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
               ))}
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-      {!monthly.loading && chart.data.length === 0 && (
-        <p className="muted">No categorized spend yet. Run ingest and classify to populate this.</p>
-      )}
+            </select>
+          </label>
+        )}
+      </div>
 
-      <h2>Expected bill reconciliation</h2>
-      {recon.loading && <Loading what="reconciliation" />}
-      {recon.data && recon.data.length > 0 ? (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Bill</th>
-                <th>Status</th>
-                <th className="num">Expected</th>
-                <th>Matched merchant</th>
-                <th className="num">Average</th>
-                <th>Last seen</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recon.data.map((row) => (
-                <tr key={row.bill}>
-                  <td>{row.bill}</td>
-                  <td>
-                    <StatusPill status={row.status} />
-                  </td>
-                  <td className="num">{money(row.expected_amount)}</td>
-                  <td>{row.matched_merchant ?? "—"}</td>
-                  <td className="num">{money(row.matched_avg)}</td>
-                  <td>{shortDate(row.last_seen)}</td>
-                </tr>
+      {summary.error && <ErrorNote error={summary.error} />}
+      {summary.loading && <Loading what="month summary" />}
+
+      {data && !summary.loading && (
+        <>
+          <div className="metrics">
+            <Metric label="Spend this month" value={money(data.spend_total)} />
+            <Metric label="vs last month" value={deltaLabel(data)} />
+            <Metric label="Charges" value={data.charge_count} />
+            <Metric label="Payments & refunds" value={money(data.payments_and_refunds)} />
+            <Metric
+              label="Uncategorized"
+              value={`${money(data.uncategorized_total)} · ${data.uncategorized_count}`}
+            />
+            <Metric
+              label="Needs review this month"
+              value={
+                canWrite && data.review_count > 0 ? (
+                  <a href={hashHref("/review")}>{data.review_count}</a>
+                ) : (
+                  data.review_count
+                )
+              }
+            />
+          </div>
+
+          {data.holders.length > 0 && (
+            <div className="holder-split">
+              {data.holders.map((row) => (
+                <span key={row.name}>
+                  <strong>{row.name}</strong> {money(row.total)}
+                </span>
               ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        !recon.loading && <p className="muted">No expected bills configured yet.</p>
+            </div>
+          )}
+
+          <h2>Spend by category</h2>
+          {chartRows.length > 0 ? (
+            <div className="chart-wrap">
+              <ResponsiveContainer width="100%" height={Math.max(280, chartRows.length * 28)}>
+                <BarChart data={chartRows} layout="vertical" margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e7dfd2" horizontal={false} />
+                  <XAxis type="number" tick={{ fontSize: 12 }} tickFormatter={(value) => compactMoney(Number(value))} />
+                  <YAxis type="category" dataKey="category" width={120} tick={{ fontSize: 12 }} />
+                  <Tooltip
+                    formatter={(value) => [money(Number(value)), "Spend"]}
+                    contentStyle={{ fontSize: 13, borderRadius: 4 }}
+                  />
+                  <Bar dataKey="total" fill={COLORS[0]} radius={[0, 3, 3, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <p className="muted">No categorized spend for this month{cardholder ? ` for ${cardholder}` : ""}.</p>
+          )}
+
+          <div className="overview-grid">
+            {movers.length > 0 && (
+              <section>
+                <h2>What changed</h2>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Category</th>
+                        <th className="num">This month</th>
+                        <th className="num">Change</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {movers.map((row) => (
+                        <tr key={row.category}>
+                          <td>{row.category}</td>
+                          <td className="num">{money(row.total)}</td>
+                          <td className={`num ${deltaClass(row.delta)}`}>{signedMoney(row.delta)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
+
+            {data.large_charges.length > 0 && (
+              <section>
+                <h2>Large charges</h2>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Merchant</th>
+                        <th className="num">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.large_charges.map((row) => (
+                        <tr key={`${row.posted_date}-${row.merchant}-${row.amount}`}>
+                          <td>{shortDate(row.posted_date)}</td>
+                          <td>
+                            {row.merchant}
+                            <div className="muted">
+                              {[row.category, row.cardholder].filter(Boolean).join(" · ")}
+                            </div>
+                          </td>
+                          <td className="num">{money(row.amount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
+
+            {data.tagged.length > 0 && (
+              <section>
+                <h2>Trips & occasions</h2>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Tag</th>
+                        <th className="num">Spend</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.tagged.map((row) => (
+                        <tr key={row.id}>
+                          <td>
+                            {row.label}
+                            <div className="muted">{row.kind}</div>
+                          </td>
+                          <td className="num">{money(row.total)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
+
+            {data.bills.length > 0 && (
+              <section>
+                <h2>Bills this month</h2>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Bill</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.bills.map((row) => (
+                        <tr key={row.bill}>
+                          <td>{row.bill}</td>
+                          <td>
+                            <StatusPill status={row.status} />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
+          </div>
+        </>
       )}
     </>
   );
 }
 
-const COLORS = [
-  "#0f5c4c",
-  "#8a4b12",
-  "#3d5a80",
-  "#8b1e1e",
-  "#5b7553",
-  "#9c6644",
-  "#4a4e69",
-  "#2a9d8f",
-  "#6d597a",
-  "#b5651d",
-];
+function deltaLabel(data: OverviewMonth): string {
+  if (data.spend_delta == null) return "No prior month";
+  const pct = data.spend_delta_pct == null ? "" : ` (${signedNumber(data.spend_delta_pct)}%)`;
+  return `${signedMoney(data.spend_delta)}${pct}`;
+}
 
-/** Pivot long-form monthly rows into one record per month with a key per category. */
-function buildChartData(rows: { month: string; category: string; total: number }[]) {
-  const months = new Map<string, Record<string, number | string>>();
-  const totals = new Map<string, number>();
+function signedMoney(value: number | null | undefined): string {
+  if (value == null) return "—";
+  const prefix = value > 0 ? "+" : "";
+  return `${prefix}${money(value)}`;
+}
 
-  for (const row of rows) {
-    totals.set(row.category, (totals.get(row.category) ?? 0) + row.total);
-    const entry = months.get(row.month) ?? { month: row.month };
-    entry[row.category] = Number(((entry[row.category] as number) ?? 0) + row.total);
-    months.set(row.month, entry);
-  }
+function signedNumber(value: number): string {
+  return `${value > 0 ? "+" : ""}${value}`;
+}
 
-  // Cap the legend at the biggest categories so the stack stays readable
-  const categories = [...totals.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
-    .map(([name]) => name);
-
-  const data = [...months.values()].sort((a, b) => String(a.month).localeCompare(String(b.month)));
-  return { data, categories };
+function deltaClass(value: number | null | undefined): string {
+  if (value == null || value === 0) return "";
+  return value > 0 ? "delta-up" : "delta-down";
 }

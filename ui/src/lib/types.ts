@@ -42,6 +42,7 @@ export interface Status {
   canonical_merchants: number;
   unknown_merchants: number;
   review_pending: number;
+  cardholders: string[];
   inbox_files: { card: string; name: string }[];
   duckdb: boolean;
   exports: boolean;
@@ -73,6 +74,32 @@ export interface CategoryMonthly {
   category: string;
   total: number;
   txn_count: number;
+}
+
+export interface OverviewMonth {
+  month: string | null;
+  months: string[];
+  cardholder: string | null;
+  spend_total: number;
+  prior_spend_total: number | null;
+  spend_delta: number | null;
+  spend_delta_pct: number | null;
+  charge_count: number;
+  payments_and_refunds: number;
+  uncategorized_total: number;
+  uncategorized_count: number;
+  review_count: number;
+  categories: { category: string; total: number; prior_total: number | null; delta: number | null }[];
+  holders: { name: string; total: number }[];
+  large_charges: {
+    posted_date: string | null;
+    merchant: string;
+    amount: number;
+    category: string | null;
+    cardholder: string | null;
+  }[];
+  tagged: { id: string; label: string; kind: string; total: number }[];
+  bills: { bill: string; status: "seen" | "missing" }[];
 }
 
 export interface Alias {
