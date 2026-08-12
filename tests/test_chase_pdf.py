@@ -77,6 +77,21 @@ def test_chase_sapphire_product_and_holder_are_detected():
     assert parsed.loc[0, "cardholder"] == "Sam Example"
 
 
+def test_chase_parser_ignores_non_money_tokens_in_amount_column():
+    words: list[dict] = []
+    _line(words, 10, [(50, "CHASE SAPPHIRE PREFERRED")])
+    _line(words, 15, [(50, "12/08/25 - 01/08/26")])
+    _line(words, 20, [(50, "ALEX EXAMPLE")])
+    _line(words, 30, [(50, "PURCHASE")])
+    _header(words, 35)
+    _row(words, 40, "12/13", "DUMPLING SHOP LONDON", "36.86")
+    _line(words, 40, [(560, "WC2H")])
+
+    parsed = _parse_pages([_Page(words)], card="chase-sapphire", source_file="chase/overflow.pdf")
+
+    assert parsed["amount"].tolist() == [36.86]
+
+
 def test_chase_parser_collapses_doubled_glyph_headings():
     """Some Chase PDFs extract each letter twice; headings must not look like cardholders."""
     words: list[dict] = []

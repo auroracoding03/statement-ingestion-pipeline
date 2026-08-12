@@ -144,6 +144,28 @@ def test_capital_one_parser_keeps_dates_within_one_day_grace():
     assert parsed["amount"].tolist() == [9.99, 4.50]
 
 
+def test_capital_one_parser_ignores_non_money_tokens_in_amount_column():
+    words: list[dict] = []
+    _add_line(
+        words,
+        10,
+        [
+            (50, "Capital One"),
+            (180, "Savor Credit Card | World Elite Mastercard"),
+            (430, "Dec 08, 2025 - Jan 08, 2026"),
+        ],
+    )
+    _add_line(words, 20, [(50, "Alex Example : Transactions")])
+    _header(words, 25)
+    _activity_row(words, 30, "Dec 13", "Dec 13", "DUMPLING SHOP LONDON", "$36.86")
+    _add_line(words, 30, [(600, "WC2H")])
+    _add_line(words, 35, [(50, "Total Transactions"), (530, "$36.86")])
+
+    parsed = _parse_pages([_Page(words)], card="capitalone", source_file="capitalone/overflow.pdf")
+
+    assert parsed["amount"].tolist() == [36.86]
+
+
 def test_capital_one_parser_skips_dates_far_outside_period():
     words: list[dict] = []
     _add_line(

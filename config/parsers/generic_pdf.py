@@ -16,7 +16,7 @@ import pandas as pd
 from .base import finalize
 
 DATE_RE = re.compile(r"^(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\s+(.+)$")
-AMOUNT_RE = re.compile(r"(-?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\(\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})?\))\s*$")
+AMOUNT_RE = re.compile(r"(-?\$?\d{1,3}(?:,\d{3})*\.\d{2}|\(\$?\d{1,3}(?:,\d{3})*\.\d{2}\))\s*$")
 
 
 def _parse_line(line: str) -> dict | None:

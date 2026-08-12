@@ -16,7 +16,7 @@ from .base import coerce_amount, finalize, parse_month_day, resolve_cycle_date
 ISSUER = "Wells Fargo"
 PERIOD_RE = re.compile(r"Statement Period\s+(?P<start>\d{2}/\d{2}/\d{4})\s+to\s+(?P<end>\d{2}/\d{2}/\d{4})", re.I)
 DATE_RE = re.compile(r"^\d{2}/\d{2}$")
-AMOUNT_RE = re.compile(r"\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})?")
+AMOUNT_RE = re.compile(r"\$?\d{1,3}(?:,\d{3})*\.\d{2}")
 NAME_RE = re.compile(r"^[A-Z][A-Z'-]*(?:\s+[A-Z][A-Z'-]*){1,3}$")
 PRODUCT_RE = re.compile(r"WELLS FARGO\s+(?P<product>.+?)\s+CARD", re.I)
 
@@ -144,6 +144,10 @@ def _amount(text: str, sign: int) -> float | None:
     return sign * abs(amount)
 
 
+def _non_money_text(text: str) -> str:
+    return " ".join(token for token in text.split() if not AMOUNT_RE.fullmatch(token))
+
+
 def _parse_row(line: Line, bounds: Bounds, start: date, end: date, cardholder: str | None, metadata: dict[str, str | None]) -> dict[str, Any] | None:
     columns: list[list[Word]] = [[], [], [], [], [], []]
     for word in line.words:
@@ -167,6 +171,9 @@ def _parse_row(line: Line, bounds: Bounds, start: date, end: date, cardholder: s
         return None
     credit = _amount(credits, -1)
     charge = _amount(charges, 1)
+    leftover = " ".join(part for part in (_non_money_text(credits), _non_money_text(charges)) if part)
+    if leftover:
+        description = f"{description} {leftover}".strip()
     if credit is not None and charge is not None:
         raise ValueError(f"Wells Fargo row has both credit and charge amounts: {line.text}")
     amount = credit if credit is not None else charge

@@ -29,7 +29,7 @@ CYCLE_RE = re.compile(
 )
 PRODUCT_RE = re.compile(r"(?P<product>[A-Za-z0-9 ]+?)\s+Credit Card\s*\|")
 SHORT_DATE_RE = re.compile(r"^[A-Z][a-z]{2}\s+\d{1,2}$")
-AMOUNT_RE = re.compile(r"(?P<amount>[+-]?\s*\$?\s*\d{1,3}(?:,\d{3})*(?:\.\d{2})?)")
+AMOUNT_RE = re.compile(r"(?P<amount>[+-]?\s*\$?\s*\d{1,3}(?:,\d{3})*\.\d{2})")
 
 SECTION_LABELS = {
     "payments, credits and adjustments": "payments",

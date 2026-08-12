@@ -77,6 +77,26 @@ def test_wells_fargo_parser_extracts_signs_product_and_holder():
     assert parsed["posted_date"].astype(str).tolist() == ["2026-04-30", "2026-05-02", "2026-05-06"]
 
 
+def test_wells_fargo_parser_keeps_charge_when_description_overflows_credits():
+    words: list[dict] = []
+    _line(words, 10, [(75, "WELLS FARGO AUTOGRAPH VISA SIGNATURE® CARD")])
+    _line(words, 15, [(75, "Statement Period 12/08/2025 to 03/08/2026")])
+    _line(words, 20, [(75, "ALEX N EXAMPLE")])
+    _line(words, 30, [(75, "Transactions")])
+    _header(words, 35)
+    _line(words, 40, [(75, "Purchases, Balance Transfers & Other Charges")])
+    _row(words, 45, "12/13", "12/13", "ABC123", "DUMPLING SHOP LONDON", charge="36.86")
+    _line(words, 45, [(700, "WC2H GB")])
+    _row(words, 50, "02/23", "02/23", "ABC124", "LAST STATEMENT BAL FROM ACCT", charge="464.02")
+    _line(words, 50, [(700, "ENDING 7350")])
+
+    parsed = _parse_pages([_Page(words)], card="wellsfargo-autograph", source_file="wells/overflow.pdf")
+
+    assert parsed["amount"].tolist() == [36.86, 464.02]
+    assert "WC2H GB" in parsed["raw_description"].iloc[0]
+    assert "ENDING 7350" in parsed["raw_description"].iloc[1]
+
+
 def test_wells_fargo_parser_prefers_upload_product_over_generic_credit_label():
     words: list[dict] = []
     _line(words, 10, [(75, "WELLS FARGO CREDIT CARD")])

@@ -16,7 +16,7 @@ from .base import coerce_amount, finalize, parse_month_day, resolve_cycle_date
 ISSUER = "Chase"
 PERIOD_RE = re.compile(r"(?P<start>\d{2}/\d{2}/\d{2})\s*-\s*(?P<end>\d{2}/\d{2}/\d{2})")
 DATE_RE = re.compile(r"^\d{2}/\d{2}$")
-AMOUNT_RE = re.compile(r"[+-]?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})?")
+AMOUNT_RE = re.compile(r"[+-]?\$?\d{1,3}(?:,\d{3})*\.\d{2}")
 NAME_RE = re.compile(r"^[A-Z][A-Z'-]+(?:\s+[A-Z][A-Z'-]+){1,3}$")
 
 SECTION_LABELS = {
