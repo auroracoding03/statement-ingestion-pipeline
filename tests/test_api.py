@@ -194,6 +194,17 @@ def test_overview_month_summarizes_latest_month(client: TestClient):
     assert body["tagged"] == [{"id": "date", "label": "Date", "kind": "occasion", "total": 6.75}]
 
 
+def test_cards_coverage_lists_products(client: TestClient):
+    r = client.get("/api/cards")
+    assert r.status_code == 200
+    body = r.json()
+    assert "products" in body
+    assert isinstance(body["products"], list)
+    assert body["selected"] is None
+    labels = {row["label"] for row in body["products"]}
+    assert "American Express Platinum" in labels
+
+
 def test_ai_setup_and_proposal_routes(client: TestClient, monkeypatch):
     monkeypatch.setattr(
         api_app.ai_review,

@@ -450,6 +450,14 @@ th.num {
   font-variant-numeric: tabular-nums;
 }
 
+.clickable-row {
+  cursor: pointer;
+}
+
+.clickable-row:hover td {
+  background: #f4eee4;
+}
+
 .muted {
   color: var(--muted);
 }
@@ -490,17 +498,24 @@ code {
 .status-matched,
 .status-seen,
 .status-rule,
-.status-manual {
+.status-manual,
+.status-ok {
   color: var(--ok);
 }
 
-.status-missing {
+.status-missing,
+.status-gap {
   color: var(--bad);
 }
 
 .status-amount_mismatch,
-.status-ai {
+.status-ai,
+.status-stale {
   color: var(--warn);
+}
+
+.status-none {
+  color: var(--muted);
 }
 
 .tag {

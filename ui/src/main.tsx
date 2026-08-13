@@ -4,6 +4,7 @@ import ReactDOM from "react-dom/client";
 import { Layout } from "./components/Layout";
 import { canWrite } from "./lib/dataSource";
 import { useHashPath } from "./lib/router";
+import { Cards } from "./pages/Cards";
 import { Categories } from "./pages/Categories";
 import { AiAssistant } from "./pages/AiAssistant";
 import { Ingestion } from "./pages/Ingestion";
@@ -21,6 +22,7 @@ function App() {
     "/": <Overview />,
     "/ingestion": canWrite ? <Ingestion /> : <Overview />,
     "/transactions": <Transactions />,
+    "/cards": <Cards />,
     "/categories": <Categories />,
     "/recurring": <Recurring />,
     "/merchants": <Merchants />,

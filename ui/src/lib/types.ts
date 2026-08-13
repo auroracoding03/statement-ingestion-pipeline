@@ -102,6 +102,48 @@ export interface OverviewMonth {
   bills: { bill: string; status: "seen" | "missing" }[];
 }
 
+export interface CardStatement {
+  id: string;
+  file_name: string;
+  txn_count: number;
+  spend_total: number;
+  payments_and_refunds: number;
+  coverage_start: string | null;
+  coverage_end: string | null;
+}
+
+export interface CardGap {
+  after: string;
+  before: string;
+  days: number;
+}
+
+export interface CardProductCoverage {
+  issuer: string;
+  product: string;
+  cardholder: string | null;
+  label: string;
+  status: "ok" | "gap" | "stale" | "none";
+  statement_count: number;
+  charge_count: number;
+  spend_total: number;
+  payments_and_refunds: number;
+  uncategorized_count: number;
+  uncategorized_total: number;
+  first_posted: string | null;
+  last_posted: string | null;
+  coverage_start: string | null;
+  coverage_end: string | null;
+  stale_days: number | null;
+  statements: CardStatement[];
+  gaps: CardGap[];
+}
+
+export interface CardsCoverage {
+  products: CardProductCoverage[];
+  selected: { issuer: string; product: string; cardholder: string | null } | null;
+}
+
 export interface Alias {
   regex?: string;
   exact?: string;

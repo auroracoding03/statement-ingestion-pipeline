@@ -12,6 +12,7 @@ import type {
   AiStatus,
   CategoryMonthly,
   ContextTag,
+  CardsCoverage,
   Job,
   JobStart,
   Merchant,
@@ -165,6 +166,18 @@ export const api = {
     if (params.cardholder) qs.set("cardholder", params.cardholder);
     const suffix = qs.toString() ? `?${qs}` : "";
     return req<OverviewMonth>(`/api/overview/month${suffix}`);
+  },
+
+  async cards(params: { issuer?: string; product?: string; cardholder?: string } = {}): Promise<CardsCoverage> {
+    if (!canWrite) {
+      return { products: [], selected: null };
+    }
+    const qs = new URLSearchParams();
+    if (params.issuer) qs.set("issuer", params.issuer);
+    if (params.product) qs.set("product", params.product);
+    if (params.cardholder) qs.set("cardholder", params.cardholder);
+    const suffix = qs.toString() ? `?${qs}` : "";
+    return req<CardsCoverage>(`/api/cards${suffix}`);
   },
 
   async recurring(): Promise<RecurringRow[]> {

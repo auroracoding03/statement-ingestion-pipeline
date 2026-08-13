@@ -51,6 +51,7 @@ from src.classify import (
 )
 from src.extract import iter_statement_files
 from src.merchants import append_merchant, delete_merchant, load_merchants
+from src.cards import build_cards_coverage
 from src.overview import build_month_summary, cardholders
 from src.paths import DASHBOARD, EXPORT_DIR, FINANCE_DB, INBOX, PENDING_UPLOADS, UI, ensure_dirs
 from src.review import needs_review
@@ -547,6 +548,16 @@ def get_overview_month(
 ) -> dict:
     ledger = pipeline.load_ledger()
     return build_month_summary(ledger, month=month, cardholder=cardholder)
+
+
+@app.get("/api/cards")
+def get_cards(
+    issuer: str | None = Query(default=None),
+    product: str | None = Query(default=None),
+    cardholder: str | None = Query(default=None),
+) -> dict:
+    ledger = pipeline.load_ledger()
+    return build_cards_coverage(ledger, issuer=issuer, product=product, cardholder=cardholder)
 
 
 # --------------------------------------------------------------------------- merchants

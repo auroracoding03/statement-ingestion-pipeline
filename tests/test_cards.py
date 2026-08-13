@@ -1,0 +1,225 @@
+"""Per-product statement coverage for the Cards page."""
+
+from __future__ import annotations
+
+from datetime import date, timedelta
+
+import pandas as pd
+
+from src.cards import GAP_DAYS, STALE_DAYS, build_cards_coverage
+from src.normalize import make_txn_id
+
+
+def _row(**overrides):
+    posted = overrides.get("posted_date", "2026-07-15")
+    amount = overrides.get("amount", 12.0)
+    raw = overrides.get("raw_description", "COFFEE SHOP")
+    card = overrides.get("card", "chase-sapphire")
+    base = {
+        "txn_id": make_txn_id(card, posted, amount, raw),
+        "card": card,
+        "card_issuer": "Chase",
+        "card_product": "Sapphire Preferred",
+        "cardholder": "Alex Example",
+        "posted_date": posted,
+        "amount": amount,
+        "raw_description": raw,
+        "normalized_merchant": raw,
+        "canonical_merchant": raw.title(),
+        "merchant_source": "manual",
+        "proposed_canonical": None,
+        "source_file": "chase-sapphire/july.pdf",
+        "source_document_id": "sapphire-july",
+        "source_occurrence": 0,
+        "category": "Food",
+        "subcategory": None,
+        "tags": [],
+        "classified_by": "manual",
+        "proposed_category": None,
+        "proposed_subcategory": None,
+    }
+    base.update(overrides)
+    base["txn_id"] = make_txn_id(base["card"], base["posted_date"], base["amount"], base["raw_description"])
+    return base
+
+
+def _by_label(payload: dict) -> dict[str, dict]:
+    return {row["label"]: row for row in payload["products"]}
+
+
+def test_continuous_monthly_spans_are_ok(monkeypatch):
+    monkeypatch.setattr("src.cards.list_card_products", lambda: {"Chase": ["Sapphire Preferred"]})
+    ledger = pd.DataFrame(
+        [
+            _row(posted_date="2026-06-02", source_document_id="s-jun", source_file="chase/jun.pdf"),
+            _row(posted_date="2026-06-28", raw_description="JUNE DINNER", source_document_id="s-jun", source_file="chase/jun.pdf"),
+            _row(posted_date="2026-07-01", raw_description="JULY COFFEE", source_document_id="s-jul", source_file="chase/jul.pdf"),
+            _row(posted_date="2026-07-20", raw_description="JULY GROCERIES", source_document_id="s-jul", source_file="chase/jul.pdf"),
+        ]
+    )
+    payload = build_cards_coverage(ledger, today=date(2026, 8, 1))
+    sapphire = _by_label(payload)["Chase Sapphire Preferred · Alex Example"]
+    assert sapphire["status"] == "ok"
+    assert sapphire["statement_count"] == 2
+    assert sapphire["gaps"] == []
+    assert sapphire["stale_days"] is None
+
+
+def test_skipped_month_between_documents_is_a_gap(monkeypatch):
+    monkeypatch.setattr("src.cards.list_card_products", lambda: {})
+    ledger = pd.DataFrame(
+        [
+            _row(
+                card="chase-amazon",
+                card_product="Amazon Prime Visa",
+                posted_date="2026-01-05",
+                source_document_id="amz-jan",
+                source_file="chase-amazon/jan.pdf",
+            ),
+            _row(
+                card="chase-amazon",
+                card_product="Amazon Prime Visa",
+                posted_date="2026-01-20",
+                raw_description="JAN SHOP",
+                source_document_id="amz-jan",
+                source_file="chase-amazon/jan.pdf",
+            ),
+            _row(
+                card="chase-amazon",
+                card_product="Amazon Prime Visa",
+                posted_date="2026-03-04",
+                raw_description="MAR SHOP",
+                source_document_id="amz-mar",
+                source_file="chase-amazon/mar.pdf",
+            ),
+        ]
+    )
+    payload = build_cards_coverage(ledger, today=date(2026, 3, 10))
+    amazon = _by_label(payload)["Chase Amazon Prime Visa · Alex Example"]
+    assert amazon["status"] == "gap"
+    assert amazon["gaps"] == [{"after": "2026-01-20", "before": "2026-03-04", "days": 43}]
+    assert 43 > GAP_DAYS
+
+
+def test_old_last_statement_is_stale(monkeypatch):
+    monkeypatch.setattr("src.cards.list_card_products", lambda: {})
+    last = date(2026, 5, 8)
+    today = last + timedelta(days=STALE_DAYS + 5)
+    ledger = pd.DataFrame(
+        [
+            _row(
+                card_issuer="American Express",
+                card_product="Platinum",
+                posted_date=last.isoformat(),
+                source_document_id="amex-may",
+                source_file="amex/may.csv",
+            )
+        ]
+    )
+    payload = build_cards_coverage(ledger, today=today)
+    platinum = _by_label(payload)["American Express Platinum · Alex Example"]
+    assert platinum["status"] == "stale"
+    assert platinum["stale_days"] == STALE_DAYS + 5
+    assert platinum["gaps"] == []
+
+
+def test_configured_product_with_no_ledger_rows_is_none(monkeypatch):
+    monkeypatch.setattr(
+        "src.cards.list_card_products",
+        lambda: {"American Express": ["Platinum", "Delta Gold"]},
+    )
+    ledger = pd.DataFrame(
+        [
+            _row(
+                card_issuer="American Express",
+                card_product="Platinum",
+                posted_date="2026-08-01",
+                source_document_id="amex-aug",
+                source_file="amex/aug.csv",
+            )
+        ]
+    )
+    payload = build_cards_coverage(ledger, today=date(2026, 8, 10))
+    by_label = _by_label(payload)
+    assert by_label["American Express Delta Gold"]["status"] == "none"
+    assert by_label["American Express Delta Gold"]["statement_count"] == 0
+    assert by_label["American Express Platinum · Alex Example"]["status"] == "ok"
+
+
+def test_payments_are_excluded_from_spend(monkeypatch):
+    monkeypatch.setattr("src.cards.list_card_products", lambda: {})
+    ledger = pd.DataFrame(
+        [
+            _row(amount=40.0, raw_description="GROCERIES"),
+            _row(amount=-200.0, posted_date="2026-07-16", raw_description="PAYMENT THANK YOU"),
+        ]
+    )
+    payload = build_cards_coverage(ledger, today=date(2026, 8, 1))
+    sapphire = _by_label(payload)["Chase Sapphire Preferred · Alex Example"]
+    assert sapphire["spend_total"] == 40.0
+    assert sapphire["charge_count"] == 1
+    assert sapphire["payments_and_refunds"] == 200.0
+    assert sapphire["statements"][0]["spend_total"] == 40.0
+    assert sapphire["statements"][0]["payments_and_refunds"] == 200.0
+
+
+def test_same_product_for_two_cardholders_stays_separate(monkeypatch):
+    monkeypatch.setattr("src.cards.list_card_products", lambda: {"American Express": ["Delta Gold"]})
+    ledger = pd.DataFrame(
+        [
+            _row(
+                card="americanexpress-delta-gold",
+                card_issuer="American Express",
+                card_product="Delta Gold",
+                cardholder="Alex Example",
+                posted_date="2026-01-05",
+                amount=40.0,
+                raw_description="ALEX FLIGHT",
+                source_document_id="alex-jan",
+                source_file="amex/alex-jan.pdf",
+            ),
+            _row(
+                card="americanexpress-delta-gold",
+                card_issuer="American Express",
+                card_product="Delta Gold",
+                cardholder="Alex Example",
+                posted_date="2026-03-04",
+                amount=55.0,
+                raw_description="ALEX HOTEL",
+                source_document_id="alex-mar",
+                source_file="amex/alex-mar.pdf",
+            ),
+            _row(
+                card="americanexpress-delta-gold",
+                card_issuer="American Express",
+                card_product="Delta Gold",
+                cardholder="Sam Example",
+                posted_date="2026-03-01",
+                amount=80.0,
+                raw_description="SAM FLIGHT",
+                source_document_id="sam-mar",
+                source_file="amex/sam-mar.pdf",
+            ),
+            _row(
+                card="americanexpress-delta-gold",
+                card_issuer="American Express",
+                card_product="Delta Gold",
+                cardholder="Sam Example",
+                posted_date="2026-03-08",
+                amount=25.0,
+                raw_description="SAM LOUNGE",
+                source_document_id="sam-mar",
+                source_file="amex/sam-mar.pdf",
+            ),
+        ]
+    )
+    payload = build_cards_coverage(ledger, today=date(2026, 3, 10))
+    by_label = _by_label(payload)
+    assert "American Express Delta Gold" not in by_label
+    alex = by_label["American Express Delta Gold · Alex Example"]
+    sam = by_label["American Express Delta Gold · Sam Example"]
+    assert alex["spend_total"] == 95.0
+    assert sam["spend_total"] == 105.0
+    assert alex["status"] == "gap"
+    assert sam["status"] == "ok"
+    assert alex["gaps"] == [{"after": "2026-01-05", "before": "2026-03-04", "days": 58}]

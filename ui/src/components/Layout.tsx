@@ -7,6 +7,7 @@ const LINKS = [
   { to: "/", label: "Overview" },
   { to: "/ingestion", label: "Ingestion", writeOnly: true },
   { to: "/transactions", label: "Transactions" },
+  { to: "/cards", label: "Cards" },
   { to: "/categories", label: "Categories" },
   { to: "/recurring", label: "Recurring" },
   { to: "/merchants", label: "Merchants" },
