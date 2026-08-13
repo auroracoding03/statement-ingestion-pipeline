@@ -321,6 +321,10 @@ select {
   background: rgba(28, 25, 22, 0.4);
 }
 
+.modal-backdrop.is-pending {
+  pointer-events: none;
+}
+
 .upload-modal {
   width: min(29rem, 100%);
   padding: 1.35rem;
@@ -346,6 +350,59 @@ select {
 .upload-modal label input,
 .upload-modal label select {
   width: 100%;
+}
+
+.merchant-edit-modal {
+  width: min(36rem, 100%);
+}
+
+.merchant-edit-cats {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.9rem;
+}
+
+.merchant-edit-cats select {
+  flex: 1;
+  min-width: 10rem;
+}
+
+.alias-row {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  margin-top: 0.55rem;
+}
+
+.alias-row .grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.merchant-edit-modal .review-actions,
+.category-delete-modal .review-actions {
+  margin-top: 1rem;
+}
+
+.category-delete-copy {
+  margin: 0.75rem 0 0;
+}
+
+.category-delete-copy p {
+  margin: 0 0 0.55rem;
+}
+
+.category-delete-reassign {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+}
+
+.category-delete-reassign select {
+  flex: 1;
+  min-width: 10rem;
 }
 
 .product-options {

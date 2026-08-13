@@ -476,6 +476,41 @@ def test_insights_chat_route_is_read_only_post(monkeypatch):
     assert body["tools_used"] == ["merchant_spend"]
 
 
+def test_insights_chat_accepts_prior_assistant_reply_over_500_chars(monkeypatch):
+    _patch_mutations(monkeypatch)
+    monkeypatch.setattr(api_app, "assert_loopback_ollama_host", lambda _host: None)
+    monkeypatch.setattr(api_app, "ollama_available", lambda _host=None: True)
+    monkeypatch.setattr(api_app, "recommended_config", lambda: {"host": "http://127.0.0.1:11434", "model": "qwen3.5:9b"})
+    monkeypatch.setattr(
+        api_app,
+        "run_insights_turn",
+        lambda messages, view: {
+            "reply": "ok",
+            "headline": "ok",
+            "facts": [],
+            "tools_used": [],
+            "grounded": True,
+            "caveat": None,
+            "prompt_version": "insights-v1",
+            "today": "2026-08-13",
+        },
+    )
+    monkeypatch.setattr(api_app.pipeline, "load_ledger", lambda: pd.DataFrame([_row()]))
+
+    client = TestClient(api_app.app)
+    response = client.post(
+        "/api/insights/chat",
+        json={
+            "messages": [
+                {"role": "user", "content": "Which card looks stale?"},
+                {"role": "assistant", "content": "x" * 501},
+                {"role": "user", "content": "Which card looks stale?"},
+            ]
+        },
+    )
+    assert response.status_code == 200
+
+
 def _amazon_series_ledger() -> pd.DataFrame:
     return _ledger(
         [

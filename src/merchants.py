@@ -300,3 +300,81 @@ def delete_merchant(canonical: str, path: Path | None = None) -> bool:
         doc["merchants"] = remaining
         save_merchants(doc, target)
         return True
+
+
+def _clean_aliases(aliases: list) -> list[dict]:
+    cleaned: list[dict] = []
+    for alias in aliases:
+        if not isinstance(alias, dict):
+            text = str(alias).strip()
+            if text:
+                cleaned.append({"exact": text})
+            continue
+        regex = str(alias.get("regex") or "").strip()
+        exact = str(alias.get("exact") or "").strip()
+        if regex:
+            try:
+                re.compile(regex)
+            except re.error as exc:
+                raise ValueError(f"Invalid alias regex: {exc}") from exc
+            cleaned.append({"regex": regex})
+        elif exact:
+            cleaned.append({"exact": exact})
+    if not cleaned:
+        raise ValueError("At least one alias is required")
+    return cleaned
+
+
+def update_merchant(
+    current: str,
+    *,
+    canonical: str | None = None,
+    aliases: list[dict] | None = None,
+    category: str | None = None,
+    subcategory: str | None = None,
+    clear_category: bool = False,
+    path: Path | None = None,
+) -> dict:
+    """Replace fields on an existing merchant. ``current`` is the stored canonical name."""
+    wanted = " ".join((canonical or current).split()).strip()
+    if not wanted:
+        raise ValueError("Canonical name is required")
+    target = _path(path)
+    with FileLock(f"{target}.lock"):
+        doc = load_merchants(target)
+        entries = doc.get("merchants") or []
+        index = next(
+            (i for i, entry in enumerate(entries) if str(entry.get("canonical", "")).lower() == current.lower()),
+            None,
+        )
+        if index is None:
+            raise KeyError(current)
+        if wanted.lower() != current.lower() and any(
+            str(entry.get("canonical", "")).lower() == wanted.lower() for i, entry in enumerate(entries) if i != index
+        ):
+            raise ValueError(f"Canonical already exists: {wanted}")
+        entry = dict(entries[index])
+        entry["canonical"] = wanted
+        if aliases is not None:
+            entry["aliases"] = _clean_aliases(aliases)
+        if clear_category:
+            entry.pop("category", None)
+            entry.pop("subcategory", None)
+        else:
+            if category is not None:
+                cleaned = " ".join(category.split()).strip()
+                if cleaned:
+                    entry["category"] = cleaned
+                else:
+                    entry.pop("category", None)
+                    entry.pop("subcategory", None)
+            if subcategory is not None and entry.get("category"):
+                cleaned_sub = " ".join(subcategory.split()).strip()
+                if cleaned_sub:
+                    entry["subcategory"] = cleaned_sub
+                else:
+                    entry.pop("subcategory", None)
+        entries[index] = entry
+        doc["merchants"] = entries
+        save_merchants(doc, target)
+        return entry

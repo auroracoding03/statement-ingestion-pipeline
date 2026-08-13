@@ -1,11 +1,45 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { CategoryFields } from "../components/CategoryFields";
 import { Empty, ErrorNote, Loading, PageHeader } from "../components/ui";
 import { api, canWrite } from "../lib/dataSource";
 import { money } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
-import type { UnknownCluster } from "../lib/types";
+import type { Merchant, UnknownCluster } from "../lib/types";
+
+const HIDE_KEY = "fin.merchants.hideUnresolved";
+
+function readHidden(): boolean {
+  try {
+    return sessionStorage.getItem(HIDE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeHidden(hidden: boolean) {
+  try {
+    sessionStorage.setItem(HIDE_KEY, hidden ? "1" : "0");
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function clusterHaystack(cluster: UnknownCluster): string {
+  return [
+    cluster.representative,
+    cluster.sample_raw,
+    cluster.proposed_canonical ?? "",
+    ...cluster.members,
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function merchantHaystack(merchant: Merchant): string {
+  const aliases = merchant.aliases.map((alias) => alias.regex ?? alias.exact ?? "").join(" ");
+  return `${merchant.canonical} ${merchant.category ?? ""} ${merchant.subcategory ?? ""} ${aliases}`.toLowerCase();
+}
 
 export function Merchants() {
   const merchants = useAsync(() => api.merchants(), []);
@@ -14,12 +48,34 @@ export function Merchants() {
   const [withAi, setWithAi] = useState(false);
   const unknown = useAsync(() => api.unknownMerchants(threshold, withAi), [threshold, withAi]);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [hideUnresolved, setHideUnresolved] = useState(readHidden);
+  const [editing, setEditing] = useState<Merchant | null>(null);
   const categories = rules.data?.categories ?? [];
   const subcategories = rules.data?.subcategories ?? {};
+  const needle = query.trim().toLowerCase();
+
+  const clusters = useMemo(() => {
+    const items = unknown.data?.items ?? [];
+    if (!needle) return items;
+    return items.filter((cluster) => clusterHaystack(cluster).includes(needle));
+  }, [needle, unknown.data?.items]);
+
+  const curated = useMemo(() => {
+    const items = merchants.data?.items ?? [];
+    if (!needle) return items;
+    return items.filter((merchant) => merchantHaystack(merchant).includes(needle));
+  }, [merchants.data?.items, needle]);
 
   function refreshAll() {
     merchants.reload();
     unknown.reload();
+  }
+
+  function toggleHidden() {
+    const next = !hideUnresolved;
+    setHideUnresolved(next);
+    writeHidden(next);
   }
 
   return (
@@ -31,7 +87,25 @@ export function Merchants() {
 
       {error && <ErrorNote error={error} />}
 
-      {canWrite && (
+      <div className="toolbar">
+        <input
+          className="grow"
+          type="search"
+          placeholder="Search unresolved clusters or curated merchants…"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          aria-label="Search merchants"
+        />
+        {canWrite && (
+          <button className="btn subtle small" type="button" onClick={toggleHidden}>
+            {hideUnresolved
+              ? `Show unresolved (${unknown.data?.items.length ?? 0})`
+              : "Hide unresolved"}
+          </button>
+        )}
+      </div>
+
+      {canWrite && !hideUnresolved && (
         <>
           <h2>Unresolved merchant clusters</h2>
           <div className="toolbar">
@@ -64,12 +138,14 @@ export function Merchants() {
 
           {unknown.loading && <Loading what="clusters" />}
           {unknown.error && <ErrorNote error={unknown.error} />}
-          {!unknown.loading && (unknown.data?.items.length ?? 0) === 0 && (
-            <Empty>Every merchant in the ledger has a canonical identity.</Empty>
+          {!unknown.loading && clusters.length === 0 && (
+            <Empty>
+              {needle ? "No unresolved clusters match that search." : "Every merchant in the ledger has a canonical identity."}
+            </Empty>
           )}
 
           <div className="cluster-list">
-            {(unknown.data?.items ?? []).map((cluster) => (
+            {clusters.map((cluster) => (
               <ClusterCard
                 key={cluster.cluster_id}
                 cluster={cluster}
@@ -86,11 +162,11 @@ export function Merchants() {
       <h2>Curated merchants</h2>
       {merchants.loading && <Loading what="merchants" />}
       {merchants.error && <ErrorNote error={merchants.error} />}
-      {(merchants.data?.items.length ?? 0) === 0 && !merchants.loading && (
-        <Empty>No canonical merchants defined yet.</Empty>
+      {curated.length === 0 && !merchants.loading && (
+        <Empty>{needle ? "No curated merchants match that search." : "No canonical merchants defined yet."}</Empty>
       )}
 
-      {(merchants.data?.items.length ?? 0) > 0 && (
+      {curated.length > 0 && (
         <div className="table-wrap">
           <table>
             <thead>
@@ -104,38 +180,50 @@ export function Merchants() {
               </tr>
             </thead>
             <tbody>
-              {merchants.data!.items.map((m) => (
-                <tr key={m.canonical}>
+              {curated.map((merchant) => (
+                <tr key={merchant.canonical}>
                   <td>
-                    <strong>{m.canonical}</strong>
+                    <strong>{merchant.canonical}</strong>
                   </td>
-                  <td>{[m.category, m.subcategory].filter(Boolean).join(" / ") || "—"}</td>
+                  <td>{[merchant.category, merchant.subcategory].filter(Boolean).join(" / ") || "—"}</td>
                   <td>
-                    {m.aliases.length === 0 && <span className="muted">—</span>}
-                    {m.aliases.map((a, i) => (
-                      <code key={i} className="tag">
-                        {a.regex ?? a.exact}
+                    {merchant.aliases.length === 0 && <span className="muted">—</span>}
+                    {merchant.aliases.map((alias, index) => (
+                      <code key={index} className="tag">
+                        {alias.regex ?? alias.exact}
                       </code>
                     ))}
                   </td>
-                  <td className="num">{m.txn_count}</td>
-                  <td className="num">{money(m.total_amount)}</td>
+                  <td className="num">{merchant.txn_count}</td>
+                  <td className="num">{money(merchant.total_amount)}</td>
                   {canWrite && (
                     <td>
-                      <button
-                        className="btn danger small"
-                        onClick={async () => {
-                          setError(null);
-                          try {
-                            await api.deleteMerchant(m.canonical);
-                            refreshAll();
-                          } catch (err) {
-                            setError(err instanceof Error ? err.message : String(err));
-                          }
-                        }}
-                      >
-                        Remove
-                      </button>
+                      <div className="toolbar" style={{ margin: 0, gap: "0.35rem" }}>
+                        <button
+                          className="btn small"
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setEditing(merchant);
+                          }}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="btn danger small"
+                          onClick={async () => {
+                            setError(null);
+                            try {
+                              await api.deleteMerchant(merchant.canonical);
+                              refreshAll();
+                            } catch (err) {
+                              setError(err instanceof Error ? err.message : String(err));
+                            }
+                          }}
+                        >
+                          Remove
+                        </button>
+                      </div>
                     </td>
                   )}
                 </tr>
@@ -143,6 +231,20 @@ export function Merchants() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {editing && (
+        <MerchantEditor
+          merchant={editing}
+          categories={categories}
+          subcategories={subcategories}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            refreshAll();
+          }}
+          onError={setError}
+        />
       )}
     </>
   );
@@ -199,9 +301,9 @@ function ClusterCard({
       </div>
 
       <div style={{ marginTop: "0.5rem" }}>
-        {cluster.members.map((m) => (
-          <span key={m} className="tag">
-            {m}
+        {cluster.members.map((member) => (
+          <span key={member} className="tag">
+            {member}
           </span>
         ))}
       </div>
@@ -244,10 +346,171 @@ function ClusterCard({
   );
 }
 
+function MerchantEditor({
+  merchant,
+  categories,
+  subcategories,
+  onClose,
+  onSaved,
+  onError,
+}: {
+  merchant: Merchant;
+  categories: string[];
+  subcategories: Record<string, string[]>;
+  onClose: () => void;
+  onSaved: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [canonical, setCanonical] = useState(merchant.canonical);
+  const [category, setCategory] = useState(merchant.category ?? "");
+  const [subcategory, setSubcategory] = useState(merchant.subcategory ?? "");
+  const [aliases, setAliases] = useState<{ kind: "regex" | "exact"; value: string }[]>(
+    merchant.aliases.length > 0
+      ? merchant.aliases.map((alias) =>
+          alias.regex
+            ? { kind: "regex" as const, value: alias.regex }
+            : { kind: "exact" as const, value: alias.exact ?? "" },
+        )
+      : [{ kind: "regex", value: "" }],
+  );
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setArmed(true), 0);
+    return () => window.clearTimeout(id);
+  }, []);
+
+  async function save() {
+    const cleanedAliases = aliases
+      .map((alias) => ({
+        regex: alias.kind === "regex" ? alias.value.trim() : undefined,
+        exact: alias.kind === "exact" ? alias.value.trim() : undefined,
+      }))
+      .filter((alias) => alias.regex || alias.exact);
+    if (!canonical.trim() || cleanedAliases.length === 0) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await api.updateMerchant(merchant.canonical, {
+        canonical: canonical.trim(),
+        aliases: cleanedAliases,
+        category: category.trim() || null,
+        subcategory: category.trim() && subcategory.trim() ? subcategory.trim() : null,
+        apply_category: Boolean(category.trim()),
+        restamp: true,
+      });
+      onSaved();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setSaveError(message);
+      onError(message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      className={`modal-backdrop${armed ? "" : " is-pending"}`}
+      onClick={(event) => {
+        if (!armed || event.target !== event.currentTarget) return;
+        onClose();
+      }}
+      role="presentation"
+    >
+      <div
+        className="upload-modal merchant-edit-modal"
+        role="dialog"
+        aria-labelledby="merchant-edit-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h2 id="merchant-edit-title">Edit merchant</h2>
+        <label>
+          Canonical name
+          <input value={canonical} onChange={(event) => setCanonical(event.target.value)} />
+        </label>
+        <div className="merchant-edit-cats">
+          <CategoryFields
+            categories={categories}
+            subcategories={subcategories}
+            category={category}
+            subcategory={subcategory}
+            categoryLabel="Default category (optional)"
+            subcategoryLabel="Subcategory (optional)"
+            onCategoryChange={(nextCategory, nextSub) => {
+              setCategory(nextCategory);
+              setSubcategory(nextSub);
+            }}
+            onPairChange={(nextCategory, nextSub) => {
+              setCategory(nextCategory);
+              setSubcategory(nextSub);
+            }}
+          />
+        </div>
+        <p className="muted">Aliases are regex or exact matches against the normalized merchant and raw description.</p>
+        {aliases.map((alias, index) => (
+          <div className="alias-row" key={index}>
+            <select
+              value={alias.kind}
+              onChange={(event) => {
+                const kind = event.target.value as "regex" | "exact";
+                setAliases((current) =>
+                  current.map((item, itemIndex) => (itemIndex === index ? { ...item, kind } : item)),
+                );
+              }}
+              aria-label="Alias kind"
+            >
+              <option value="regex">Regex</option>
+              <option value="exact">Exact</option>
+            </select>
+            <input
+              className="grow"
+              value={alias.value}
+              onChange={(event) => {
+                const value = event.target.value;
+                setAliases((current) =>
+                  current.map((item, itemIndex) => (itemIndex === index ? { ...item, value } : item)),
+                );
+              }}
+              aria-label="Alias pattern"
+            />
+            <button
+              className="btn ghost small"
+              type="button"
+              onClick={() => setAliases((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+              disabled={aliases.length <= 1}
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+        <button
+          className="btn subtle small"
+          type="button"
+          onClick={() => setAliases((current) => [...current, { kind: "regex", value: "" }])}
+        >
+          Add alias
+        </button>
+        {saveError && <ErrorNote error={saveError} />}
+        <div className="review-actions">
+          <button className="btn" type="button" onClick={() => void save()} disabled={saving || !canonical.trim()}>
+            {saving ? "Saving…" : "Save"}
+          </button>
+          <button className="btn subtle" type="button" onClick={onClose} disabled={saving}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function titleize(value: string): string {
   return value
     .toLowerCase()
     .split(/\s+/)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
 }

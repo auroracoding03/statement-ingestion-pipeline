@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Empty, ErrorNote, Loading, PageHeader } from "../components/ui";
 import { api } from "../lib/dataSource";
@@ -6,6 +6,21 @@ import { useAsync } from "../lib/useAsync";
 import type { Rule, TagKind } from "../lib/types";
 
 type EditDraft = { category: string; subcategory: string };
+
+type DeleteTarget = { category: string; subcategory?: string };
+
+type CategoryImpact = {
+  category: string;
+  subcategory: string | null;
+  txn_count: number;
+  rule_count: number;
+  merchant_count: number;
+  bill_count: number;
+};
+
+function vocabLabel(category: string, subcategory?: string | null) {
+  return subcategory ? `${category} / ${subcategory}` : category;
+}
 
 export function Rules() {
   const { data, loading, error, reload } = useAsync(() => api.rules(), []);
@@ -23,6 +38,11 @@ export function Rules() {
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState<EditDraft>({ category: "", subcategory: "" });
   const [savingEdit, setSavingEdit] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
+  const [impact, setImpact] = useState<CategoryImpact | null>(null);
+  const [reassignCategory, setReassignCategory] = useState("");
+  const [reassignSubcategory, setReassignSubcategory] = useState("");
+  const [deleting, setDeleting] = useState(false);
 
   const categories = data?.categories ?? [];
   const subcategories = data?.subcategories ?? {};
@@ -109,6 +129,48 @@ export function Rules() {
     setEditDraft({ category: "", subcategory: "" });
   }
 
+  async function openDelete(category: string, subcategory?: string) {
+    setSaveError(null);
+    setReassignCategory("");
+    setReassignSubcategory("");
+    setImpact(null);
+    setDeleteTarget({ category, subcategory });
+    try {
+      setImpact(await api.categoryImpact(category, subcategory));
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function closeDelete() {
+    setDeleteTarget(null);
+    setImpact(null);
+    setReassignCategory("");
+    setReassignSubcategory("");
+  }
+
+  async function confirmDelete(action: "unassign" | "reassign") {
+    if (!deleteTarget) return;
+    if (action === "reassign" && !reassignCategory.trim()) return;
+    setDeleting(true);
+    setSaveError(null);
+    try {
+      await api.deleteCategory({
+        category: deleteTarget.category,
+        subcategory: deleteTarget.subcategory,
+        action,
+        reassign_category: action === "reassign" ? reassignCategory : undefined,
+        reassign_subcategory: action === "reassign" ? reassignSubcategory : undefined,
+      });
+      closeDelete();
+      reload();
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   async function saveEdit(index: number) {
     if (!editDraft.category.trim()) return;
     setSaveError(null);
@@ -133,6 +195,7 @@ export function Rules() {
         title="Classification rules"
         lede="Manage primary categories, subcategories, and context tags, then ordered rules. Category totals use the primary only; tags are for filtering. After editing a rule, re-run Classify to apply it to the ledger."
       />
+      {saveError && !deleteTarget && <ErrorNote error={saveError} />}
 
       <section className="panel taxonomy-panel">
         <h2>Primary categories</h2>
@@ -141,6 +204,20 @@ export function Rules() {
           {categories.map((category) => (
             <span key={category} className="tag-chip readonly">
               {category}
+              {category !== "Uncategorized" && (
+                <button
+                  type="button"
+                  className="tag-remove"
+                  title={`Remove ${category}`}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void openDelete(category);
+                  }}
+                >
+                  ×
+                </button>
+              )}
             </span>
           ))}
         </div>
@@ -171,6 +248,18 @@ export function Rules() {
                   {items.map((sub) => (
                     <span key={sub} className="tag-chip readonly">
                       {sub}
+                      <button
+                        type="button"
+                        className="tag-remove"
+                        title={`Remove ${category} / ${sub}`}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          void openDelete(category, sub);
+                        }}
+                      >
+                        ×
+                      </button>
                     </span>
                   ))}
                 </div>
@@ -301,7 +390,7 @@ export function Rules() {
             Add rule
           </button>
         </div>
-        {saveError && <ErrorNote error={saveError} />}
+        {saveError && !deleteTarget && <ErrorNote error={saveError} />}
       </div>
 
       {loading && <Loading what="rules" />}
@@ -431,6 +520,161 @@ export function Rules() {
           </table>
         </div>
       )}
+
+      {deleteTarget && (
+        <CategoryDeleteModal
+          target={deleteTarget}
+          impact={impact}
+          categories={categories}
+          subcategories={subcategories}
+          reassignCategory={reassignCategory}
+          reassignSubcategory={reassignSubcategory}
+          deleting={deleting}
+          error={saveError}
+          onReassignCategory={(next) => {
+            setReassignCategory(next);
+            setReassignSubcategory("");
+          }}
+          onReassignSubcategory={setReassignSubcategory}
+          onUnassign={() => void confirmDelete("unassign")}
+          onReassign={() => void confirmDelete("reassign")}
+          onClose={closeDelete}
+        />
+      )}
     </>
+  );
+}
+
+function CategoryDeleteModal({
+  target,
+  impact,
+  categories,
+  subcategories,
+  reassignCategory,
+  reassignSubcategory,
+  deleting,
+  error,
+  onReassignCategory,
+  onReassignSubcategory,
+  onUnassign,
+  onReassign,
+  onClose,
+}: {
+  target: DeleteTarget;
+  impact: CategoryImpact | null;
+  categories: string[];
+  subcategories: Record<string, string[]>;
+  reassignCategory: string;
+  reassignSubcategory: string;
+  deleting: boolean;
+  error: string | null;
+  onReassignCategory: (category: string) => void;
+  onReassignSubcategory: (subcategory: string) => void;
+  onUnassign: () => void;
+  onReassign: () => void;
+  onClose: () => void;
+}) {
+  const label = vocabLabel(target.category, target.subcategory);
+  const reassignCategories = categories.filter((category) => {
+    if (category === "Uncategorized") return false;
+    if (!target.subcategory && category === target.category) return false;
+    return true;
+  });
+  const reassignSubs = (reassignCategory ? subcategories[reassignCategory] ?? [] : []).filter((sub) => {
+    if (target.subcategory && reassignCategory === target.category && sub === target.subcategory) {
+      return false;
+    }
+    return true;
+  });
+  const samePair =
+    Boolean(target.subcategory) &&
+    reassignCategory === target.category &&
+    reassignSubcategory === target.subcategory;
+  const canReassign = Boolean(reassignCategory.trim()) && !samePair;
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setArmed(true), 0);
+    return () => window.clearTimeout(id);
+  }, []);
+
+  return (
+    <div
+      className={`modal-backdrop${armed ? "" : " is-pending"}`}
+      onClick={(event) => {
+        if (!armed || deleting || event.target !== event.currentTarget) return;
+        onClose();
+      }}
+      role="presentation"
+    >
+      <div
+        className="upload-modal category-delete-modal"
+        role="dialog"
+        aria-labelledby="category-delete-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h2 id="category-delete-title">Delete {label}</h2>
+        <div className="category-delete-copy">
+          {impact ? (
+            <>
+              <p>
+                <strong>{label}</strong> is assigned to <strong>{impact.txn_count} transactions</strong>.
+                Deleting it will unwrite those assignments.
+              </p>
+              <p className="muted">
+                Also used by: {impact.rule_count} rules, {impact.merchant_count} merchant defaults.
+              </p>
+            </>
+          ) : (
+            <p className="muted">Checking where this category is used…</p>
+          )}
+        </div>
+        <div className="category-delete-reassign">
+          <select
+            value={reassignCategory}
+            onChange={(event) => onReassignCategory(event.target.value)}
+            disabled={deleting}
+            aria-label="Reassign category"
+          >
+            <option value="">Reassign to category</option>
+            {reassignCategories.map((category) => (
+              <option key={category} value={category}>
+                {category}
+              </option>
+            ))}
+          </select>
+          <select
+            value={reassignSubcategory}
+            onChange={(event) => onReassignSubcategory(event.target.value)}
+            disabled={deleting || !reassignCategory}
+            aria-label="Reassign subcategory"
+          >
+            <option value="">Subcategory (optional)</option>
+            {reassignSubs.map((sub) => (
+              <option key={sub} value={sub}>
+                {sub}
+              </option>
+            ))}
+          </select>
+        </div>
+        {error && <ErrorNote error={error} />}
+        <div className="review-actions">
+          <button className="btn danger" type="button" onClick={onUnassign} disabled={deleting || !impact}>
+            {deleting ? "Working…" : "Delete and unassign"}
+          </button>
+          <button
+            className="btn"
+            type="button"
+            onClick={onReassign}
+            disabled={deleting || !impact || !canReassign}
+          >
+            Reassign and delete
+          </button>
+          <button className="btn subtle" type="button" onClick={onClose} disabled={deleting}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

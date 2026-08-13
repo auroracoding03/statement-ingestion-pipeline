@@ -16,6 +16,7 @@ from src.merchants import (
     load_merchants,
     match_canonical,
     merchant_defaults,
+    update_merchant,
 )
 from src.normalize import merchant_identity_key
 
@@ -236,3 +237,33 @@ def test_merchant_default_applies_when_no_rule_matches(tmp_path: Path, monkeypat
     out = classify(frame, rules_path=rules)
     assert out.iloc[0]["category"] == "Shopping"
     assert out.iloc[0]["classified_by"] == "merchant"
+
+
+def test_update_merchant_replaces_aliases_and_renames(merchants_file: Path):
+    updated = update_merchant(
+        "Walmart",
+        canonical="Walmart Inc",
+        aliases=[{"exact": "WALMART"}, {"regex": r"(?i)wmt"}],
+        category="Shopping",
+        subcategory="Retail",
+        path=merchants_file,
+    )
+    assert updated["canonical"] == "Walmart Inc"
+    assert updated["aliases"] == [{"exact": "WALMART"}, {"regex": r"(?i)wmt"}]
+    assert updated["category"] == "Shopping"
+    assert updated["subcategory"] == "Retail"
+    assert match_canonical("WALMART", path=merchants_file)["canonical"] == "Walmart Inc"
+    with pytest.raises(KeyError):
+        update_merchant("Walmart", aliases=[{"exact": "X"}], path=merchants_file)
+
+
+def test_update_merchant_rejects_duplicate_canonical(merchants_file: Path):
+    with pytest.raises(ValueError, match="already exists"):
+        update_merchant("Starbucks", canonical="Walmart", path=merchants_file)
+
+
+def test_update_merchant_requires_a_valid_alias(merchants_file: Path):
+    with pytest.raises(ValueError, match="At least one alias"):
+        update_merchant("Walmart", aliases=[], path=merchants_file)
+    with pytest.raises(ValueError, match="Invalid alias regex"):
+        update_merchant("Walmart", aliases=[{"regex": "["}], path=merchants_file)

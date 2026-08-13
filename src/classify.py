@@ -322,3 +322,98 @@ def delete_rule(index: int, rules_path: Path | None = None) -> bool:
         doc["rules"] = rules
         save_rules(doc, target)
         return True
+
+
+def rewrite_merchant_canonical(old: str, new: str, rules_path: Path | None = None) -> int:
+    """Rename merchant_canonical matches after a curated merchant is renamed."""
+    cleaned_old = " ".join(old.split()).strip()
+    cleaned_new = " ".join(new.split()).strip()
+    if not cleaned_old or not cleaned_new or cleaned_old == cleaned_new:
+        return 0
+    target = _path(rules_path)
+    with FileLock(f"{target}.lock"):
+        doc = load_rules(target)
+        rules = doc.get("rules") or []
+        changed = 0
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            match = rule.get("match") or {}
+            if str(match.get("merchant_canonical") or "") == cleaned_old:
+                match["merchant_canonical"] = cleaned_new
+                rule["match"] = match
+                changed += 1
+        if changed:
+            doc["rules"] = rules
+            save_rules(doc, target)
+        return changed
+
+
+def _rule_matches_vocab(rule: dict, category: str, subcategory: str | None) -> bool:
+    if not isinstance(rule, dict):
+        return False
+    if str(rule.get("category") or "").strip() != category:
+        return False
+    if subcategory is None:
+        return True
+    return str(rule.get("subcategory") or "").strip() == subcategory
+
+
+def rewrite_rule_vocab(
+    category: str,
+    subcategory: str | None = None,
+    *,
+    action: str,
+    reassign_category: str = "",
+    reassign_subcategory: str = "",
+    rules_path: Path | None = None,
+) -> int:
+    """Remove or retarget rules that use a category/subcategory being deleted."""
+    target = _path(rules_path)
+    with FileLock(f"{target}.lock"):
+        doc = load_rules(target)
+        rules = doc.get("rules") or []
+        kept: list[dict] = []
+        changed = 0
+        for rule in rules:
+            if not _rule_matches_vocab(rule, category, subcategory):
+                kept.append(rule)
+                continue
+            changed += 1
+            if action == "reassign":
+                updated = dict(rule)
+                updated["category"] = reassign_category
+                updated["subcategory"] = reassign_subcategory
+                kept.append(updated)
+        if changed:
+            doc["rules"] = kept
+            save_rules(doc, target)
+        return changed
+
+
+def drop_vocab(
+    category: str,
+    subcategory: str | None = None,
+    rules_path: Path | None = None,
+) -> bool:
+    """Remove a primary or subcategory from the managed vocabulary."""
+    target = _path(rules_path)
+    with FileLock(f"{target}.lock"):
+        doc = load_rules(target)
+        cats = doc.setdefault("categories", [])
+        subs = doc.setdefault("subcategories", {})
+        if not isinstance(subs, dict):
+            subs = {}
+            doc["subcategories"] = subs
+        if subcategory is None:
+            if category not in cats and category not in subs:
+                return False
+            doc["categories"] = [name for name in cats if name != category]
+            subs.pop(category, None)
+        else:
+            bucket = subs.get(category)
+            if not isinstance(bucket, list) or subcategory not in bucket:
+                return False
+            subs[category] = [name for name in bucket if name != subcategory]
+        save_rules(doc, target)
+        return True

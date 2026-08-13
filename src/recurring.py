@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-from src.paths import EXPECTED_RECURRING_PATH
+from src import paths
 
 PRICE_HIKE_FLOOR = 2.0
 PRICE_HIKE_PCT = 0.10
@@ -32,10 +32,27 @@ RECURRING_COLUMNS = [
 ]
 
 
-def load_expected(path: Path = EXPECTED_RECURRING_PATH) -> list[dict]:
-    with path.open(encoding="utf-8") as f:
+def _expected_path(path: Path | None = None) -> Path:
+    return path if path is not None else paths.EXPECTED_RECURRING_PATH
+
+
+def load_expected(path: Path | None = None) -> list[dict]:
+    target = _expected_path(path)
+    if not target.exists():
+        return []
+    with target.open(encoding="utf-8") as f:
         doc = yaml.safe_load(f) or {}
     return list(doc.get("bills") or [])
+
+
+def save_expected(bills: list[dict], path: Path | None = None) -> None:
+    from filelock import FileLock
+
+    from src.atomic import atomic_write_text
+
+    target = _expected_path(path)
+    with FileLock(f"{target}.lock"):
+        atomic_write_text(target, yaml.safe_dump({"bills": bills}, sort_keys=False, allow_unicode=True))
 
 
 def _empty_recurring() -> pd.DataFrame:
@@ -113,7 +130,7 @@ def detect_recurring(ledger: pd.DataFrame, min_occurrences: int = 2) -> pd.DataF
     ).reset_index(drop=True)
 
 
-def reconcile(ledger: pd.DataFrame, expected_path: Path = EXPECTED_RECURRING_PATH) -> pd.DataFrame:
+def reconcile(ledger: pd.DataFrame, expected_path: Path | None = None) -> pd.DataFrame:
     bills = load_expected(expected_path)
     if ledger.empty:
         return pd.DataFrame(

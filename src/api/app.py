@@ -30,11 +30,13 @@ from src.api.schemas import (
     AIProposalDecisionsRequest,
     BudgetPut,
     CardProductIn,
+    CategoryDelete,
     CategoryIn,
     ClassifyRequest,
     BulkTransactionsRequest,
     InsightsChatRequest,
     MerchantIn,
+    MerchantUpdate,
     ReviewDecision,
     ReviewPreviewRequest,
     RuleIn,
@@ -58,12 +60,14 @@ from src.classify import (
     delete_rule,
     list_subcategories,
     load_rules,
+    rewrite_merchant_canonical,
     update_rule,
 )
 from src.extract import iter_statement_files
-from src.merchants import append_merchant, delete_merchant, load_merchants
+from src.merchants import append_merchant, delete_merchant, load_merchants, update_merchant
 from src.cards import build_cards_coverage
 from src.overview import build_period_summary, cardholders
+from src.taxonomy import category_impact, delete_category
 from src.paths import DASHBOARD, EXPORT_DIR, FINANCE_DB, INBOX, PENDING_UPLOADS, UI, ensure_dirs
 from src.periods import PRESETS, filter_posted
 from src.review import cluster_open_review, needs_review, rule_from_row
@@ -736,6 +740,42 @@ def post_merchant(body: MerchantIn) -> dict:
     return {"merchant": entry, "stamped": stamped}
 
 
+@app.patch("/api/merchants/{canonical}")
+def patch_merchant(canonical: str, body: MerchantUpdate) -> dict:
+    aliases = None
+    if body.aliases is not None:
+        aliases = [item.model_dump(exclude_none=True) for item in body.aliases if item.regex or item.exact]
+    clear_category = "category" in body.model_fields_set and not str(body.category or "").strip()
+    try:
+        entry = update_merchant(
+            canonical,
+            canonical=body.canonical,
+            aliases=aliases,
+            category=None if clear_category else body.category,
+            subcategory=body.subcategory,
+            clear_category=clear_category,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Unknown merchant") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    new_name = str(entry.get("canonical") or canonical)
+    if new_name != canonical:
+        rewrite_merchant_canonical(canonical, new_name)
+        pipeline.rename_canonical_on_ledger(canonical, new_name)
+    if body.restamp:
+        pipeline.recanonicalize()
+    applied = 0
+    if body.apply_category and entry.get("category"):
+        applied = pipeline.apply_category_to_canonical(
+            new_name,
+            str(entry.get("category")),
+            str(entry.get("subcategory") or ""),
+        )
+    return {"merchant": entry, "applied": applied}
+
+
 @app.delete("/api/merchants/{canonical}")
 def remove_merchant(canonical: str) -> dict:
     if not delete_merchant(canonical):
@@ -811,6 +851,34 @@ def post_subcategory(body: SubcategoryIn) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"subcategories": subcategories}
+
+
+@app.get("/api/categories/impact")
+def get_category_impact(
+    category: str = Query(min_length=1),
+    subcategory: str | None = None,
+) -> dict:
+    ledger = pipeline.load_ledger()
+    return category_impact(ledger, category, subcategory or None)
+
+
+@app.post("/api/categories/delete")
+def post_category_delete(body: CategoryDelete) -> dict:
+    ensure_dirs()
+    ledger = pipeline.load_ledger()
+    try:
+        return delete_category(
+            ledger,
+            body.category,
+            (body.subcategory or "").strip() or None,
+            action=body.action,
+            reassign_category=body.reassign_category,
+            reassign_subcategory=body.reassign_subcategory,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown category: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/api/budget")

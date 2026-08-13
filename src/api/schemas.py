@@ -47,6 +47,15 @@ class MerchantIn(BaseModel):
     restamp: bool = True
 
 
+class MerchantUpdate(BaseModel):
+    canonical: str | None = None
+    aliases: list[AliasIn] | None = None
+    category: str | None = None
+    subcategory: str | None = None
+    apply_category: bool = True
+    restamp: bool = True
+
+
 class RuleIn(BaseModel):
     merchant_regex: str | None = None
     merchant_canonical: str | None = None
@@ -91,7 +100,10 @@ class UploadCommitRequest(BaseModel):
 
 class InsightsChatMessage(BaseModel):
     role: str = Field(pattern="^(user|assistant)$")
-    content: str = Field(min_length=1, max_length=500)
+    # User questions stay at 500 chars in the UI. Assistant replies are longer, and
+    # the second turn sends that prior reply as history. insights._clip_messages
+    # still trims each message before the model sees it.
+    content: str = Field(min_length=1, max_length=4000)
 
 
 class InsightsChatRequest(BaseModel):
@@ -127,3 +139,11 @@ class BudgetEnvelopeIn(BaseModel):
 
 class BudgetPut(BaseModel):
     envelopes: list[BudgetEnvelopeIn] = Field(default_factory=list)
+
+
+class CategoryDelete(BaseModel):
+    category: str = Field(min_length=1, max_length=80)
+    subcategory: str = ""
+    action: str = Field(pattern="^(unassign|reassign)$")
+    reassign_category: str = ""
+    reassign_subcategory: str = ""

@@ -37,6 +37,27 @@ export const canWrite = MODE === "live";
 
 class DataError extends Error {}
 
+function formatApiDetail(detail: unknown): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail.map((item) => {
+      if (typeof item === "string") return item;
+      if (item && typeof item === "object" && "msg" in item) return String((item as { msg: unknown }).msg);
+      try {
+        return JSON.stringify(item);
+      } catch {
+        return "Request failed";
+      }
+    });
+    return parts.filter(Boolean).join("; ") || "Request failed";
+  }
+  try {
+    return JSON.stringify(detail);
+  } catch {
+    return "Request failed";
+  }
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
@@ -46,7 +67,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     let detail = `${res.status} ${res.statusText}`;
     try {
       const body = await res.json();
-      if (body?.detail) detail = String(body.detail);
+      if (body?.detail) detail = formatApiDetail(body.detail);
     } catch {
       /* response had no JSON body */
     }
@@ -466,6 +487,37 @@ export const api = {
     });
   },
 
+  categoryImpact(category: string, subcategory?: string) {
+    if (!canWrite) writeGuard();
+    const qs = new URLSearchParams({ category });
+    if (subcategory) qs.set("subcategory", subcategory);
+    return req<{
+      category: string;
+      subcategory: string | null;
+      txn_count: number;
+      rule_count: number;
+      merchant_count: number;
+      bill_count: number;
+    }>(`/api/categories/impact?${qs}`);
+  },
+
+  deleteCategory(body: {
+    category: string;
+    subcategory?: string;
+    action: "unassign" | "reassign";
+    reassign_category?: string;
+    reassign_subcategory?: string;
+  }) {
+    if (!canWrite) writeGuard();
+    return req<{
+      category: string;
+      subcategory: string | null;
+      txn_count: number;
+      rewritten: number;
+      action: string;
+    }>("/api/categories/delete", { method: "POST", body: JSON.stringify(body) });
+  },
+
   saveMerchant(body: {
     canonical: string;
     members?: string[];
@@ -476,6 +528,24 @@ export const api = {
   }) {
     if (!canWrite) writeGuard();
     return req<unknown>("/api/merchants", { method: "POST", body: JSON.stringify(body) });
+  },
+
+  updateMerchant(
+    canonical: string,
+    body: {
+      canonical?: string;
+      aliases?: { regex?: string; exact?: string }[];
+      category?: string | null;
+      subcategory?: string | null;
+      apply_category?: boolean;
+      restamp?: boolean;
+    },
+  ) {
+    if (!canWrite) writeGuard();
+    return req<{ merchant: Merchant; applied: number }>(`/api/merchants/${encodeURIComponent(canonical)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
   },
 
   deleteMerchant(canonical: string) {

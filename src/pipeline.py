@@ -431,3 +431,77 @@ def recanonicalize() -> dict:
         write_ledger(_ensure_columns(updated))
         resolved = int(updated["canonical_merchant"].notna().sum())
     return {"updated": len(updated), "canonical": resolved}
+
+
+def rename_canonical_on_ledger(old: str, new: str) -> int:
+    """Stamp a renamed canonical onto existing ledger rows."""
+    if not old or not new or old == new:
+        return 0
+    with ledger_lock():
+        ledger = load_ledger()
+        if ledger.empty or "canonical_merchant" not in ledger.columns:
+            return 0
+        match = ledger["canonical_merchant"].fillna("").astype(str) == old
+        count = int(match.sum())
+        if count:
+            ledger.loc[match, "canonical_merchant"] = new
+            write_ledger(_ensure_columns(ledger))
+        return count
+
+
+def apply_category_to_canonical(canonical: str, category: str, subcategory: str = "") -> int:
+    """Apply a merchant default category to every row with this canonical name."""
+    cleaned = " ".join(category.split()).strip()
+    if not canonical or not cleaned:
+        return 0
+    cleaned_sub = " ".join((subcategory or "").split()).strip()
+    with ledger_lock():
+        ledger = load_ledger()
+        if ledger.empty or "canonical_merchant" not in ledger.columns:
+            return 0
+        match = ledger["canonical_merchant"].fillna("").astype(str) == canonical
+        count = int(match.sum())
+        if count:
+            ledger.loc[match, "category"] = cleaned
+            ledger.loc[match, "subcategory"] = cleaned_sub
+            ledger.loc[match, "classified_by"] = "manual"
+            ledger.loc[match, "proposed_category"] = None
+            ledger.loc[match, "proposed_subcategory"] = None
+            write_ledger(_ensure_columns(ledger))
+        return count
+
+
+def rewrite_ledger_category(
+    category: str,
+    subcategory: str | None = None,
+    *,
+    action: str,
+    reassign_category: str = "",
+    reassign_subcategory: str = "",
+) -> int:
+    """Unassign or retarget ledger rows that use a category being deleted."""
+    with ledger_lock():
+        ledger = load_ledger()
+        if ledger.empty:
+            return 0
+        cats = ledger["category"].fillna("").astype(str).str.strip()
+        if subcategory is None:
+            match = cats == category
+        else:
+            subs = ledger["subcategory"].fillna("").astype(str).str.strip()
+            match = (cats == category) & (subs == subcategory)
+        count = int(match.sum())
+        if not count:
+            return 0
+        if action == "reassign":
+            ledger.loc[match, "category"] = reassign_category
+            ledger.loc[match, "subcategory"] = reassign_subcategory
+            ledger.loc[match, "classified_by"] = "manual"
+        else:
+            ledger.loc[match, "category"] = "Uncategorized"
+            ledger.loc[match, "subcategory"] = ""
+            ledger.loc[match, "classified_by"] = None
+        ledger.loc[match, "proposed_category"] = None
+        ledger.loc[match, "proposed_subcategory"] = None
+        write_ledger(_ensure_columns(ledger))
+        return count

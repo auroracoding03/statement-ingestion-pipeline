@@ -133,6 +133,9 @@ def workspace(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setattr(paths_mod, "TAGS_PATH", tags_path)
     monkeypatch.setattr(paths_mod, "CARD_PRODUCTS_PATH", card_products_path)
     monkeypatch.setattr(paths_mod, "BUDGET_PATH", config / "budget.yaml")
+    expected_path = config / "expected_recurring.yaml"
+    expected_path.write_text("bills: []\n")
+    monkeypatch.setattr(paths_mod, "EXPECTED_RECURRING_PATH", expected_path)
 
     # These were bound into module namespaces at import time
     for module in (pipeline_mod, store_mod, api_app):
@@ -143,7 +146,6 @@ def workspace(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setattr(api_app, "PENDING_UPLOADS", tmp_path / "data" / "pending_uploads", raising=False)
     (tmp_path / "data" / "pending_uploads").mkdir()
     monkeypatch.setattr(api_app, "ensure_dirs", lambda: None)
-    paths_mod.EXPECTED_RECURRING_PATH.write_text("bills: []\n")
 
     original_write = store_mod.write_ledger
     monkeypatch.setattr(
@@ -678,3 +680,173 @@ def test_budget_get_merges_categories_and_put_round_trips(client: TestClient, wo
     utilities = next(env for env in again.json()["envelopes"] if env["category"] == "Utilities")
     assert utilities["amount"] == 200.0
     assert utilities["show_on_overview"] is False
+
+
+def test_patch_merchant_renames_aliases_and_applies_category(client: TestClient):
+    client.post(
+        "/api/rules",
+        json={"merchant_canonical": "Walmart", "category": "Shopping", "subcategory": "Retail"},
+    )
+    patched = client.patch(
+        "/api/merchants/Walmart",
+        json={
+            "canonical": "Walmart Supercenter",
+            "aliases": [{"regex": r"(?i)wal[-\s]?mart"}, {"exact": "WMT"}],
+            "category": "Shopping",
+            "subcategory": "Retail",
+            "apply_category": True,
+            "restamp": True,
+        },
+    )
+    assert patched.status_code == 200
+    body = patched.json()
+    assert body["merchant"]["canonical"] == "Walmart Supercenter"
+    assert body["applied"] == 1
+    names = {item["canonical"] for item in client.get("/api/merchants").json()["items"]}
+    assert "Walmart Supercenter" in names
+    assert "Walmart" not in names
+
+    txn = client.get("/api/transactions?q=wal").json()["items"][0]
+    assert txn["canonical_merchant"] == "Walmart Supercenter"
+    assert txn["category"] == "Shopping"
+    assert txn["subcategory"] == "Retail"
+    assert txn["classified_by"] == "manual"
+
+    rules = client.get("/api/rules").json()["rules"]
+    assert any(rule["match"].get("merchant_canonical") == "Walmart Supercenter" for rule in rules)
+    assert not any(rule["match"].get("merchant_canonical") == "Walmart" for rule in rules)
+
+
+def test_patch_merchant_unknown_is_404(client: TestClient):
+    missing = client.patch("/api/merchants/Nope", json={"canonical": "Nope"})
+    assert missing.status_code == 404
+
+
+def test_category_impact_and_unassign_subcategory(client: TestClient, workspace: dict):
+    client.post("/api/subcategories", json={"category": "Food", "subcategory": "Coffee"})
+    client.post("/api/subcategories", json={"category": "Food", "subcategory": "Groceries"})
+    client.post(
+        "/api/transactions/bulk",
+        json={"txn_ids": [workspace["coffee_id"]], "category": "Food", "subcategory": "Coffee"},
+    )
+    client.post(
+        "/api/rules",
+        json={"merchant_canonical": "Local Coffee Roasters", "category": "Food", "subcategory": "Coffee"},
+    )
+    client.patch(
+        "/api/merchants/Walmart",
+        json={"category": "Food", "subcategory": "Coffee", "apply_category": False, "restamp": False},
+    )
+    (workspace["root"] / "config" / "expected_recurring.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "bills": [
+                    {
+                        "name": "Coffee club",
+                        "category": "Food",
+                        "subcategory": "Coffee",
+                        "merchant_regex": "(?i)coffee",
+                    }
+                ]
+            }
+        )
+    )
+
+    impact = client.get("/api/categories/impact", params={"category": "Food", "subcategory": "Coffee"})
+    assert impact.status_code == 200
+    body = impact.json()
+    assert body["txn_count"] == 1
+    assert body["rule_count"] == 1
+    assert body["merchant_count"] == 1
+    assert body["bill_count"] == 1
+
+    deleted = client.post(
+        "/api/categories/delete",
+        json={"category": "Food", "subcategory": "Coffee", "action": "unassign"},
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["rewritten"] == 1
+
+    txn = client.get("/api/transactions?q=coffee").json()["items"][0]
+    assert txn["category"] == "Uncategorized"
+    assert txn["subcategory"] in ("", None)
+    assert txn["classified_by"] is None
+
+    rules = client.get("/api/rules").json()
+    assert "Food" in rules["categories"]
+    assert "Coffee" not in (rules["subcategories"].get("Food") or [])
+    assert "Groceries" in rules["subcategories"]["Food"]
+    assert not any(rule.get("subcategory") == "Coffee" for rule in rules["rules"])
+
+    walmart = next(item for item in client.get("/api/merchants").json()["items"] if item["canonical"] == "Walmart")
+    assert walmart["category"] in (None, "")
+    bills = yaml.safe_load((workspace["root"] / "config" / "expected_recurring.yaml").read_text())
+    assert bills["bills"][0]["category"] in (None, "")
+
+
+def test_category_delete_reassign_primary(client: TestClient, workspace: dict):
+    client.post("/api/subcategories", json={"category": "Food", "subcategory": "Coffee"})
+    client.post(
+        "/api/transactions/bulk",
+        json={"txn_ids": [workspace["coffee_id"]], "category": "Food", "subcategory": "Coffee"},
+    )
+    client.post(
+        "/api/rules",
+        json={"merchant_canonical": "Local Coffee Roasters", "category": "Food", "subcategory": "Coffee"},
+    )
+    client.patch(
+        "/api/merchants/Walmart",
+        json={"category": "Food", "apply_category": False, "restamp": False},
+    )
+    client.put(
+        "/api/budget",
+        json={
+            "envelopes": [
+                {"category": "Food", "amount": 800, "show_on_overview": True, "subcategories": []},
+                {"category": "Shopping", "amount": None, "show_on_overview": False, "subcategories": []},
+                {"category": "Utilities", "amount": 200, "show_on_overview": False, "subcategories": []},
+            ]
+        },
+    )
+
+    deleted = client.post(
+        "/api/categories/delete",
+        json={"category": "Food", "action": "reassign", "reassign_category": "Shopping"},
+    )
+    assert deleted.status_code == 200
+
+    txn = client.get("/api/transactions?q=coffee").json()["items"][0]
+    assert txn["category"] == "Shopping"
+    assert txn["classified_by"] == "manual"
+
+    rules = client.get("/api/rules").json()
+    assert "Food" not in rules["categories"]
+    assert "Shopping" in rules["categories"]
+    assert "Food" not in rules["subcategories"]
+    assert any(rule["category"] == "Shopping" for rule in rules["rules"] if rule["match"].get("merchant_canonical") == "Local Coffee Roasters")
+
+    walmart = next(item for item in client.get("/api/merchants").json()["items"] if item["canonical"] == "Walmart")
+    assert walmart["category"] == "Shopping"
+
+    envelopes = {env["category"] for env in client.get("/api/budget").json()["envelopes"]}
+    assert "Food" not in envelopes
+    assert "Shopping" in envelopes
+
+
+def test_cannot_delete_uncategorized(client: TestClient):
+    created = client.post("/api/categories", json={"category": "Uncategorized"})
+    assert created.status_code == 200
+    refused = client.post(
+        "/api/categories/delete",
+        json={"category": "Uncategorized", "action": "unassign"},
+    )
+    assert refused.status_code == 422
+    assert "Uncategorized" in client.get("/api/rules").json()["categories"]
+
+
+def test_category_delete_unknown_is_404(client: TestClient):
+    missing = client.post(
+        "/api/categories/delete",
+        json={"category": "NoSuch", "action": "unassign"},
+    )
+    assert missing.status_code == 404
