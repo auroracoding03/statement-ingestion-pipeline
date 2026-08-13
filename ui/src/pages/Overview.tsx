@@ -3,12 +3,14 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
 
+import { PeriodPicker, type PeriodValue } from "../components/PeriodPicker";
 import { ErrorNote, Loading, Metric, PageHeader, StatusPill } from "../components/ui";
 import { api, canWrite } from "../lib/dataSource";
 import { compactMoney, money, shortDate } from "../lib/format";
@@ -31,17 +33,27 @@ const COLORS = [
 
 export function Overview() {
   const status = useAsync(() => api.status(), []);
-  const [month, setMonth] = useState("");
+  const [period, setPeriod] = useState<PeriodValue>({ preset: "month", month: "", since: "", until: "" });
   const [cardholder, setCardholder] = useState("");
+  const ready = period.preset !== "custom" || Boolean(period.since && period.until);
   const summary = useAsync(
-    () => api.overviewMonth({ month: month || undefined, cardholder: cardholder || undefined }),
-    [month, cardholder],
+    () =>
+      ready
+        ? api.overviewMonth({
+            preset: period.preset,
+            month: period.month || undefined,
+            since: period.preset === "custom" ? period.since : undefined,
+            until: period.preset === "custom" ? period.until : undefined,
+            cardholder: cardholder || undefined,
+          })
+        : Promise.resolve(null),
+    [period.preset, period.month, period.since, period.until, cardholder, ready],
   );
 
   const data = summary.data;
   const months = data?.months ?? [];
-  const selectedMonth = month || data?.month || "";
   const holders = status.data?.cardholders ?? [];
+  const range = { since: data?.since ?? "", until: data?.until ?? "" };
   const chartRows = useMemo(
     () => (data?.categories ?? []).filter((row) => row.total > 0),
     [data],
@@ -53,11 +65,15 @@ export function Overview() {
       .slice(0, 6);
   }, [data]);
 
+  function txnHref(extra: Record<string, string | number | boolean | undefined> = {}) {
+    return hashHref("/transactions", { since: range.since, until: range.until, ...extra });
+  }
+
   return (
     <>
       <PageHeader
         title="Monthly finance overview"
-        lede="Pick a month for a household spend conversation: what changed, what was a one-off, and which bills posted."
+        lede="Pick a window for a household spend conversation: what changed, what was a one-off, and which bills posted."
       />
 
       {status.error && <ErrorNote error={status.error} />}
@@ -88,17 +104,7 @@ export function Overview() {
       )}
 
       <div className="toolbar overview-controls">
-        <label>
-          Month
-          <select value={selectedMonth} onChange={(event) => setMonth(event.target.value)} disabled={!months.length}>
-            {months.length === 0 && <option value="">No months yet</option>}
-            {[...months].reverse().map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-        </label>
+        <PeriodPicker months={months} value={period} onChange={setPeriod} />
         {canWrite && holders.length > 0 && (
           <label>
             Spend by
@@ -115,21 +121,26 @@ export function Overview() {
       </div>
 
       {summary.error && <ErrorNote error={summary.error} />}
-      {summary.loading && <Loading what="month summary" />}
+      {summary.loading && <Loading what="period summary" />}
+      {!ready && <p className="muted">Choose a start and end date.</p>}
 
       {data && !summary.loading && (
         <>
           <div className="metrics">
-            <Metric label="Spend this month" value={money(data.spend_total)} />
-            <Metric label="vs last month" value={deltaLabel(data)} />
+            <Metric label={data.label ? `Spend · ${data.label}` : "Spend"} value={money(data.spend_total)} />
+            <Metric label={deltaCaption(data)} value={deltaLabel(data)} />
             <Metric label="Charges" value={data.charge_count} />
             <Metric label="Payments & refunds" value={money(data.payments_and_refunds)} />
             <Metric
               label="Uncategorized"
-              value={`${money(data.uncategorized_total)} · ${data.uncategorized_count}`}
+              value={
+                <a href={txnHref({ unclassified: "1" })}>
+                  {`${money(data.uncategorized_total)} · ${data.uncategorized_count}`}
+                </a>
+              }
             />
             <Metric
-              label="Needs review this month"
+              label="Needs review"
               value={
                 canWrite && data.review_count > 0 ? (
                   <a href={hashHref("/review")}>{data.review_count}</a>
@@ -150,53 +161,87 @@ export function Overview() {
             </div>
           )}
 
-          <h2>Spend by category</h2>
-          {chartRows.length > 0 ? (
-            <div className="chart-wrap">
-              <ResponsiveContainer width="100%" height={Math.max(280, chartRows.length * 28)}>
-                <BarChart data={chartRows} layout="vertical" margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e7dfd2" horizontal={false} />
-                  <XAxis type="number" tick={{ fontSize: 12 }} tickFormatter={(value) => compactMoney(Number(value))} />
-                  <YAxis type="category" dataKey="category" width={120} tick={{ fontSize: 12 }} />
-                  <Tooltip
-                    formatter={(value) => [money(Number(value)), "Spend"]}
-                    contentStyle={{ fontSize: 13, borderRadius: 4 }}
-                  />
-                  <Bar dataKey="total" fill={COLORS[0]} radius={[0, 3, 3, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          ) : (
-            <p className="muted">No categorized spend for this month{cardholder ? ` for ${cardholder}` : ""}.</p>
-          )}
+          <div className="overview-charts">
+            <section>
+              <h2>Spend by category</h2>
+              <p className="chart-caption">This window’s charges. Click a bar to open those transactions.</p>
+              {chartRows.length > 0 ? (
+                <div className="chart-wrap">
+                  <ResponsiveContainer width="100%" height={Math.max(220, chartRows.length * 28)}>
+                    <BarChart data={chartRows} layout="vertical" margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e7dfd2" horizontal={false} />
+                      <XAxis type="number" tick={{ fontSize: 12 }} tickFormatter={(value) => compactMoney(Number(value))} />
+                      <YAxis type="category" dataKey="category" width={120} tick={{ fontSize: 12 }} />
+                      <Tooltip
+                        formatter={(value) => [money(Number(value)), "Spend"]}
+                        contentStyle={{ fontSize: 13, borderRadius: 4 }}
+                      />
+                      <Bar
+                        dataKey="total"
+                        fill={COLORS[0]}
+                        radius={[0, 3, 3, 0]}
+                        cursor="pointer"
+                        onClick={(row) => {
+                          const payload = row as { category?: string; payload?: { category?: string } };
+                          const category = payload.category ?? payload.payload?.category;
+                          if (category) window.location.hash = txnHref({ category });
+                        }}
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <p className="muted">No categorized spend for this window{cardholder ? ` for ${cardholder}` : ""}.</p>
+              )}
+            </section>
 
-          <div className="overview-grid">
             {movers.length > 0 && (
               <section>
                 <h2>What changed</h2>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Category</th>
-                        <th className="num">This month</th>
-                        <th className="num">Change</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {movers.map((row) => (
-                        <tr key={row.category}>
-                          <td>{row.category}</td>
-                          <td className="num">{money(row.total)}</td>
-                          <td className={`num ${deltaClass(row.delta)}`}>{signedMoney(row.delta)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <p className="chart-caption">
+                  {deltaCaption(data)}. Red is higher spend, pine is lower. Click a bar to drill in.
+                </p>
+                <div className="chart-wrap">
+                  <ResponsiveContainer width="100%" height={Math.max(200, movers.length * 36)}>
+                    <BarChart data={movers} layout="vertical" margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e7dfd2" horizontal={false} />
+                      <XAxis type="number" tick={{ fontSize: 12 }} tickFormatter={(value) => compactMoney(Number(value))} />
+                      <YAxis type="category" dataKey="category" width={120} tick={{ fontSize: 12 }} />
+                      <Tooltip
+                        formatter={(value, _name, item) => {
+                          const row = item?.payload as { total?: number; delta?: number } | undefined;
+                          return [
+                            `${signedMoney(Number(value))} · this window ${money(row?.total)}`,
+                            "Change",
+                          ];
+                        }}
+                        contentStyle={{ fontSize: 13, borderRadius: 4 }}
+                      />
+                      <Bar
+                        dataKey="delta"
+                        radius={[0, 3, 3, 0]}
+                        cursor="pointer"
+                        onClick={(row) => {
+                          const payload = row as { category?: string; payload?: { category?: string } };
+                          const category = payload.category ?? payload.payload?.category;
+                          if (category) window.location.hash = txnHref({ category });
+                        }}
+                      >
+                        {movers.map((row) => (
+                          <Cell
+                            key={row.category}
+                            fill={(row.delta ?? 0) > 0 ? "#8b1e1e" : "#0f5c4c"}
+                          />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
                 </div>
               </section>
             )}
+          </div>
 
+          <div className="overview-lists">
             {data.large_charges.length > 0 && (
               <section>
                 <h2>Large charges</h2>
@@ -211,7 +256,13 @@ export function Overview() {
                     </thead>
                     <tbody>
                       {data.large_charges.map((row) => (
-                        <tr key={`${row.posted_date}-${row.merchant}-${row.amount}`}>
+                        <tr
+                          key={`${row.posted_date}-${row.merchant}-${row.amount}`}
+                          className="clickable-row"
+                          onClick={() => {
+                            window.location.hash = txnHref({ q: row.merchant });
+                          }}
+                        >
                           <td>{shortDate(row.posted_date)}</td>
                           <td>
                             {row.merchant}
@@ -241,7 +292,13 @@ export function Overview() {
                     </thead>
                     <tbody>
                       {data.tagged.map((row) => (
-                        <tr key={row.id}>
+                        <tr
+                          key={row.id}
+                          className="clickable-row"
+                          onClick={() => {
+                            window.location.hash = txnHref({ tag: row.id });
+                          }}
+                        >
                           <td>
                             {row.label}
                             <div className="muted">{row.kind}</div>
@@ -281,14 +338,59 @@ export function Overview() {
               </section>
             )}
           </div>
+
+          {(data.budget_rows ?? []).length > 0 && (
+            <section className="overview-budget">
+              <h2>Budget vs actual</h2>
+              <p className="chart-caption">
+                Envelopes marked Show on Overview. Budgeted and actual spend are in black; overspend is red,
+                underspend is pine. Click a row to open those transactions.
+              </p>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Category</th>
+                      <th className="num">Budgeted</th>
+                      <th className="num">Actual</th>
+                      <th className="num">Variance</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(data.budget_rows ?? []).map((row) => (
+                      <tr
+                        key={`${row.category}-${row.subcategory ?? ""}`}
+                        className={`clickable-row${row.subcategory ? " budget-sub" : ""}`}
+                        onClick={() => {
+                          window.location.hash = txnHref({
+                            category: row.category,
+                            subcategory: row.subcategory ?? undefined,
+                          });
+                        }}
+                      >
+                        <td>{row.subcategory ? row.label : row.category}</td>
+                        <td className="num">{money(row.budget)}</td>
+                        <td className="num">{money(row.actual)}</td>
+                        <td className={`num ${varianceClass(row.variance)}`}>{signedMoney(row.variance)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
         </>
       )}
     </>
   );
 }
 
+function deltaCaption(data: OverviewMonth): string {
+  return data.preset === "month" || data.preset === "prev_month" ? "vs last month" : "vs prior period";
+}
+
 function deltaLabel(data: OverviewMonth): string {
-  if (data.spend_delta == null) return "No prior month";
+  if (data.spend_delta == null) return "No prior period";
   const pct = data.spend_delta_pct == null ? "" : ` (${signedNumber(data.spend_delta_pct)}%)`;
   return `${signedMoney(data.spend_delta)}${pct}`;
 }
@@ -303,7 +405,8 @@ function signedNumber(value: number): string {
   return `${value > 0 ? "+" : ""}${value}`;
 }
 
-function deltaClass(value: number | null | undefined): string {
-  if (value == null || value === 0) return "";
-  return value > 0 ? "delta-up" : "delta-down";
+function varianceClass(value: number): string {
+  if (value > 0) return "delta-up";
+  if (value < 0) return "delta-down";
+  return "";
 }

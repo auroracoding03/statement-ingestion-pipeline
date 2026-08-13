@@ -17,6 +17,12 @@ export function compactMoney(value: number): string {
   }).format(value);
 }
 
+export function cashflow(amount: number): { text: string; kind: "charge" | "credit" | "zero" } {
+  if (amount < 0) return { text: `+${money(Math.abs(amount))}`, kind: "credit" };
+  if (amount > 0) return { text: money(amount), kind: "charge" };
+  return { text: money(0), kind: "zero" };
+}
+
 export function shortDate(value: string | null | undefined): string {
   if (!value) return "—";
   const d = new Date(value);

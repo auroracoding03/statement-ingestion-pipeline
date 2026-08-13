@@ -22,6 +22,7 @@ CONFIG_FILES = (
     "ollama.yaml",
     "tags.yaml",
     "card_products.yaml",
+    "budget.yaml",
 )
 
 
@@ -76,6 +77,7 @@ PUBLISH_PATH = CONFIG / "publish.yaml"
 OLLAMA_PATH = CONFIG / "ollama.yaml"
 TAGS_PATH = CONFIG / "tags.yaml"
 CARD_PRODUCTS_PATH = CONFIG / "card_products.yaml"
+BUDGET_PATH = CONFIG / "budget.yaml"
 
 LEDGER_PARQUET = DATA / "ledger.parquet"
 LEDGER_LOCK = DATA / "ledger.lock"

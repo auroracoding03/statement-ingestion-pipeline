@@ -10,6 +10,7 @@
 import type {
   AiProposal,
   AiStatus,
+  BudgetEnvelope,
   CategoryMonthly,
   ContextTag,
   CardsCoverage,
@@ -21,8 +22,10 @@ import type {
   OverviewMonth,
   ReconciliationRow,
   RecurringRow,
+  ReviewCluster,
   ReviewQueue,
   Rule,
+  RulePreview,
   Status,
   Transaction,
   UnknownCluster,
@@ -94,6 +97,79 @@ export interface UploadInspection {
   needs_manual_details: boolean;
 }
 
+function postedDay(value: string): string {
+  return String(value).slice(0, 10);
+}
+
+function filterStaticTransactions(
+  items: Transaction[],
+  params: Record<string, string | number | boolean>,
+): { total: number; items: Transaction[] } {
+  let rows = items;
+  const query = String(params.q ?? "").toLowerCase();
+  if (query) {
+    rows = rows.filter((row) =>
+      `${row.raw_description} ${row.normalized_merchant} ${row.canonical_merchant ?? ""}`
+        .toLowerCase()
+        .includes(query),
+    );
+  }
+  if (params.category) {
+    rows = rows.filter((row) => (row.category ?? "Uncategorized") === params.category);
+  }
+  if (params.subcategory) {
+    rows = rows.filter((row) => (row.subcategory ?? "") === params.subcategory);
+  }
+  if (params.tag) {
+    rows = rows.filter((row) => (row.tags ?? []).includes(String(params.tag)));
+  }
+  if (params.card) {
+    rows = rows.filter((row) => row.card === params.card);
+  }
+  if (params.merchant) {
+    rows = rows.filter(
+      (row) => row.canonical_merchant === params.merchant || row.normalized_merchant === params.merchant,
+    );
+  }
+  if (params.unclassified) {
+    rows = rows.filter((row) => !row.classified_by || row.classified_by === "ai" || !row.category);
+  }
+  if (params.since) {
+    rows = rows.filter((row) => postedDay(row.posted_date) >= String(params.since));
+  }
+  if (params.until) {
+    rows = rows.filter((row) => postedDay(row.posted_date) <= String(params.until));
+  }
+  const sort = String(params.sort ?? "posted_date");
+  const descending = String(params.order ?? "desc") !== "asc";
+  rows = [...rows].sort((left, right) => {
+    let av: string | number = "";
+    let bv: string | number = "";
+    if (sort === "amount") {
+      av = left.amount;
+      bv = right.amount;
+    } else if (sort === "merchant") {
+      av = (left.canonical_merchant || left.normalized_merchant || "").toLowerCase();
+      bv = (right.canonical_merchant || right.normalized_merchant || "").toLowerCase();
+    } else if (sort === "category") {
+      av = (left.category ?? "Uncategorized").toLowerCase();
+      bv = (right.category ?? "Uncategorized").toLowerCase();
+    } else if (sort === "card") {
+      av = left.card;
+      bv = right.card;
+    } else {
+      av = postedDay(left.posted_date);
+      bv = postedDay(right.posted_date);
+    }
+    if (av < bv) return descending ? 1 : -1;
+    if (av > bv) return descending ? -1 : 1;
+    return 0;
+  });
+  const limit = Number(params.limit ?? 500);
+  const offset = Number(params.offset ?? 0);
+  return { total: rows.length, items: rows.slice(offset, offset + limit) };
+}
+
 export const api = {
   async aiStatus(warmup = false): Promise<AiStatus> {
     if (!canWrite) throw new DataError("Local AI setup is only available in the desktop app.");
@@ -141,7 +217,7 @@ export const api = {
       return req<{ total: number; items: Transaction[] }>(`/api/transactions?${qs}`);
     }
     const items = await staticJSON<Transaction[]>("ledger", []);
-    return { total: items.length, items };
+    return filterStaticTransactions(items, params);
   },
 
   async categoriesMonthly(): Promise<CategoryMonthly[]> {
@@ -149,11 +225,19 @@ export const api = {
     return staticJSON<CategoryMonthly[]>("category_monthly", []);
   },
 
-  async overviewMonth(params: { month?: string; cardholder?: string } = {}): Promise<OverviewMonth> {
+  async overviewMonth(
+    params: { month?: string; cardholder?: string; preset?: string; since?: string; until?: string } = {},
+  ): Promise<OverviewMonth> {
     if (!canWrite) {
       return {
         month: params.month ?? null,
         months: [],
+        preset: params.preset ?? "month",
+        since: params.since ?? null,
+        until: params.until ?? null,
+        prior_since: null,
+        prior_until: null,
+        label: null,
         cardholder: params.cardholder ?? null,
         spend_total: 0,
         prior_spend_total: null,
@@ -169,13 +253,41 @@ export const api = {
         large_charges: [],
         tagged: [],
         bills: [],
+        budget_rows: [],
       };
     }
     const qs = new URLSearchParams();
+    if (params.preset) qs.set("preset", params.preset);
     if (params.month) qs.set("month", params.month);
     if (params.cardholder) qs.set("cardholder", params.cardholder);
+    if (params.since) qs.set("since", params.since);
+    if (params.until) qs.set("until", params.until);
     const suffix = qs.toString() ? `?${qs}` : "";
     return req<OverviewMonth>(`/api/overview/month${suffix}`);
+  },
+
+  async budget(): Promise<{ envelopes: BudgetEnvelope[] }> {
+    if (!canWrite) return { envelopes: [] };
+    return req<{ envelopes: BudgetEnvelope[] }>("/api/budget");
+  },
+
+  saveBudget(envelopes: BudgetEnvelope[]) {
+    if (!canWrite) writeGuard();
+    return req<{ envelopes: BudgetEnvelope[] }>("/api/budget", {
+      method: "PUT",
+      body: JSON.stringify({
+        envelopes: envelopes.map((env) => ({
+          category: env.category,
+          amount: env.amount,
+          show_on_overview: env.show_on_overview,
+          subcategories: env.subcategories.map((sub) => ({
+            subcategory: sub.subcategory,
+            amount: sub.amount,
+            show_on_overview: sub.show_on_overview,
+          })),
+        })),
+      }),
+    });
   },
 
   async cards(params: { issuer?: string; product?: string; cardholder?: string } = {}): Promise<CardsCoverage> {
@@ -231,6 +343,16 @@ export const api = {
       return { total: items.length, items, categories: [], subcategories: {} };
     }
     return req<ReviewQueue>("/api/review/queue");
+  },
+
+  async reviewClusters() {
+    if (!canWrite) return { total: 0, items: [] as ReviewCluster[] };
+    return req<{ total: number; items: ReviewCluster[] }>("/api/review/clusters");
+  },
+
+  previewRule(body: { txn_id: string; category: string; subcategory?: string; rule_scope?: string }) {
+    if (!canWrite) writeGuard();
+    return req<RulePreview>("/api/review/preview-rule", { method: "POST", body: JSON.stringify(body) });
   },
 
   async rules(): Promise<{
@@ -308,6 +430,14 @@ export const api = {
       rule?: unknown;
       applied_txn_ids?: string[];
     }>(`/api/review/${txnId}`, { method: "POST", body: JSON.stringify(body) });
+  },
+
+  bulkTransactions(body: { txn_ids: string[]; category?: string; subcategory?: string; tags?: string[] }) {
+    if (!canWrite) writeGuard();
+    return req<{ updated: string[]; count: number }>("/api/transactions/bulk", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
   },
 
   createTag(body: { label: string; kind?: string; id?: string }) {

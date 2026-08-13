@@ -7,7 +7,7 @@ import yaml
 
 import src.paths as paths
 from src.normalize import make_txn_id
-from src.overview import LARGE_CHARGE_MIN, build_month_summary, cardholders
+from src.overview import LARGE_CHARGE_MIN, build_month_summary, build_period_summary, cardholders
 
 
 def _row(**overrides):
@@ -46,6 +46,7 @@ def _row(**overrides):
 def _stub_overview_deps(monkeypatch, bills: str = "bills: []\n"):
     paths.EXPECTED_RECURRING_PATH.write_text(bills)
     monkeypatch.setattr("src.overview.list_tags", lambda: [])
+    monkeypatch.setattr("src.budget.load_budget", lambda path=None: {"envelopes": []})
 
 
 def test_cardholders_are_sorted_unique_and_skip_blanks():
@@ -162,3 +163,96 @@ def test_category_deltas_vs_prior_month(monkeypatch):
     assert by_cat["Food"]["delta"] == 40.0
     assert by_cat["Transport"]["prior_total"] == 0.0
     assert by_cat["Transport"]["delta"] == 60.0
+
+
+def test_t12m_sums_window_and_compares_prior_year(monkeypatch):
+    _stub_overview_deps(monkeypatch)
+    rows = []
+    for month, amount in [
+        ("2024-08", 10.0),
+        ("2025-07", 15.0),
+        ("2025-08", 40.0),
+        ("2026-07", 60.0),
+    ]:
+        rows.append(
+            _row(
+                posted_date=f"{month}-15",
+                amount=amount,
+                raw_description=f"{month} FOOD",
+                category="Food",
+            )
+        )
+    rows.append(
+        _row(posted_date="2026-07-20", amount=-50.0, raw_description="PAYMENT", category="Transfer")
+    )
+    summary = build_period_summary(
+        pd.DataFrame(rows),
+        preset="t12m",
+        month="2026-07",
+    )
+    assert summary["since"] == "2025-08-01"
+    assert summary["until"] == "2026-07-31"
+    assert summary["spend_total"] == 100.0
+    assert summary["prior_spend_total"] == 25.0
+    assert summary["spend_delta"] == 75.0
+    assert summary["bills"] == []
+    assert summary["preset"] == "t12m"
+
+
+def test_ytd_and_custom_are_inclusive(monkeypatch):
+    _stub_overview_deps(monkeypatch)
+
+    ledger = pd.DataFrame(
+        [
+            _row(posted_date="2025-01-15", amount=10.0, raw_description="LAST YTD", category="Food"),
+            _row(posted_date="2026-01-01", amount=20.0, raw_description="JAN", category="Food"),
+            _row(posted_date="2026-07-31", amount=30.0, raw_description="JULY END", category="Food"),
+            _row(posted_date="2026-08-01", amount=99.0, raw_description="AUG", category="Food"),
+        ]
+    )
+    ytd = build_period_summary(ledger, preset="ytd", month="2026-07")
+    assert ytd["spend_total"] == 50.0
+    assert ytd["since"] == "2026-01-01"
+    assert ytd["until"] == "2026-07-31"
+    assert ytd["prior_spend_total"] == 10.0
+
+    custom = build_period_summary(
+        ledger,
+        preset="custom",
+        since="2026-01-01",
+        until="2026-07-31",
+    )
+    assert custom["spend_total"] == 50.0
+    assert custom["since"] == "2026-01-01"
+
+
+def test_period_summary_includes_shown_budget_rows(monkeypatch):
+    _stub_overview_deps(monkeypatch)
+    monkeypatch.setattr(
+        "src.budget.load_budget",
+        lambda path=None: {
+            "envelopes": [
+                {
+                    "category": "Food",
+                    "amount": 50.0,
+                    "show_on_overview": True,
+                    "subcategories": [
+                        {"subcategory": "Groceries", "amount": 30.0, "show_on_overview": True},
+                    ],
+                }
+            ]
+        },
+    )
+    ledger = pd.DataFrame(
+        [
+            _row(amount=40.0, raw_description="GROCERIES", category="Food", subcategory="Groceries"),
+            _row(amount=20.0, raw_description="DINNER", category="Food", subcategory="Restaurant"),
+        ]
+    )
+    summary = build_period_summary(ledger, preset="month", month="2026-07")
+    by_label = {row["label"]: row for row in summary["budget_rows"]}
+    assert by_label["Food"]["actual"] == 60.0
+    assert by_label["Food"]["budget"] == 50.0
+    assert by_label["Food"]["variance"] == 10.0
+    assert by_label["Food / Groceries"]["actual"] == 40.0
+    assert by_label["Food / Groceries"]["variance"] == 10.0

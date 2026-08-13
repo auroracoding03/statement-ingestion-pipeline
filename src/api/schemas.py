@@ -96,3 +96,34 @@ class InsightsChatMessage(BaseModel):
 
 class InsightsChatRequest(BaseModel):
     messages: list[InsightsChatMessage] = Field(min_length=1, max_length=8)
+
+
+class ReviewPreviewRequest(BaseModel):
+    txn_id: str
+    category: str
+    subcategory: str = ""
+    rule_scope: str = Field(default="auto", pattern="^(auto|canonical|regex|none)$")
+
+
+class BulkTransactionsRequest(BaseModel):
+    txn_ids: list[str] = Field(min_length=1, max_length=200)
+    category: str | None = None
+    subcategory: str | None = None
+    tags: list[str] | None = None
+
+
+class BudgetSubcategoryIn(BaseModel):
+    subcategory: str = Field(min_length=1, max_length=80)
+    amount: float | None = None
+    show_on_overview: bool = False
+
+
+class BudgetEnvelopeIn(BaseModel):
+    category: str = Field(min_length=1, max_length=80)
+    amount: float | None = None
+    show_on_overview: bool = False
+    subcategories: list[BudgetSubcategoryIn] = Field(default_factory=list)
+
+
+class BudgetPut(BaseModel):
+    envelopes: list[BudgetEnvelopeIn] = Field(default_factory=list)

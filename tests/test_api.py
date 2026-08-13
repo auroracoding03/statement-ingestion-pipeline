@@ -132,6 +132,7 @@ def workspace(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setattr(paths_mod, "MERCHANTS_PATH", merchants_path)
     monkeypatch.setattr(paths_mod, "TAGS_PATH", tags_path)
     monkeypatch.setattr(paths_mod, "CARD_PRODUCTS_PATH", card_products_path)
+    monkeypatch.setattr(paths_mod, "BUDGET_PATH", config / "budget.yaml")
 
     # These were bound into module namespaces at import time
     for module in (pipeline_mod, store_mod, api_app):
@@ -192,6 +193,7 @@ def test_overview_month_summarizes_latest_month(client: TestClient):
     assert body["uncategorized_count"] == 2
     assert body["review_count"] == 2
     assert body["tagged"] == [{"id": "date", "label": "Date", "kind": "occasion", "total": 6.75}]
+    assert body["budget_rows"] == []
 
 
 def test_cards_coverage_lists_products(client: TestClient):
@@ -252,6 +254,20 @@ def test_transactions_search_and_filter(client: TestClient):
     assert r.status_code == 200
     assert r.json()["total"] == 1
     assert r.json()["items"][0]["tags"] == ["date"]
+
+
+def test_transactions_filter_by_subcategory(client: TestClient, workspace: dict):
+    client.post(
+        "/api/transactions/bulk",
+        json={"txn_ids": [workspace["coffee_id"]], "category": "Food", "subcategory": "Coffee"},
+    )
+    matched = client.get("/api/transactions?category=Food&subcategory=Coffee")
+    assert matched.status_code == 200
+    assert matched.json()["total"] == 1
+    assert matched.json()["items"][0]["txn_id"] == workspace["coffee_id"]
+
+    missed = client.get("/api/transactions?subcategory=Groceries")
+    assert missed.json()["total"] == 0
 
 
 def test_tags_vocabulary_crud(client: TestClient):
@@ -375,6 +391,55 @@ def test_review_rule_reclassifies_matching_queue_siblings(client: TestClient, wo
     assert sibling_txn["category"] == "Food"
     assert sibling_txn["subcategory"] == "Coffee"
     assert sibling_txn["classified_by"] == "rule"
+
+
+def test_transactions_filter_sort_and_bulk(client: TestClient, workspace: dict):
+    since = client.get("/api/transactions?since=2026-01-07").json()
+    assert since["total"] == 1
+    assert since["items"][0]["txn_id"] == workspace["coffee_id"]
+
+    ranked = client.get("/api/transactions?sort=amount&order=desc").json()
+    assert [row["amount"] for row in ranked["items"]] == [84.19, 6.75]
+
+    overview = client.get("/api/overview/month?preset=t12m").json()
+    assert overview["preset"] == "t12m"
+    assert overview["since"] == "2025-02-01"
+    assert overview["until"] == "2026-01-31"
+    assert overview["spend_total"] == 90.94
+
+    bulk = client.post(
+        "/api/transactions/bulk",
+        json={
+            "txn_ids": [workspace["walmart_id"], workspace["coffee_id"]],
+            "category": "Shopping",
+            "subcategory": "Warehouse",
+        },
+    )
+    assert bulk.status_code == 200
+    assert bulk.json()["count"] == 2
+    walmart = client.get("/api/transactions?q=wal-mart").json()["items"][0]
+    assert walmart["category"] == "Shopping"
+    assert walmart["classified_by"] == "manual"
+
+
+def test_review_clusters_and_preview_do_not_write(client: TestClient, workspace: dict):
+    clusters = client.get("/api/review/clusters").json()
+    merchants = {item["merchant"] for item in clusters["items"]}
+    assert "LOCAL COFFEE ROASTERS DOWNTOWN" in merchants
+    coffee = next(item for item in clusters["items"] if "COFFEE" in item["merchant"])
+    assert coffee["count"] == 1
+
+    before_rules = (workspace["root"] / "config" / "rules.yaml").read_text()
+    preview = client.post(
+        "/api/review/preview-rule",
+        json={"txn_id": workspace["coffee_id"], "category": "Food", "subcategory": "Coffee"},
+    )
+    assert preview.status_code == 200
+    body = preview.json()
+    assert body["match_count"] == 1
+    assert body["sample"][0]["txn_id"] == workspace["coffee_id"]
+    assert (workspace["root"] / "config" / "rules.yaml").read_text() == before_rules
+    assert client.get("/api/review/queue").json()["total"] == 2
 
 
 def test_review_unknown_transaction_is_404(client: TestClient):
@@ -571,3 +636,45 @@ def test_amex_commit_rejects_unknown_product(client: TestClient):
     )
     assert rejected.status_code == 422
     assert "Unsupported American Express product" in rejected.json()["detail"]
+
+
+def test_budget_get_merges_categories_and_put_round_trips(client: TestClient, workspace: dict):
+    listed = client.get("/api/budget")
+    assert listed.status_code == 200
+    names = [env["category"] for env in listed.json()["envelopes"]]
+    assert names == ["Food", "Shopping", "Utilities"]
+    assert all(env["amount"] is None for env in listed.json()["envelopes"])
+
+    saved = client.put(
+        "/api/budget",
+        json={
+            "envelopes": [
+                {
+                    "category": "Food",
+                    "amount": 800,
+                    "show_on_overview": True,
+                    "subcategories": [
+                        {"subcategory": "Groceries", "amount": 600, "show_on_overview": True},
+                        {"subcategory": "Dates", "amount": 50, "show_on_overview": False},
+                    ],
+                },
+                {"category": "Shopping", "amount": None, "show_on_overview": False, "subcategories": []},
+                {"category": "Utilities", "amount": 200, "show_on_overview": False, "subcategories": []},
+            ]
+        },
+    )
+    assert saved.status_code == 200
+    food = next(env for env in saved.json()["envelopes"] if env["category"] == "Food")
+    assert food["amount"] == 800.0
+    assert food["show_on_overview"] is True
+    assert [sub["subcategory"] for sub in food["subcategories"]] == ["Groceries", "Dates"]
+
+    rules = yaml.safe_load((workspace["root"] / "config" / "rules.yaml").read_text())
+    assert "Dates" in (rules.get("subcategories") or {}).get("Food", [])
+
+    again = client.get("/api/budget")
+    food = next(env for env in again.json()["envelopes"] if env["category"] == "Food")
+    assert food["amount"] == 800.0
+    utilities = next(env for env in again.json()["envelopes"] if env["category"] == "Utilities")
+    assert utilities["amount"] == 200.0
+    assert utilities["show_on_overview"] is False

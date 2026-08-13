@@ -28,6 +28,73 @@ def _is_blank(value) -> bool:
     return value is None or value == "" or (isinstance(value, float) and pd.isna(value))
 
 
+def rule_from_row(
+    row: pd.Series,
+    *,
+    category: str,
+    subcategory: str = "",
+    rule_scope: str = "auto",
+) -> dict | None:
+    """Build the rule dict review would persist, without writing rules.yaml."""
+    if rule_scope == "none":
+        return None
+    canonical = row.get("canonical_merchant")
+    has_canonical = not _is_blank(canonical)
+    use_canonical = rule_scope == "canonical" or (rule_scope == "auto" and has_canonical)
+    cleaned_sub = " ".join((subcategory or "").split()).strip()
+    if use_canonical and has_canonical:
+        match = {"merchant_canonical": str(canonical)}
+    else:
+        match = {"merchant_regex": rule_pattern_from_merchant(str(row.get("normalized_merchant") or ""))}
+    return {"match": match, "category": category, "subcategory": cleaned_sub}
+
+
+def _cluster_key(row: pd.Series) -> tuple[str, str, str, str]:
+    canonical = row.get("canonical_merchant")
+    if not _is_blank(canonical):
+        merchant = str(canonical).strip()
+        kind = "canonical"
+    else:
+        merchant = str(row.get("normalized_merchant") or row.get("raw_description") or "").strip()
+        kind = "normalized"
+    proposed = "" if _is_blank(row.get("proposed_category")) else str(row.get("proposed_category")).strip()
+    sub = "" if _is_blank(row.get("proposed_subcategory")) else str(row.get("proposed_subcategory")).strip()
+    return kind, merchant, proposed, sub
+
+
+def cluster_open_review(ledger: pd.DataFrame, *, limit: int = 50) -> list[dict]:
+    """Group open review rows by the merchant identity a saved rule would use."""
+    if ledger.empty:
+        return []
+    pending = ledger[ledger.apply(needs_review, axis=1)]
+    if pending.empty:
+        return []
+
+    groups: dict[tuple[str, str, str, str], list[pd.Series]] = {}
+    for _, row in pending.iterrows():
+        groups.setdefault(_cluster_key(row), []).append(row)
+
+    clusters: list[dict] = []
+    for (kind, merchant, proposed, sub), rows in groups.items():
+        amounts = [float(row.get("amount") or 0) for row in rows]
+        representative = max(rows, key=lambda row: float(row.get("amount") or 0))
+        clusters.append(
+            {
+                "key": f"{kind}:{merchant}:{proposed}:{sub}",
+                "kind": kind,
+                "merchant": merchant,
+                "canonical": merchant if kind == "canonical" else None,
+                "proposed_category": proposed or None,
+                "proposed_subcategory": sub or None,
+                "count": len(rows),
+                "total_amount": round(sum(amounts), 2),
+                "representative_txn_id": str(representative.get("txn_id")),
+            }
+        )
+    clusters.sort(key=lambda item: (-item["count"], -item["total_amount"], item["merchant"]))
+    return clusters[:limit]
+
+
 def review(frame: pd.DataFrame) -> pd.DataFrame:
     out = frame.copy()
     rules = load_rules()

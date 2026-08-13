@@ -28,12 +28,15 @@ from src.api import jobs
 from src.api.schemas import (
     AIAnalyzeRequest,
     AIProposalDecisionsRequest,
+    BudgetPut,
     CardProductIn,
     CategoryIn,
     ClassifyRequest,
+    BulkTransactionsRequest,
     InsightsChatRequest,
     MerchantIn,
     ReviewDecision,
+    ReviewPreviewRequest,
     RuleIn,
     RuleUpdate,
     SubcategoryIn,
@@ -47,6 +50,7 @@ from src.insights import (
     project_ledger_view,
     run_insights_turn,
 )
+from src.budget import list_budget, save_envelopes
 from src.classify import (
     append_category,
     append_rule,
@@ -54,15 +58,15 @@ from src.classify import (
     delete_rule,
     list_subcategories,
     load_rules,
-    rule_pattern_from_merchant,
     update_rule,
 )
 from src.extract import iter_statement_files
 from src.merchants import append_merchant, delete_merchant, load_merchants
 from src.cards import build_cards_coverage
-from src.overview import build_month_summary, cardholders
+from src.overview import build_period_summary, cardholders
 from src.paths import DASHBOARD, EXPORT_DIR, FINANCE_DB, INBOX, PENDING_UPLOADS, UI, ensure_dirs
-from src.review import needs_review
+from src.periods import PRESETS, filter_posted
+from src.review import cluster_open_review, needs_review, rule_from_row
 from src.statement_identity import detect_statement_identity
 from src.tags import create_tag, delete_tag, list_tags, normalize_tag_ids
 from src.updater import UpdateError, check_for_update, install_latest_update
@@ -426,10 +430,15 @@ async def post_upload(
 def get_transactions(
     q: str | None = None,
     category: str | None = None,
+    subcategory: str | None = None,
     tag: str | None = None,
     card: str | None = None,
     merchant: str | None = None,
     unclassified: bool = False,
+    since: str | None = None,
+    until: str | None = None,
+    sort: str = Query(default="posted_date"),
+    order: str = Query(default="desc"),
     limit: int = Query(200, le=5000),
     offset: int = 0,
 ) -> dict:
@@ -457,6 +466,8 @@ def get_transactions(
         frame = frame[haystack.str.contains(re.escape(needle), na=False)]
     if category:
         frame = frame[frame["category"].fillna("Uncategorized") == category]
+    if subcategory:
+        frame = frame[frame["subcategory"].fillna("") == subcategory]
     if tag:
         frame = frame[frame["tags"].apply(lambda values: tag in values)]
     if card:
@@ -467,11 +478,44 @@ def get_transactions(
         ]
     if unclassified:
         frame = frame[frame.apply(needs_review, axis=1)]
+    if since or until:
+        try:
+            frame = filter_posted(frame, since, until)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    frame = frame.sort_values("posted_date", ascending=False)
+    sort_key = sort if sort in {"posted_date", "amount", "card", "merchant", "category"} else "posted_date"
+    descending = (order or "desc").lower() != "asc"
+    frame = frame.copy()
+    if sort_key == "posted_date":
+        frame["_sort"] = pd.to_datetime(frame["posted_date"], errors="coerce")
+    elif sort_key == "merchant":
+        canonical = frame["canonical_merchant"].fillna("").astype(str)
+        normalized = frame["normalized_merchant"].fillna("").astype(str)
+        frame["_sort"] = canonical.where(canonical.str.strip() != "", normalized).str.lower()
+    elif sort_key == "category":
+        frame["_sort"] = frame["category"].fillna("Uncategorized").astype(str).str.lower()
+    else:
+        frame["_sort"] = frame[sort_key]
+    frame = frame.sort_values("_sort", ascending=not descending, kind="mergesort")
+    frame = frame.drop(columns=["_sort"])
+
     total = len(frame)
     page = frame.iloc[offset : offset + limit]
     return {"total": total, "items": _records(page)}
+
+
+@app.post("/api/transactions/bulk")
+def post_transactions_bulk(body: BulkTransactionsRequest) -> dict:
+    result = pipeline.apply_bulk_transactions(
+        body.txn_ids,
+        category=body.category,
+        subcategory=body.subcategory,
+        tags=body.tags,
+    )
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
 
 
 @app.get("/api/review/queue")
@@ -488,6 +532,31 @@ def get_review_queue(limit: int = Query(100, le=1000)) -> dict:
         "categories": categories,
         "subcategories": list_subcategories(),
     }
+
+
+@app.get("/api/review/clusters")
+def get_review_clusters(limit: int = Query(50, le=200)) -> dict:
+    ledger = pipeline.load_ledger()
+    items = cluster_open_review(ledger, limit=limit)
+    return {"total": len(items), "items": items}
+
+
+@app.post("/api/review/preview-rule")
+def post_review_preview(body: ReviewPreviewRequest) -> dict:
+    ledger = pipeline.load_ledger()
+    match = ledger[ledger["txn_id"] == body.txn_id] if not ledger.empty else ledger
+    if match.empty:
+        raise HTTPException(status_code=404, detail="Unknown transaction")
+    spec = rule_from_row(
+        match.iloc[0],
+        category=body.category,
+        subcategory=body.subcategory,
+        rule_scope=body.rule_scope,
+    )
+    if spec is None:
+        return {"match_count": 0, "sample": []}
+    matches = pipeline.open_matches_for_rule(ledger, spec)
+    return {"match_count": len(matches), "sample": matches[:20]}
 
 
 @app.post("/api/review/{txn_id}")
@@ -512,22 +581,15 @@ def post_review(txn_id: str, body: ReviewDecision) -> dict:
 
     rule = None
     applied_txn_ids: list[str] = []
-    if body.create_rule and body.rule_scope != "none":
-        canonical = row.get("canonical_merchant")
-        has_canonical = bool(canonical) and not pd.isna(canonical)
-        use_canonical = body.rule_scope == "canonical" or (body.rule_scope == "auto" and has_canonical)
-        if use_canonical and has_canonical:
-            rule = append_rule(
-                merchant_canonical=str(canonical),
-                category=body.category,
-                subcategory=body.subcategory,
-            )
-        else:
-            rule = append_rule(
-                merchant_regex=rule_pattern_from_merchant(row["normalized_merchant"]),
-                category=body.category,
-                subcategory=body.subcategory,
-            )
+    spec = rule_from_row(row, category=body.category, subcategory=body.subcategory, rule_scope=body.rule_scope)
+    if body.create_rule and spec is not None:
+        match_fields = spec["match"]
+        rule = append_rule(
+            merchant_canonical=match_fields.get("merchant_canonical"),
+            merchant_regex=match_fields.get("merchant_regex"),
+            category=body.category,
+            subcategory=body.subcategory,
+        )
         applied_txn_ids = pipeline.apply_rule_to_open_review(rule)
 
     return {**result, "rule": rule, "applied_txn_ids": applied_txn_ids}
@@ -573,9 +635,24 @@ def get_categories_monthly() -> list[dict]:
 def get_overview_month(
     month: str | None = Query(default=None),
     cardholder: str | None = Query(default=None),
+    preset: str = Query(default="month"),
+    since: str | None = Query(default=None),
+    until: str | None = Query(default=None),
 ) -> dict:
+    if preset not in PRESETS:
+        raise HTTPException(status_code=400, detail="Unknown period preset")
     ledger = pipeline.load_ledger()
-    return build_month_summary(ledger, month=month, cardholder=cardholder)
+    try:
+        return build_period_summary(
+            ledger,
+            preset=preset,
+            month=month,
+            since=since,
+            until=until,
+            cardholder=cardholder,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/cards")
@@ -734,6 +811,19 @@ def post_subcategory(body: SubcategoryIn) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"subcategories": subcategories}
+
+
+@app.get("/api/budget")
+def get_budget() -> dict:
+    ensure_dirs()
+    return {"envelopes": list_budget()}
+
+
+@app.put("/api/budget")
+def put_budget(body: BudgetPut) -> dict:
+    ensure_dirs()
+    envelopes = save_envelopes([item.model_dump() for item in body.envelopes])
+    return {"envelopes": envelopes}
 
 
 # --------------------------------------------------------------------------- tags

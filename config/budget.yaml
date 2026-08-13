@@ -1,0 +1,5 @@
+# Monthly household spend envelopes over rules.yaml categories.
+# Amounts are monthly. Overview scales them for T3M / T12M / YTD / custom windows.
+# show_on_overview: include this row on the Overview budget table.
+
+envelopes: []

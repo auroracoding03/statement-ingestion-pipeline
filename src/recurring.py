@@ -10,6 +10,27 @@ import yaml
 
 from src.paths import EXPECTED_RECURRING_PATH
 
+PRICE_HIKE_FLOOR = 2.0
+PRICE_HIKE_PCT = 0.10
+STALE_DAYS = 45
+
+RECURRING_COLUMNS = [
+    "normalized_merchant",
+    "occurrences",
+    "avg_amount",
+    "std_amount",
+    "median_gap_days",
+    "is_recurring",
+    "category",
+    "subcategory",
+    "last_seen",
+    "last_amount",
+    "prior_avg_amount",
+    "amount_change",
+    "amount_change_pct",
+    "flags",
+]
+
 
 def load_expected(path: Path = EXPECTED_RECURRING_PATH) -> list[dict]:
     with path.open(encoding="utf-8") as f:
@@ -17,43 +38,56 @@ def load_expected(path: Path = EXPECTED_RECURRING_PATH) -> list[dict]:
     return list(doc.get("bills") or [])
 
 
+def _empty_recurring() -> pd.DataFrame:
+    return pd.DataFrame(columns=RECURRING_COLUMNS)
+
+
 def detect_recurring(ledger: pd.DataFrame, min_occurrences: int = 2) -> pd.DataFrame:
     """Group by normalized merchant; flag ~monthly, roughly-constant spend."""
     if ledger.empty:
-        return pd.DataFrame(
-            columns=[
-                "normalized_merchant",
-                "occurrences",
-                "avg_amount",
-                "std_amount",
-                "median_gap_days",
-                "is_recurring",
-                "category",
-                "subcategory",
-            ]
-        )
+        return _empty_recurring()
 
     frame = ledger.copy()
-    frame["posted_date"] = pd.to_datetime(frame["posted_date"])
-    # Focus on spend (positive amounts)
+    frame["posted_date"] = pd.to_datetime(frame["posted_date"], errors="coerce")
+    as_of = frame["posted_date"].max()
     spend = frame[frame["amount"] > 0].copy()
 
     rows: list[dict] = []
     for merchant, group in spend.groupby("normalized_merchant"):
         if len(group) < min_occurrences:
             continue
-        amounts = group["amount"].astype(float)
-        dates = group["posted_date"].sort_values()
+        ordered = group.sort_values("posted_date")
+        amounts = ordered["amount"].astype(float)
+        dates = ordered["posted_date"]
         gaps = dates.diff().dt.days.dropna()
         median_gap = float(gaps.median()) if not gaps.empty else None
         std = float(amounts.std(ddof=0)) if len(amounts) > 1 else 0.0
         avg = float(amounts.mean())
-        # ~monthly cadence: 25–35 day median gap, or at least 2 hits with low amount variance
         amount_stable = (std / avg) < 0.25 if avg else False
         monthlyish = median_gap is not None and 25 <= median_gap <= 40
         is_recurring = bool(amount_stable and (monthlyish or len(group) >= 3))
-        top_cat = group["category"].dropna().mode()
-        top_sub = group["subcategory"].dropna().mode()
+        top_cat = ordered["category"].dropna().mode()
+        top_sub = ordered["subcategory"].dropna().mode()
+        last_amount = float(amounts.iloc[-1])
+        last_seen_ts = dates.iloc[-1]
+        last_seen = last_seen_ts.date().isoformat() if not pd.isna(last_seen_ts) else None
+        prior = amounts.iloc[:-1]
+        prior_avg = float(prior.mean()) if len(prior) else None
+        amount_change = round(last_amount - prior_avg, 2) if prior_avg is not None else None
+        amount_change_pct = (
+            round((last_amount - prior_avg) / prior_avg * 100, 1)
+            if prior_avg not in (None, 0)
+            else None
+        )
+        flags: list[str] = []
+        if is_recurring and prior_avg is not None:
+            threshold = max(PRICE_HIKE_FLOOR, PRICE_HIKE_PCT * prior_avg)
+            if last_amount > prior_avg + threshold:
+                flags.append("price_hike")
+        if is_recurring and not pd.isna(last_seen_ts) and not pd.isna(as_of):
+            stale_days = int((as_of.normalize() - last_seen_ts.normalize()).days)
+            if stale_days > STALE_DAYS:
+                flags.append("stale")
         rows.append(
             {
                 "normalized_merchant": merchant,
@@ -64,21 +98,16 @@ def detect_recurring(ledger: pd.DataFrame, min_occurrences: int = 2) -> pd.DataF
                 "is_recurring": is_recurring,
                 "category": top_cat.iloc[0] if len(top_cat) else None,
                 "subcategory": top_sub.iloc[0] if len(top_sub) else None,
+                "last_seen": last_seen,
+                "last_amount": round(last_amount, 2),
+                "prior_avg_amount": round(prior_avg, 2) if prior_avg is not None else None,
+                "amount_change": amount_change,
+                "amount_change_pct": amount_change_pct,
+                "flags": ",".join(flags),
             }
         )
     if not rows:
-        return pd.DataFrame(
-            columns=[
-                "normalized_merchant",
-                "occurrences",
-                "avg_amount",
-                "std_amount",
-                "median_gap_days",
-                "is_recurring",
-                "category",
-                "subcategory",
-            ]
-        )
+        return _empty_recurring()
     return pd.DataFrame(rows).sort_values(
         by=["is_recurring", "avg_amount"], ascending=[False, False]
     ).reset_index(drop=True)

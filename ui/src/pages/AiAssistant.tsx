@@ -92,7 +92,7 @@ export function AiAssistant() {
   return (
     <>
       <PageHeader
-        title="Local AI assistant"
+        title="AI proposals"
         lede="Group statement variants, normalize merchants, and prioritize uncategorized transactions. Nothing is saved until you approve it."
       />
 

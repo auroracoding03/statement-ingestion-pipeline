@@ -4,7 +4,7 @@ import { Empty, ErrorNote, Loading, PageHeader } from "../components/ui";
 import { api } from "../lib/dataSource";
 import { money, shortDate } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
-import type { ContextTag, TagKind, Transaction } from "../lib/types";
+import type { ContextTag, ReviewCluster, TagKind, Transaction } from "../lib/types";
 
 /**
  * Keyboard-first review queue. Throughput matters more than chrome here:
@@ -13,7 +13,9 @@ import type { ContextTag, TagKind, Transaction } from "../lib/types";
  */
 export function Review() {
   const { data, loading, error, reload } = useAsync(() => api.reviewQueue(), []);
+  const clustersState = useAsync(() => api.reviewClusters(), []);
   const tagsState = useAsync(() => api.tags(), []);
+  const [mode, setMode] = useState<"one" | "cluster">("one");
   const [index, setIndex] = useState(0);
   const [subcategory, setSubcategory] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -92,13 +94,14 @@ export function Review() {
         // Drop this txn and any siblings the new rule auto-classified. Index stays
         // put so the next remaining item slides into place.
         setDone((d) => [...d, current.txn_id, ...applied]);
+        clustersState.reload();
       } catch (err) {
         setSaveError(err instanceof Error ? err.message : String(err));
       } finally {
         setSaving(false);
       }
     },
-    [createRule, current, resolveSubcategory, saving, selectedTags],
+    [createRule, current, resolveSubcategory, saving, selectedTags, clustersState.reload],
   );
 
   function toggleTag(tagId: string) {
@@ -126,7 +129,7 @@ export function Review() {
     function onKey(e: KeyboardEvent) {
       const target = e.target as HTMLElement | null;
       if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
-      if (!current) return;
+      if (mode !== "one" || !current) return;
 
       if (e.key === "Enter" && proposal) {
         e.preventDefault();
@@ -152,7 +155,42 @@ export function Review() {
 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [advance, categories, current, index, proposal, save]);
+  }, [advance, categories, current, index, mode, proposal, save]);
+
+  const previewCategory = proposal || categories[0] || "Uncategorized";
+  const preview = useAsync(
+    () =>
+      current && createRule
+        ? api.previewRule({
+            txn_id: current.txn_id,
+            category: previewCategory,
+            subcategory: resolveSubcategory(previewCategory),
+            rule_scope: "auto",
+          })
+        : Promise.resolve({ match_count: 0, sample: [] }),
+    [current?.txn_id, createRule, previewCategory, subcategory],
+  );
+
+  async function approveCluster(cluster: ReviewCluster, category: string) {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const result = await api.submitReview(cluster.representative_txn_id, {
+        category,
+        subcategory: cluster.proposed_subcategory || "",
+        create_rule: true,
+        rule_scope: "auto",
+      });
+      const applied = result.applied_txn_ids ?? [];
+      setDone((d) => [...d, cluster.representative_txn_id, ...applied]);
+      clustersState.reload();
+      reload();
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   if (loading) return <Loading what="review queue" />;
   if (error) return <ErrorNote error={error} />;
@@ -183,10 +221,38 @@ export function Review() {
         lede={`${remaining} of ${items.length} remaining. Confirmations become reusable rules. Tags are optional context.`}
       />
 
+      <div className="toolbar">
+        <button
+          type="button"
+          className={`btn subtle small${mode === "one" ? " selected" : ""}`}
+          onClick={() => setMode("one")}
+        >
+          One by one
+        </button>
+        <button
+          type="button"
+          className={`btn subtle small${mode === "cluster" ? " selected" : ""}`}
+          onClick={() => setMode("cluster")}
+        >
+          By merchant
+        </button>
+      </div>
+
       <div className="progress">
         <span style={{ width: `${progressDone}%` }} />
       </div>
 
+      {mode === "cluster" ? (
+        <ClusterMode
+          clusters={clustersState.data?.items ?? []}
+          loading={clustersState.loading}
+          error={clustersState.error}
+          categories={categories}
+          saving={saving}
+          saveError={saveError}
+          onApprove={approveCluster}
+        />
+      ) : (
       <div className="review-layout">
         <div className="review-card">
           <div className="review-amount">{money(current.amount)}</div>
@@ -303,6 +369,12 @@ export function Review() {
               />
               Save as reusable rule
             </label>
+            {createRule && (preview.data?.match_count ?? 0) > 0 && (
+              <span className="muted">
+                This rule would classify {preview.data?.match_count} open transaction
+                {(preview.data?.match_count ?? 0) === 1 ? "" : "s"}
+              </span>
+            )}
             <button className="btn subtle" onClick={advance} disabled={saving}>
               Skip
             </button>
@@ -328,6 +400,91 @@ export function Review() {
           </p>
         </aside>
       </div>
+      )}
     </>
+  );
+}
+
+function ClusterMode({
+  clusters,
+  loading,
+  error,
+  categories,
+  saving,
+  saveError,
+  onApprove,
+}: {
+  clusters: ReviewCluster[];
+  loading: boolean;
+  error: string | null;
+  categories: string[];
+  saving: boolean;
+  saveError: string | null;
+  onApprove: (cluster: ReviewCluster, category: string) => Promise<void>;
+}) {
+  if (loading) return <Loading what="merchant groups" />;
+  if (error) return <ErrorNote error={error} />;
+  if (clusters.length === 0) return <Empty>No open merchant groups.</Empty>;
+  return (
+    <>
+      {saveError && <ErrorNote error={saveError} />}
+      <div className="cluster-list">
+        {clusters.map((cluster) => (
+          <ClusterReviewCard
+            key={cluster.key}
+            cluster={cluster}
+            categories={categories}
+            saving={saving}
+            onApprove={onApprove}
+          />
+        ))}
+      </div>
+    </>
+  );
+}
+
+function ClusterReviewCard({
+  cluster,
+  categories,
+  saving,
+  onApprove,
+}: {
+  cluster: ReviewCluster;
+  categories: string[];
+  saving: boolean;
+  onApprove: (cluster: ReviewCluster, category: string) => Promise<void>;
+}) {
+  const proposed = cluster.proposed_category;
+  const [category, setCategory] = useState(proposed ?? "");
+  return (
+    <article className="cluster">
+      <div className="cluster-head">
+        <div>
+          <strong>{cluster.merchant}</strong>
+          <p className="muted" style={{ margin: "0.2rem 0 0" }}>
+            {cluster.count} transaction{cluster.count === 1 ? "" : "s"} · {money(cluster.total_amount)}
+            {proposed ? ` → ${proposed}${cluster.proposed_subcategory ? ` / ${cluster.proposed_subcategory}` : ""}` : ""}
+          </p>
+        </div>
+        {category ? (
+          <button className="btn" disabled={saving} onClick={() => void onApprove(cluster, category)}>
+            Approve {cluster.count} and save rule
+          </button>
+        ) : null}
+      </div>
+      <div className="category-grid" style={{ marginTop: "0.8rem", marginBottom: 0 }}>
+        {categories.map((name) => (
+          <button
+            key={name}
+            type="button"
+            className={category === name ? "selected" : ""}
+            disabled={saving}
+            onClick={() => setCategory(name)}
+          >
+            {name}
+          </button>
+        ))}
+      </div>
+    </article>
   );
 }

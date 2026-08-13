@@ -3,18 +3,37 @@ import { useState, type ReactNode } from "react";
 import { api, canWrite } from "../lib/dataSource";
 import { hashHref, useHashPath } from "../lib/router";
 
-const LINKS = [
-  { to: "/", label: "Overview" },
-  { to: "/ingestion", label: "Ingestion", writeOnly: true },
-  { to: "/transactions", label: "Transactions" },
-  { to: "/cards", label: "Cards" },
-  { to: "/categories", label: "Categories" },
-  { to: "/recurring", label: "Recurring" },
-  { to: "/merchants", label: "Merchants" },
-  { to: "/insights", label: "Insights", writeOnly: true },
-  { to: "/ai-assistant", label: "AI assistant", writeOnly: true },
-  { to: "/review", label: "Review", writeOnly: true },
-  { to: "/rules", label: "Rules", writeOnly: true },
+const GROUPS = [
+  {
+    label: "Ledger",
+    links: [
+      { to: "/", label: "Overview" },
+      { to: "/transactions", label: "Transactions" },
+      { to: "/cards", label: "Cards" },
+      { to: "/categories", label: "Categories" },
+      { to: "/budget", label: "Budget", writeOnly: true },
+      { to: "/recurring", label: "Recurring" },
+    ],
+  },
+  {
+    label: "Inbox",
+    links: [
+      { to: "/ingestion", label: "Ingestion", writeOnly: true },
+      { to: "/review", label: "Review", writeOnly: true },
+      { to: "/ai-assistant", label: "AI proposals", writeOnly: true },
+    ],
+  },
+  {
+    label: "Catalog",
+    links: [
+      { to: "/merchants", label: "Merchants" },
+      { to: "/rules", label: "Rules", writeOnly: true },
+    ],
+  },
+  {
+    label: "Ask",
+    links: [{ to: "/insights", label: "Ask the ledger", writeOnly: true }],
+  },
 ];
 
 export function Layout({ children }: { children: ReactNode }) {
@@ -46,6 +65,11 @@ export function Layout({ children }: { children: ReactNode }) {
     }
   }
 
+  const groups = GROUPS.map((group) => ({
+    ...group,
+    links: group.links.filter((link) => canWrite || !link.writeOnly),
+  })).filter((group) => group.links.length > 0);
+
   return (
     <div className="app">
       <header className="site-header">
@@ -54,14 +78,22 @@ export function Layout({ children }: { children: ReactNode }) {
           {!canWrite && <span className="badge">read-only</span>}
         </div>
         <nav>
-          {LINKS.filter((l) => canWrite || !l.writeOnly).map((link) => (
-            <a
-              key={link.to}
-              href={hashHref(link.to)}
-              className={path === link.to ? "active" : undefined}
-            >
-              {link.label}
-            </a>
+          {groups.map((group) => (
+            <div className="nav-group" key={group.label}>
+              <span className="nav-group-label">{group.label}</span>
+              <div className="nav-group-links">
+                {group.links.map((link) => (
+                  <a
+                    key={link.to}
+                    href={hashHref(link.to)}
+                    className={path === link.to ? "active" : undefined}
+                    aria-current={path === link.to ? "page" : undefined}
+                  >
+                    {link.label}
+                  </a>
+                ))}
+              </div>
+            </div>
           ))}
         </nav>
         {canWrite && (

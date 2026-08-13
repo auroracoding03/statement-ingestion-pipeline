@@ -58,6 +58,12 @@ export interface RecurringRow {
   is_recurring: boolean;
   category: string | null;
   subcategory: string | null;
+  last_seen?: string | null;
+  last_amount?: number | null;
+  prior_avg_amount?: number | null;
+  amount_change?: number | null;
+  amount_change_pct?: number | null;
+  flags?: string | string[];
 }
 
 export interface ReconciliationRow {
@@ -79,6 +85,12 @@ export interface CategoryMonthly {
 export interface OverviewMonth {
   month: string | null;
   months: string[];
+  preset?: string;
+  since?: string | null;
+  until?: string | null;
+  prior_since?: string | null;
+  prior_until?: string | null;
+  label?: string | null;
   cardholder: string | null;
   spend_total: number;
   prior_spend_total: number | null;
@@ -100,6 +112,30 @@ export interface OverviewMonth {
   }[];
   tagged: { id: string; label: string; kind: string; total: number }[];
   bills: { bill: string; status: "seen" | "missing" }[];
+  budget_rows?: BudgetRow[];
+}
+
+export interface BudgetSubcategory {
+  subcategory: string;
+  amount: number | null;
+  show_on_overview: boolean;
+}
+
+export interface BudgetEnvelope {
+  category: string;
+  amount: number | null;
+  show_on_overview: boolean;
+  subcategories: BudgetSubcategory[];
+  available_subcategories?: string[];
+}
+
+export interface BudgetRow {
+  label: string;
+  category: string;
+  subcategory: string | null;
+  budget: number;
+  actual: number;
+  variance: number;
 }
 
 export interface CardStatement {
@@ -195,6 +231,23 @@ export interface ReviewQueue {
   items: Transaction[];
   categories: string[];
   subcategories: Record<string, string[]>;
+}
+
+export interface ReviewCluster {
+  key: string;
+  kind: "canonical" | "normalized";
+  merchant: string;
+  canonical: string | null;
+  proposed_category: string | null;
+  proposed_subcategory: string | null;
+  count: number;
+  total_amount: number;
+  representative_txn_id: string;
+}
+
+export interface RulePreview {
+  match_count: number;
+  sample: { txn_id: string; merchant: string; amount: number }[];
 }
 
 export interface AiStatus {

@@ -1,16 +1,47 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { Empty, ErrorNote, Loading, PageHeader, StatusPill } from "../components/ui";
 import { api } from "../lib/dataSource";
 import { money, shortDate } from "../lib/format";
+import { hashHref } from "../lib/router";
+import type { RecurringRow } from "../lib/types";
 import { useAsync } from "../lib/useAsync";
+
+function flagList(flags?: string | string[]): string[] {
+  if (Array.isArray(flags)) return flags.filter(Boolean);
+  if (typeof flags === "string" && flags.trim()) return flags.split(",").map((item) => item.trim()).filter(Boolean);
+  return [];
+}
+
+function asOfDate(values: Array<string | null | undefined>): string | null {
+  const dates = values.filter((value): value is string => Boolean(value)).sort();
+  return dates.at(-1) ?? null;
+}
+
+function isStale(lastSeen: string | null | undefined, asOf: string | null): boolean {
+  if (!lastSeen || !asOf) return false;
+  return (Date.parse(asOf) - Date.parse(lastSeen)) / 86_400_000 > 45;
+}
 
 export function Recurring() {
   const recurring = useAsync(() => api.recurring(), []);
   const recon = useAsync(() => api.reconciliation(), []);
   const [onlyRecurring, setOnlyRecurring] = useState(true);
 
-  const rows = (recurring.data ?? []).filter((r) => !onlyRecurring || r.is_recurring);
+  const rows = useMemo(() => {
+    const items = (recurring.data ?? []).filter((row) => !onlyRecurring || row.is_recurring);
+    return [...items].sort((left, right) => {
+      const leftFlags = flagList(left.flags).length;
+      const rightFlags = flagList(right.flags).length;
+      if (leftFlags !== rightFlags) return rightFlags - leftFlags;
+      return right.avg_amount - left.avg_amount;
+    });
+  }, [onlyRecurring, recurring.data]);
+
+  const asOf = asOfDate([
+    ...(recurring.data ?? []).map((row) => row.last_seen),
+    ...(recon.data ?? []).map((row) => row.last_seen),
+  ]);
 
   return (
     <>
@@ -37,10 +68,19 @@ export function Recurring() {
             </thead>
             <tbody>
               {recon.data.map((row) => (
-                <tr key={row.bill}>
+                <tr
+                  key={row.bill}
+                  className={row.matched_merchant ? "clickable-row" : undefined}
+                  onClick={() => {
+                    if (row.matched_merchant) {
+                      window.location.hash = hashHref("/transactions", { merchant: row.matched_merchant });
+                    }
+                  }}
+                >
                   <td>{row.bill}</td>
                   <td>
                     <StatusPill status={row.status} />
+                    {isStale(row.last_seen, asOf) && <span className="flag-pill">stale</span>}
                   </td>
                   <td className="num">{money(row.expected_amount)}</td>
                   <td>{row.matched_merchant ?? "—"}</td>
@@ -79,25 +119,33 @@ export function Recurring() {
             <thead>
               <tr>
                 <th>Merchant</th>
+                <th>Flags</th>
                 <th>Recurring</th>
                 <th className="num">Occurrences</th>
                 <th className="num">Average</th>
-                <th className="num">Std dev</th>
-                <th className="num">Median gap</th>
+                <th className="num">Last</th>
+                <th>Last seen</th>
                 <th>Category</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((row) => (
-                <tr key={row.normalized_merchant}>
+                <tr
+                  key={row.normalized_merchant}
+                  className="clickable-row"
+                  onClick={() => {
+                    window.location.hash = hashHref("/transactions", { merchant: row.normalized_merchant });
+                  }}
+                >
                   <td>{row.normalized_merchant}</td>
+                  <td>
+                    <FlagPills row={row} />
+                  </td>
                   <td>{row.is_recurring ? "yes" : "no"}</td>
                   <td className="num">{row.occurrences}</td>
                   <td className="num">{money(row.avg_amount)}</td>
-                  <td className="num">{money(row.std_amount)}</td>
-                  <td className="num">
-                    {row.median_gap_days === null ? "—" : `${row.median_gap_days}d`}
-                  </td>
+                  <td className="num">{money(row.last_amount)}</td>
+                  <td>{shortDate(row.last_seen ?? null)}</td>
                   <td>{[row.category, row.subcategory].filter(Boolean).join(" / ") || "—"}</td>
                 </tr>
               ))}
@@ -106,5 +154,23 @@ export function Recurring() {
         </div>
       )}
     </>
+  );
+}
+
+function FlagPills({ row }: { row: RecurringRow }) {
+  const flags = flagList(row.flags);
+  if (flags.length === 0) return <span className="muted">—</span>;
+  return (
+    <div className="flag-row">
+      {flags.includes("price_hike") && (
+        <span className="flag-pill">
+          price hike
+          {row.prior_avg_amount != null && row.last_amount != null
+            ? ` ${money(row.prior_avg_amount)} → ${money(row.last_amount)}`
+            : ""}
+        </span>
+      )}
+      {flags.includes("stale") && <span className="flag-pill">stale</span>}
+    </div>
   );
 }

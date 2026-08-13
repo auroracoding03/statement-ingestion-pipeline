@@ -121,7 +121,7 @@ export function Insights() {
   return (
     <>
       <PageHeader
-        title="Insights"
+        title="Ask the ledger"
         lede="Ask the local model about this machine’s ledger. Totals are computed in Python; the model only explains those facts."
       />
       {status.loading && <Loading what="local AI status" />}

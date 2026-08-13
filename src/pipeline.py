@@ -295,6 +295,35 @@ def apply_review_decision(
     return result
 
 
+def open_matches_for_rule(ledger: pd.DataFrame, rule: dict) -> list[dict]:
+    """Open review rows that would be classified by ``rule``. Does not write."""
+    from src.classify import _compile_rules, _match_rule
+    from src.review import needs_review
+
+    compiled = _compile_rules({"rules": [rule]})
+    if not compiled or ledger.empty:
+        return []
+    compiled_rule = compiled[0]
+    matches: list[dict] = []
+    for _, row in ledger.iterrows():
+        if not needs_review(row):
+            continue
+        canonical = str(row.get("canonical_merchant") or "")
+        merchant = str(row.get("normalized_merchant") or "")
+        raw = str(row.get("raw_description") or "")
+        if not _match_rule(compiled_rule, canonical=canonical, merchant=merchant, raw=raw):
+            continue
+        label = canonical or merchant or raw
+        matches.append(
+            {
+                "txn_id": str(row["txn_id"]),
+                "merchant": label,
+                "amount": round(float(row.get("amount") or 0), 2),
+            }
+        )
+    return matches
+
+
 def apply_rule_to_open_review(rule: dict) -> list[str]:
     """Classify open review rows that match a newly saved rule.
 
@@ -332,6 +361,48 @@ def apply_rule_to_open_review(rule: dict) -> list[str]:
         if applied:
             write_ledger(_ensure_columns(ledger))
         return applied
+
+
+def apply_bulk_transactions(
+    txn_ids: list[str],
+    *,
+    category: str | None = None,
+    subcategory: str | None = None,
+    tags: list[str] | None = None,
+) -> dict:
+    """Apply a category and/or tags to selected ledger rows. Does not write rules."""
+    from src.tags import normalize_tag_ids
+
+    cleaned_ids = [str(txn_id) for txn_id in txn_ids if str(txn_id).strip()]
+    if not cleaned_ids:
+        return {"error": "Select at least one transaction"}
+    if category is None and tags is None:
+        return {"error": "Provide a category or tags"}
+
+    with ledger_lock():
+        ledger = load_ledger()
+        if ledger.empty:
+            return {"error": "Ledger is empty"}
+        match = ledger["txn_id"].astype(str).isin(cleaned_ids)
+        if not match.any():
+            return {"error": "None of those transactions were found"}
+        if category is not None:
+            cleaned_category = category.strip()
+            if not cleaned_category:
+                return {"error": "Category is required"}
+            cleaned_sub = " ".join((subcategory or "").split()).strip()
+            ledger.loc[match, "category"] = cleaned_category
+            ledger.loc[match, "subcategory"] = cleaned_sub
+            ledger.loc[match, "classified_by"] = "manual"
+            ledger.loc[match, "proposed_category"] = None
+            ledger.loc[match, "proposed_subcategory"] = None
+        if tags is not None:
+            normalized = normalize_tag_ids(tags)
+            for idx in ledger.index[match]:
+                ledger.at[idx, "tags"] = list(normalized)
+        write_ledger(_ensure_columns(ledger))
+        updated = ledger.loc[match, "txn_id"].astype(str).tolist()
+    return {"updated": updated, "count": len(updated)}
 
 
 

@@ -1,4 +1,4 @@
-"""Month-first household summary for the Overview page."""
+"""Household spend summary for the Overview page."""
 
 from __future__ import annotations
 
@@ -7,6 +7,8 @@ import re
 import pandas as pd
 
 from src import paths
+from src.budget import budget_rows_for_period
+from src.periods import filter_posted, has_prior_history, month_keys, resolve_period
 from src.recurring import load_expected
 from src.review import needs_review
 from src.tags import list_tags, normalize_tag_ids
@@ -14,12 +16,28 @@ from src.tags import list_tags, normalize_tag_ids
 LARGE_CHARGE_MIN = 200.0
 LARGE_CHARGE_LIMIT = 10
 UNASSIGNED = "Unassigned"
+MONTH_PRESETS = ("month", "prev_month")
 
 
-def _empty_summary(month: str | None = None) -> dict:
+def _empty_summary(
+    month: str | None = None,
+    *,
+    preset: str = "month",
+    since: str | None = None,
+    until: str | None = None,
+    label: str | None = None,
+    prior_since: str | None = None,
+    prior_until: str | None = None,
+) -> dict:
     return {
         "month": month,
         "months": [],
+        "preset": preset,
+        "since": since,
+        "until": until,
+        "prior_since": prior_since,
+        "prior_until": prior_until,
+        "label": label,
         "cardholder": None,
         "spend_total": 0.0,
         "prior_spend_total": None,
@@ -35,28 +53,8 @@ def _empty_summary(month: str | None = None) -> dict:
         "large_charges": [],
         "tagged": [],
         "bills": [],
+        "budget_rows": [],
     }
-
-
-def _month_keys(ledger: pd.DataFrame) -> list[str]:
-    if ledger.empty:
-        return []
-    keys = pd.to_datetime(ledger["posted_date"], errors="coerce").dt.strftime("%Y-%m")
-    return sorted({key for key in keys.dropna() if key != "NaT"})
-
-
-def _prior_month(month: str) -> str:
-    year, month_n = (int(part) for part in month.split("-"))
-    if month_n == 1:
-        return f"{year - 1}-12"
-    return f"{year}-{month_n - 1:02d}"
-
-
-def _in_month(frame: pd.DataFrame, month: str) -> pd.DataFrame:
-    if frame.empty:
-        return frame
-    keys = pd.to_datetime(frame["posted_date"], errors="coerce").dt.strftime("%Y-%m")
-    return frame.loc[keys == month].copy()
 
 
 def _filter_cardholder(frame: pd.DataFrame, cardholder: str | None) -> pd.DataFrame:
@@ -127,20 +125,33 @@ def build_month_summary(
     month: str | None = None,
     cardholder: str | None = None,
 ) -> dict:
-    months = _month_keys(ledger)
-    if not months:
-        return _empty_summary(month)
-    selected = months[-1]
-    if month and len(month) == 7 and month[4] == "-":
-        selected = month
+    """Single-month summary. Kept as the Insights tool contract."""
+    return build_period_summary(ledger, preset="month", month=month, cardholder=cardholder)
 
+
+def build_period_summary(
+    ledger: pd.DataFrame,
+    *,
+    preset: str = "month",
+    month: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    cardholder: str | None = None,
+) -> dict:
+    months = month_keys(ledger)
+    if not months:
+        return _empty_summary(month, preset=preset, since=since, until=until)
+
+    period = resolve_period(preset=preset, month=month, since=since, until=until, months=months)
     holder = cardholder.strip() if cardholder and cardholder.strip() else None
     scoped = _filter_cardholder(ledger, holder)
-    current = _in_month(scoped, selected)
-    prior_key = _prior_month(selected)
-    prior = _in_month(scoped, prior_key)
-    earliest = months[0]
-    has_prior = selected > earliest
+    current = filter_posted(scoped, period.since, period.until)
+    prior = (
+        filter_posted(scoped, period.prior_since, period.prior_until)
+        if period.prior_since and period.prior_until
+        else scoped.iloc[0:0].copy()
+    )
+    include_prior = has_prior_history(period, months)
 
     charges = current[current["amount"] > 0] if not current.empty else current
     prior_charges = prior[prior["amount"] > 0] if not prior.empty else prior
@@ -148,7 +159,7 @@ def build_month_summary(
 
     spend_total = _money(charges["amount"].sum()) if not charges.empty else 0.0
     prior_total = _money(prior_charges["amount"].sum()) if not prior_charges.empty else 0.0
-    if not has_prior:
+    if not include_prior:
         prior_spend = None
         delta = None
         delta_pct = None
@@ -158,14 +169,14 @@ def build_month_summary(
         delta_pct = None if prior_total == 0 else round((spend_total - prior_total) / prior_total * 100, 1)
 
     current_cats = _category_totals(charges)
-    prior_cats = _category_totals(prior_charges) if has_prior else {}
+    prior_cats = _category_totals(prior_charges) if include_prior else {}
     names = sorted(set(current_cats) | set(prior_cats), key=lambda name: (-current_cats.get(name, 0.0), name))
     categories = [
         {
             "category": name,
             "total": current_cats.get(name, 0.0),
-            "prior_total": prior_cats.get(name, 0.0) if has_prior else None,
-            "delta": _money(current_cats.get(name, 0.0) - prior_cats.get(name, 0.0)) if has_prior else None,
+            "prior_total": prior_cats.get(name, 0.0) if include_prior else None,
+            "delta": _money(current_cats.get(name, 0.0) - prior_cats.get(name, 0.0)) if include_prior else None,
         }
         for name in names
     ]
@@ -222,13 +233,21 @@ def build_month_summary(
     if not current.empty:
         review_count = int(current.apply(needs_review, axis=1).sum())
 
-    household_spend = _in_month(ledger, selected)
-    household_charges = household_spend[household_spend["amount"] > 0] if not household_spend.empty else household_spend
-    bills = _bills_for_month(household_charges)
+    bills: list[dict] = []
+    if period.preset in MONTH_PRESETS:
+        household = filter_posted(ledger, period.since, period.until)
+        household_charges = household[household["amount"] > 0] if not household.empty else household
+        bills = _bills_for_month(household_charges)
 
     return {
-        "month": selected,
+        "month": period.month,
         "months": months,
+        "preset": period.preset,
+        "since": period.since,
+        "until": period.until,
+        "prior_since": period.prior_since,
+        "prior_until": period.prior_until,
+        "label": period.label,
         "cardholder": holder,
         "spend_total": spend_total,
         "prior_spend_total": prior_spend,
@@ -244,6 +263,7 @@ def build_month_summary(
         "large_charges": large_charges,
         "tagged": tagged,
         "bills": bills,
+        "budget_rows": budget_rows_for_period(charges, period),
     }
 
 
