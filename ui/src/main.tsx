@@ -8,6 +8,7 @@ import { Cards } from "./pages/Cards";
 import { Categories } from "./pages/Categories";
 import { AiAssistant } from "./pages/AiAssistant";
 import { Ingestion } from "./pages/Ingestion";
+import { Insights } from "./pages/Insights";
 import { Merchants } from "./pages/Merchants";
 import { Overview } from "./pages/Overview";
 import { Recurring } from "./pages/Recurring";
@@ -26,6 +27,7 @@ function App() {
     "/categories": <Categories />,
     "/recurring": <Recurring />,
     "/merchants": <Merchants />,
+    "/insights": canWrite ? <Insights /> : <Overview />,
     "/ai-assistant": canWrite ? <AiAssistant /> : <Overview />,
     "/review": canWrite ? <Review /> : <Overview />,
     "/rules": canWrite ? <Rules /> : <Overview />,

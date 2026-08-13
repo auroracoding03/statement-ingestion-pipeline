@@ -232,3 +232,27 @@ export interface AiProposal {
   model: string;
   created_at: string;
 }
+
+export interface InsightsMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface InsightsFact {
+  tool?: string | null;
+  args?: Record<string, string | number | null>;
+  result?: Record<string, unknown>;
+  error?: string;
+  rejected?: boolean;
+}
+
+export interface InsightsChatResponse {
+  reply: string;
+  headline: string;
+  facts: InsightsFact[];
+  tools_used: string[];
+  grounded: boolean;
+  caveat: string | null;
+  prompt_version: string;
+  today: string;
+}

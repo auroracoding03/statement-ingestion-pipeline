@@ -898,6 +898,86 @@ code {
   gap: 0.55rem;
 }
 
+.insights-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  min-height: 12rem;
+  max-height: 28rem;
+  overflow: auto;
+  padding: 0.2rem 0 1rem;
+}
+
+.insights-bubble {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.85rem 1rem;
+  max-width: 46rem;
+}
+
+.insights-bubble p {
+  margin: 0.2rem 0 0;
+  white-space: pre-wrap;
+}
+
+.insights-user {
+  align-self: flex-end;
+}
+
+.insights-role {
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.insights-facts {
+  margin-top: 0.7rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--line-soft);
+}
+
+.insights-facts summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.insights-fact {
+  margin-top: 0.45rem;
+}
+
+.insights-fact p {
+  margin: 0.15rem 0 0;
+}
+
+.insights-starters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0.4rem 0 0.8rem;
+}
+
+.insights-composer {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.6rem;
+  align-items: end;
+  max-width: 46rem;
+}
+
+.insights-composer textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 4.5rem;
+  font: inherit;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
 @media (max-width: 720px) {
   .ai-setup {
     grid-template-columns: 1fr;

@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 from src import pipeline
 from src import ai_review
-from src.ai_suggest import ollama_available
+from src.ai_suggest import load_ollama_config, ollama_available
 from src.atomic import atomic_copy_stream
 from src.api import jobs
 from src.api.schemas import (
@@ -31,6 +31,7 @@ from src.api.schemas import (
     CardProductIn,
     CategoryIn,
     ClassifyRequest,
+    InsightsChatRequest,
     MerchantIn,
     ReviewDecision,
     RuleIn,
@@ -38,6 +39,13 @@ from src.api.schemas import (
     SubcategoryIn,
     TagIn,
     UploadCommitRequest,
+)
+from src.insights import (
+    InsightsError,
+    InsightsSandboxError,
+    assert_loopback_ollama_host,
+    project_ledger_view,
+    run_insights_turn,
 )
 from src.classify import (
     append_category,
@@ -173,6 +181,26 @@ def post_ai_model_pull(background: BackgroundTasks) -> dict:
 @app.post("/api/ai/analyze")
 def post_ai_analyze(body: AIAnalyzeRequest, background: BackgroundTasks) -> dict:
     return _start("ai-analyze", lambda: pipeline.run_ai_analysis(body.mode), background)
+
+
+@app.post("/api/insights/chat")
+def post_insights_chat(body: InsightsChatRequest) -> dict:
+    """Read-only ledger Q&A. POST carries the question; nothing is persisted."""
+    cfg = load_ollama_config()
+    host = str(cfg.get("host") or "")
+    try:
+        assert_loopback_ollama_host(host)
+    except InsightsSandboxError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not ollama_available(host):
+        raise HTTPException(status_code=503, detail="Local AI is offline. Start Ollama to use Insights.")
+    view = project_ledger_view(pipeline.load_ledger())
+    try:
+        return run_insights_turn([item.model_dump() for item in body.messages], view)
+    except InsightsSandboxError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except InsightsError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.get("/api/ai/proposals")

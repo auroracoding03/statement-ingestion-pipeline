@@ -87,3 +87,12 @@ class UploadCommitItem(BaseModel):
 
 class UploadCommitRequest(BaseModel):
     items: list[UploadCommitItem] = Field(min_length=1, max_length=20)
+
+
+class InsightsChatMessage(BaseModel):
+    role: str = Field(pattern="^(user|assistant)$")
+    content: str = Field(min_length=1, max_length=500)
+
+
+class InsightsChatRequest(BaseModel):
+    messages: list[InsightsChatMessage] = Field(min_length=1, max_length=8)

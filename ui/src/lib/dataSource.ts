@@ -15,6 +15,8 @@ import type {
   CardsCoverage,
   Job,
   JobStart,
+  InsightsChatResponse,
+  InsightsMessage,
   Merchant,
   OverviewMonth,
   ReconciliationRow,
@@ -96,6 +98,14 @@ export const api = {
   async aiStatus(warmup = false): Promise<AiStatus> {
     if (!canWrite) throw new DataError("Local AI setup is only available in the desktop app.");
     return req<AiStatus>(`/api/ai/status${warmup ? "?warmup=true" : ""}`);
+  },
+
+  async insightsChat(messages: InsightsMessage[]): Promise<InsightsChatResponse> {
+    if (!canWrite) throw new DataError("Insights is only available in the desktop app.");
+    return req<InsightsChatResponse>("/api/insights/chat", {
+      method: "POST",
+      body: JSON.stringify({ messages }),
+    });
   },
 
   async aiProposals(kind?: "merchant" | "category") {
