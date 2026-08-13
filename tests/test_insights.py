@@ -17,11 +17,15 @@ import src.store as store_mod
 from src.insights import (
     InsightsSandboxError,
     PLANNER_SCHEMA,
+    PROMPT_VERSION,
+    build_headline,
     dispatch_tool,
     project_ledger_view,
     reply_is_grounded,
     run_insights_turn,
     tool_merchant_spend,
+    tool_spend_breakdown,
+    tool_spend_over_time,
 )
 
 
@@ -470,3 +474,180 @@ def test_insights_chat_route_is_read_only_post(monkeypatch):
     body = response.json()
     assert "Amazon" in body["reply"]
     assert body["tools_used"] == ["merchant_spend"]
+
+
+def _amazon_series_ledger() -> pd.DataFrame:
+    return _ledger(
+        [
+            _row(posted_date="2023-08-12", amount=999.0, cardholder="Alex Example"),
+            _row(posted_date="2024-10-05", amount=100.0, cardholder="Alex Example"),
+            _row(posted_date="2024-11-02", amount=150.0, cardholder="Alex Example"),
+            _row(posted_date="2024-11-18", amount=-100.0, cardholder="Alex Example"),
+            _row(posted_date="2024-11-20", amount=40.0, cardholder="Sam Example"),
+            _row(
+                posted_date="2024-11-21",
+                amount=20.0,
+                canonical_merchant="Target",
+                normalized_merchant="TARGET",
+                category="Food",
+                cardholder="Sam Example",
+            ),
+            _row(
+                posted_date="2024-12-03",
+                amount=12.0,
+                canonical_merchant="Amex",
+                normalized_merchant="AMEX PAYMENT",
+                category="Bills",
+                cardholder="Alex Example",
+            ),
+            _row(
+                posted_date="2025-01-08",
+                amount=30.0,
+                canonical_merchant="Cafe",
+                normalized_merchant="CAFE",
+                category="Food",
+                cardholder="Sam Example",
+            ),
+        ]
+    )
+
+
+def test_spend_over_time_peak_excludes_day_before_since_and_uses_net():
+    frame = _amazon_series_ledger()
+    result = tool_spend_over_time(frame, {"query": "Amazon", "since": "2023-08-13"})
+    months = [row["month"] for row in result["series"]]
+    assert "2023-08" not in months
+    assert result["series"][-1]["month"] >= result["series"][0]["month"]
+    assert result["peak"]["month"] == "2024-10"
+    assert result["peak"]["net_spend"] == 100.0
+    november = next(row for row in result["series"] if row["month"] == "2024-11")
+    assert november["gross_charges"] == 190.0
+    assert november["credits_refunds"] == 100.0
+    assert november["net_spend"] == 90.0
+    assert november["charge_count"] == 2
+    assert result["spent_means"] == "net"
+    assert result["grain"] == "month"
+    headline = build_headline([{"tool": "spend_over_time", "result": result}])
+    assert "Peak Amazon month: 2024-10" in headline
+    assert "$100.00" in headline
+
+
+def test_spend_breakdown_splits_holders_and_ranks_categories():
+    frame = _amazon_series_ledger()
+    holders = tool_spend_breakdown(frame, {"group_by": "cardholder", "query": "Amazon", "since": "2023-08-13"})
+    by_name = {row["name"]: row for row in holders["rows"]}
+    assert by_name["Alex Example"]["net_spend"] == 150.0
+    assert by_name["Sam Example"]["net_spend"] == 40.0
+    assert holders["rows"][0]["name"] == "Alex Example"
+    split = build_headline([{"tool": "spend_breakdown", "result": holders}])
+    assert "Cardholder split for Amazon" in split
+    assert "Alex Example $150.00" in split
+    assert "Sam Example $40.00" in split
+
+    ranked = _ledger(
+        [
+            _row(amount=20.0, category="Shopping", cardholder="Alex Example"),
+            _row(
+                posted_date="2026-07-16",
+                amount=50.0,
+                canonical_merchant="Cafe",
+                normalized_merchant="CAFE",
+                category="Food",
+                cardholder="Sam Example",
+            ),
+            _row(
+                posted_date="2026-07-17",
+                amount=8.0,
+                canonical_merchant="Cafe",
+                normalized_merchant="CAFE",
+                category="Food",
+                cardholder="Alex Example",
+            ),
+        ]
+    )
+    categories = tool_spend_breakdown(ranked, {"group_by": "category"})
+    assert [row["name"] for row in categories["rows"]][:2] == ["Food", "Shopping"]
+    assert categories["rows"][0]["net_spend"] == 58.0
+    assert categories["rows"][1]["net_spend"] == 20.0
+    top = build_headline([{"tool": "spend_breakdown", "result": categories}])
+    assert "Top category" in top
+    assert "Food" in top
+    assert "$58.00" in top
+
+    unlabeled = _ledger(
+        [
+            _row(category="", cardholder=""),
+            _row(
+                posted_date="2026-07-16",
+                amount=5.0,
+                canonical_merchant="Cafe",
+                category=None,
+                cardholder=None,
+            ),
+        ]
+    )
+    assert tool_spend_breakdown(unlabeled, {"group_by": "category"})["rows"][0]["name"] == "Uncategorized"
+    assert tool_spend_breakdown(unlabeled, {"group_by": "cardholder"})["rows"][0]["name"] == "Unassigned"
+
+
+def test_ambiguous_merchant_query_on_aggregates():
+    frame = _amazon_series_ledger()
+    series = tool_spend_over_time(frame, {"query": "am"})
+    breakdown = tool_spend_breakdown(frame, {"group_by": "merchant", "query": "am"})
+    for result in (series, breakdown):
+        assert result["ambiguous"] is True
+        names = {item["name"] for item in result["matched_names"]}
+        assert "Amazon" in names
+        assert "Amex" in names
+
+
+def test_spend_breakdown_aliases_by_to_group_by_and_requires_group():
+    frame = _amazon_series_ledger()
+    fact = dispatch_tool("spend_breakdown", {"by": "merchant", "limit": 3}, frame)
+    assert fact["args"]["group_by"] == "merchant"
+    assert "by" not in fact["args"]
+    assert fact["result"]["rows"][0]["name"] == "Amazon"
+    blob = str(fact)
+    assert "raw_description" not in blob
+    assert "C:/secret" not in blob
+    assert "txn-secret" not in blob
+    with pytest.raises(InsightsSandboxError, match="group_by"):
+        dispatch_tool("spend_breakdown", {"query": "Amazon"}, frame)
+
+
+def test_planner_picks_spend_over_time_for_highest_amazon_month():
+    frame = _amazon_series_ledger()
+    assert "spend_over_time" in PLANNER_SCHEMA["properties"]["tool"]["enum"]
+    assert "spend_breakdown" in PLANNER_SCHEMA["properties"]["tool"]["enum"]
+    assert "group_by" in PLANNER_SCHEMA["properties"]["args"]["properties"]
+    assert "by" in PLANNER_SCHEMA["properties"]["args"]["properties"]
+
+    def generate(prompt: str, schema: dict) -> dict:
+        if schema.get("required") == ["action", "reply"] or "Backend headline" in prompt:
+            return {"action": "answer", "reply": "Peak Amazon month: 2024-10, net $100.00 (1 charges)."}
+        if "Facts from tools" in prompt:
+            return {"action": "answer", "reply": "Peak Amazon month: 2024-10, net $100.00 (1 charges)."}
+        assert "spend_over_time" in prompt
+        assert "search_transactions only to show a few example rows" in prompt
+        return {"action": "tool", "tool": "spend_over_time", "args": {"query": "Amazon", "since": "2023-08-13"}}
+
+    out = run_insights_turn(
+        [{"role": "user", "content": "What month was the highest Amazon spend?"}],
+        frame,
+        today=date(2026, 8, 13),
+        generate=generate,
+        ollama_host="http://127.0.0.1:11434",
+    )
+    assert out["prompt_version"] == PROMPT_VERSION == "insights-v3"
+    assert out["tools_used"] == ["spend_over_time"]
+    peak = out["facts"][0]["result"]["peak"]
+    assert peak["month"] == "2024-10"
+    assert peak["net_spend"] == 100.0
+    assert "Peak Amazon month: 2024-10" in out["headline"]
+    blob = str(out["facts"])
+    assert "AMAZON.COM AMZN.COM/BILL" not in blob
+    assert "C:/secret" not in blob
+    assert "txn-secret" not in blob
+    prior = {"tool": "merchant_spend", "result": {"query": "Amazon", "net_spend": 53102.11, "charge_count": 3, "gross_charges": 53102.11, "credits_refunds": 0}}
+    latest = out["facts"][0]
+    assert "Peak Amazon" in build_headline([prior, latest])
