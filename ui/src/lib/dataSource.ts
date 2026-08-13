@@ -19,6 +19,7 @@ import type {
   InsightsChatResponse,
   InsightsMessage,
   Merchant,
+  MerchantOrphan,
   OverviewMonth,
   ReconciliationRow,
   RecurringRow,
@@ -333,8 +334,8 @@ export const api = {
     return staticJSON<ReconciliationRow[]>("reconciliation", []);
   },
 
-  async merchants(): Promise<{ total: number; items: Merchant[] }> {
-    if (canWrite) return req<{ total: number; items: Merchant[] }>("/api/merchants");
+  async merchants(): Promise<{ total: number; items: Merchant[]; orphans: MerchantOrphan[] }> {
+    if (canWrite) return req<{ total: number; items: Merchant[]; orphans: MerchantOrphan[] }>("/api/merchants");
     const items = await staticJSON<
       { merchant: string; canonical: boolean; total: number; txn_count: number }[]
     >("merchants", []);
@@ -348,6 +349,7 @@ export const api = {
         txn_count: m.txn_count,
         total_amount: m.total,
       })),
+      orphans: [],
     };
   },
 
@@ -551,6 +553,14 @@ export const api = {
   deleteMerchant(canonical: string) {
     if (!canWrite) writeGuard();
     return req<unknown>(`/api/merchants/${encodeURIComponent(canonical)}`, { method: "DELETE" });
+  },
+
+  mergeMerchants(body: { source: string; target: string; apply_category: boolean }) {
+    if (!canWrite) writeGuard();
+    return req<{ merchant: Merchant; rewritten: number; applied: number }>("/api/merchants/merge", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
   },
 
   saveRule(body: {

@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 import yaml
 
-from src.classify import classify
+from src.classify import classify, load_rules, rewrite_merchant_canonical
 from src.merchants import (
     alias_regex_for,
     append_merchant,
@@ -16,6 +16,7 @@ from src.merchants import (
     load_merchants,
     match_canonical,
     merchant_defaults,
+    merge_merchants,
     update_merchant,
 )
 from src.normalize import merchant_identity_key
@@ -267,3 +268,59 @@ def test_update_merchant_requires_a_valid_alias(merchants_file: Path):
         update_merchant("Walmart", aliases=[], path=merchants_file)
     with pytest.raises(ValueError, match="Invalid alias regex"):
         update_merchant("Walmart", aliases=[{"regex": "["}], path=merchants_file)
+
+
+def test_merge_merchants_concatenates_aliases_drops_source_and_rewrites_rules(
+    merchants_file: Path, tmp_path: Path
+):
+    append_merchant(
+        canonical="GPC",
+        aliases=[{"regex": r"(?i)gpc paymentus"}],
+        category="Utilities",
+        path=merchants_file,
+    )
+    merged = merge_merchants("GPC", "Walmart", path=merchants_file)
+    names = [entry["canonical"] for entry in load_merchants(merchants_file)["merchants"]]
+    assert "GPC" not in names
+    assert merged["canonical"] == "Walmart"
+    assert merged["category"] == "Shopping"
+    regexes = [alias.get("regex") for alias in merged["aliases"]]
+    assert r"(?i)gpc paymentus" in regexes
+    assert any(alias and "wal" in alias.lower() for alias in regexes)
+
+    rules = tmp_path / "rules.yaml"
+    rules.write_text(
+        yaml.safe_dump(
+            {
+                "categories": ["Utilities"],
+                "rules": [{"match": {"merchant_canonical": "GPC"}, "category": "Utilities"}],
+            }
+        )
+    )
+    assert rewrite_merchant_canonical("GPC", "Walmart", rules_path=rules) == 1
+    assert load_rules(rules)["rules"][0]["match"]["merchant_canonical"] == "Walmart"
+
+
+def test_merge_orphan_source_leaves_target_yaml_unchanged(merchants_file: Path):
+    before = load_merchants(merchants_file)
+    merged = merge_merchants("GPC", "Walmart", path=merchants_file)
+    assert merged["canonical"] == "Walmart"
+    assert load_merchants(merchants_file) == before
+
+
+def test_merge_skips_duplicate_aliases(merchants_file: Path):
+    walmart = next(
+        entry for entry in load_merchants(merchants_file)["merchants"] if entry["canonical"] == "Walmart"
+    )
+    append_merchant(canonical="GPC", aliases=list(walmart["aliases"]), path=merchants_file)
+    merged = merge_merchants("GPC", "Walmart", path=merchants_file)
+    assert merged["aliases"] == walmart["aliases"]
+
+
+def test_merge_refuses_unknown_target_and_self(merchants_file: Path):
+    with pytest.raises(KeyError):
+        merge_merchants("GPC", "Nope", path=merchants_file)
+    with pytest.raises(ValueError, match="different"):
+        merge_merchants("Walmart", "walmart", path=merchants_file)
+    with pytest.raises(ValueError, match="required"):
+        merge_merchants("  ", "Walmart", path=merchants_file)

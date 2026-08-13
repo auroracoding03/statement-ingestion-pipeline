@@ -850,3 +850,120 @@ def test_category_delete_unknown_is_404(client: TestClient):
         json={"category": "NoSuch", "action": "unassign"},
     )
     assert missing.status_code == 404
+
+
+def test_merge_yaml_merchants_rewrites_rules(client: TestClient):
+    created = client.post(
+        "/api/merchants",
+        json={"canonical": "GPC", "aliases": [{"regex": "(?i)gpc paymentus"}], "restamp": False},
+    )
+    assert created.status_code == 200
+    client.post("/api/rules", json={"merchant_canonical": "GPC", "category": "Utilities"})
+
+    merged = client.post(
+        "/api/merchants/merge",
+        json={"source": "GPC", "target": "Walmart", "apply_category": False},
+    )
+    assert merged.status_code == 200
+    body = merged.json()
+    assert body["merchant"]["canonical"] == "Walmart"
+    assert body["rewritten"] == 0
+    assert body["applied"] == 0
+    names = {item["canonical"] for item in client.get("/api/merchants").json()["items"]}
+    assert "GPC" not in names
+    walmart = next(item for item in client.get("/api/merchants").json()["items"] if item["canonical"] == "Walmart")
+    assert any("gpc" in str(alias.get("regex") or "").lower() for alias in walmart["aliases"])
+
+    rules = client.get("/api/rules").json()["rules"]
+    assert any(rule["match"].get("merchant_canonical") == "Walmart" for rule in rules)
+    assert not any(rule["match"].get("merchant_canonical") == "GPC" for rule in rules)
+
+
+def test_orphans_listed_after_delete_and_merge_applies_target_category_only(
+    client: TestClient, workspace: dict
+):
+    client.post("/api/merchants/recanonicalize")
+    client.post(
+        "/api/transactions/bulk",
+        json={"txn_ids": [workspace["walmart_id"]], "category": "Food", "subcategory": "Groceries"},
+    )
+    stamped = client.post(
+        "/api/merchants",
+        json={
+            "canonical": "GPC",
+            "members": ["LOCAL COFFEE ROASTERS DOWNTOWN"],
+            "restamp": True,
+        },
+    )
+    assert stamped.status_code == 200
+    deleted = client.delete("/api/merchants/GPC")
+    assert deleted.status_code == 200
+
+    listing = client.get("/api/merchants").json()
+    orphans = {item["canonical"]: item for item in listing["orphans"]}
+    assert "GPC" in orphans
+    assert orphans["GPC"]["txn_count"] == 1
+    assert "Walmart" not in orphans
+
+    merged = client.post(
+        "/api/merchants/merge",
+        json={"source": "GPC", "target": "Walmart", "apply_category": True},
+    )
+    assert merged.status_code == 200
+    assert merged.json()["rewritten"] == 1
+    assert merged.json()["applied"] == 1
+
+    items = {row["txn_id"]: row for row in client.get("/api/transactions").json()["items"]}
+    coffee = items[workspace["coffee_id"]]
+    walmart = items[workspace["walmart_id"]]
+    assert coffee["canonical_merchant"] == "Walmart"
+    assert coffee["category"] == "Shopping"
+    assert coffee["classified_by"] == "manual"
+    assert coffee["merchant_source"] == "manual"
+    assert walmart["canonical_merchant"] == "Walmart"
+    assert walmart["category"] == "Food"
+    assert walmart["subcategory"] == "Groceries"
+
+    listing = client.get("/api/merchants").json()
+    assert not any(item["canonical"] == "GPC" for item in listing["orphans"])
+
+
+def test_merge_leave_categories_only_renames_canonical(client: TestClient):
+    client.post(
+        "/api/merchants",
+        json={
+            "canonical": "GPC",
+            "members": ["LOCAL COFFEE ROASTERS DOWNTOWN"],
+            "restamp": True,
+        },
+    )
+    client.delete("/api/merchants/GPC")
+    merged = client.post(
+        "/api/merchants/merge",
+        json={"source": "GPC", "target": "Walmart", "apply_category": False},
+    )
+    assert merged.status_code == 200
+    assert merged.json()["rewritten"] == 1
+    assert merged.json()["applied"] == 0
+    coffee = client.get("/api/transactions?q=coffee").json()["items"][0]
+    assert coffee["canonical_merchant"] == "Walmart"
+    assert coffee["category"] in (None, "", "Uncategorized")
+    assert coffee["merchant_source"] == "manual"
+
+
+def test_merge_refusals(client: TestClient):
+    self_merge = client.post(
+        "/api/merchants/merge",
+        json={"source": "Walmart", "target": "walmart", "apply_category": False},
+    )
+    assert self_merge.status_code == 422
+    unknown = client.post(
+        "/api/merchants/merge",
+        json={"source": "GPC", "target": "Nope", "apply_category": False},
+    )
+    assert unknown.status_code == 404
+    empty = client.post(
+        "/api/merchants/merge",
+        json={"source": "GPC", "target": "", "apply_category": False},
+    )
+    assert empty.status_code == 422

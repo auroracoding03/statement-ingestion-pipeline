@@ -36,6 +36,7 @@ from src.api.schemas import (
     BulkTransactionsRequest,
     InsightsChatRequest,
     MerchantIn,
+    MerchantMerge,
     MerchantUpdate,
     ReviewDecision,
     ReviewPreviewRequest,
@@ -64,7 +65,7 @@ from src.classify import (
     update_rule,
 )
 from src.extract import iter_statement_files
-from src.merchants import append_merchant, delete_merchant, load_merchants, update_merchant
+from src.merchants import append_merchant, delete_merchant, load_merchants, merge_merchants, update_merchant
 from src.cards import build_cards_coverage
 from src.overview import build_period_summary, cardholders
 from src.taxonomy import category_impact, delete_category
@@ -692,6 +693,21 @@ def get_merchants() -> dict:
             for name, row in grouped.iterrows()
         }
 
+    yaml_names = {
+        str(entry.get("canonical", "")).casefold()
+        for entry in entries
+        if str(entry.get("canonical") or "").strip()
+    }
+
+    def _stats_for(name: str) -> dict:
+        if name in usage:
+            return usage[name]
+        folded = name.casefold()
+        for key, stats in usage.items():
+            if key.casefold() == folded:
+                return stats
+        return {"txn_count": 0, "total_amount": 0.0}
+
     items = []
     for entry in entries:
         canonical = entry.get("canonical", "")
@@ -701,10 +717,16 @@ def get_merchants() -> dict:
                 "category": entry.get("category"),
                 "subcategory": entry.get("subcategory"),
                 "aliases": entry.get("aliases") or [],
-                **usage.get(canonical, {"txn_count": 0, "total_amount": 0.0}),
+                **_stats_for(str(canonical)),
             }
         )
-    return {"total": len(items), "items": items}
+    orphans = [
+        {"canonical": name, **stats}
+        for name, stats in usage.items()
+        if str(name).strip() and name.casefold() not in yaml_names
+    ]
+    orphans.sort(key=lambda row: (-int(row["txn_count"]), str(row["canonical"]).lower()))
+    return {"total": len(items), "items": items, "orphans": orphans}
 
 
 @app.get("/api/merchants/unknown")
@@ -738,6 +760,32 @@ def post_merchant(body: MerchantIn) -> dict:
             pipeline.recanonicalize()
 
     return {"merchant": entry, "stamped": stamped}
+
+
+@app.post("/api/merchants/merge")
+def post_merchant_merge(body: MerchantMerge) -> dict:
+    source = " ".join(body.source.split()).strip()
+    target = " ".join(body.target.split()).strip()
+    try:
+        entry = merge_merchants(source, target)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Unknown target merchant") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    rewrite_merchant_canonical(source, str(entry["canonical"]))
+    category = str(entry.get("category") or "").strip() if body.apply_category else ""
+    rewritten = pipeline.reassign_canonical_on_ledger(
+        source,
+        str(entry["canonical"]),
+        category=category or None,
+        subcategory=str(entry.get("subcategory") or "") if category else "",
+    )
+    return {
+        "merchant": entry,
+        "rewritten": rewritten,
+        "applied": rewritten if category else 0,
+    }
 
 
 @app.patch("/api/merchants/{canonical}")

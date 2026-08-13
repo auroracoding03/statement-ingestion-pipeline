@@ -56,6 +56,12 @@ class MerchantUpdate(BaseModel):
     restamp: bool = True
 
 
+class MerchantMerge(BaseModel):
+    source: str = Field(min_length=1, max_length=120)
+    target: str = Field(min_length=1, max_length=120)
+    apply_category: bool = False
+
+
 class RuleIn(BaseModel):
     merchant_regex: str | None = None
     merchant_canonical: str | None = None

@@ -5,7 +5,7 @@ import { Empty, ErrorNote, Loading, PageHeader } from "../components/ui";
 import { api, canWrite } from "../lib/dataSource";
 import { money } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
-import type { Merchant, UnknownCluster } from "../lib/types";
+import type { Merchant, MerchantOrphan, UnknownCluster } from "../lib/types";
 
 const HIDE_KEY = "fin.merchants.hideUnresolved";
 
@@ -51,6 +51,9 @@ export function Merchants() {
   const [query, setQuery] = useState("");
   const [hideUnresolved, setHideUnresolved] = useState(readHidden);
   const [editing, setEditing] = useState<Merchant | null>(null);
+  const [merging, setMerging] = useState<{ canonical: string; txn_count: number; total_amount: number } | null>(
+    null,
+  );
   const categories = rules.data?.categories ?? [];
   const subcategories = rules.data?.subcategories ?? {};
   const needle = query.trim().toLowerCase();
@@ -66,6 +69,12 @@ export function Merchants() {
     if (!needle) return items;
     return items.filter((merchant) => merchantHaystack(merchant).includes(needle));
   }, [merchants.data?.items, needle]);
+
+  const leftover = useMemo((): MerchantOrphan[] => {
+    const items = merchants.data?.orphans ?? [];
+    if (!needle) return items;
+    return items.filter((orphan) => orphan.canonical.toLowerCase().includes(needle));
+  }, [merchants.data?.orphans, needle]);
 
   function refreshAll() {
     merchants.reload();
@@ -91,7 +100,7 @@ export function Merchants() {
         <input
           className="grow"
           type="search"
-          placeholder="Search unresolved clusters or curated merchants…"
+          placeholder="Search unresolved clusters, leftover names, or curated merchants…"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           aria-label="Search merchants"
@@ -159,6 +168,55 @@ export function Merchants() {
         </>
       )}
 
+      {(merchants.data?.orphans?.length ?? 0) > 0 && (
+        <>
+          <h2>Uncatalogued ledger names</h2>
+          <p className="muted">
+            These names are still stamped on transactions but are no longer in merchants.yaml. Merge them into a
+            curated merchant to retarget the rows.
+          </p>
+          {leftover.length === 0 && !merchants.loading && (
+            <Empty>No leftover names match that search.</Empty>
+          )}
+          {leftover.length > 0 && (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Canonical</th>
+                    <th className="num">Transactions</th>
+                    <th className="num">Total</th>
+                    {canWrite && <th />}
+                  </tr>
+                </thead>
+                <tbody>
+                  {leftover.map((orphan) => (
+                    <tr key={orphan.canonical}>
+                      <td>
+                        <strong>{orphan.canonical}</strong>
+                      </td>
+                      <td className="num">{orphan.txn_count}</td>
+                      <td className="num">{money(orphan.total_amount)}</td>
+                      {canWrite && (
+                        <td>
+                          <button
+                            className="btn small"
+                            type="button"
+                            onClick={() => setMerging(orphan)}
+                          >
+                            Merge
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+
       <h2>Curated merchants</h2>
       {merchants.loading && <Loading what="merchants" />}
       {merchants.error && <ErrorNote error={merchants.error} />}
@@ -210,6 +268,16 @@ export function Merchants() {
                           Edit
                         </button>
                         <button
+                          className="btn small"
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setMerging(merchant);
+                          }}
+                        >
+                          Merge
+                        </button>
+                        <button
                           className="btn danger small"
                           onClick={async () => {
                             setError(null);
@@ -241,6 +309,22 @@ export function Merchants() {
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
+            refreshAll();
+          }}
+          onError={setError}
+        />
+      )}
+      {merging && (
+        <MergeModal
+          source={merging.canonical}
+          txnCount={merging.txn_count}
+          totalAmount={merging.total_amount}
+          targets={(merchants.data?.items ?? []).filter(
+            (merchant) => merchant.canonical.toLowerCase() !== merging.canonical.toLowerCase(),
+          )}
+          onClose={() => setMerging(null)}
+          onSaved={() => {
+            setMerging(null);
             refreshAll();
           }}
           onError={setError}
@@ -499,6 +583,156 @@ function MerchantEditor({
             {saving ? "Saving…" : "Save"}
           </button>
           <button className="btn subtle" type="button" onClick={onClose} disabled={saving}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MergeModal({
+  source,
+  txnCount,
+  totalAmount,
+  targets,
+  onClose,
+  onSaved,
+  onError,
+}: {
+  source: string;
+  txnCount: number;
+  totalAmount: number;
+  targets: Merchant[];
+  onClose: () => void;
+  onSaved: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [armed, setArmed] = useState(false);
+  const [targetQuery, setTargetQuery] = useState("");
+  const [targetName, setTargetName] = useState(targets[0]?.canonical ?? "");
+  const [saving, setSaving] = useState<"apply" | "leave" | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setArmed(true), 0);
+    return () => window.clearTimeout(id);
+  }, []);
+
+  const filteredTargets = useMemo(() => {
+    const needle = targetQuery.trim().toLowerCase();
+    if (!needle) return targets;
+    return targets.filter((merchant) => merchantHaystack(merchant).includes(needle));
+  }, [targetQuery, targets]);
+
+  useEffect(() => {
+    if (!filteredTargets.some((merchant) => merchant.canonical === targetName)) {
+      setTargetName(filteredTargets[0]?.canonical ?? "");
+    }
+  }, [filteredTargets, targetName]);
+
+  const selected = targets.find((merchant) => merchant.canonical === targetName);
+  const defaultLabel = [selected?.category, selected?.subcategory].filter(Boolean).join(" / ");
+
+  async function merge(applyCategory: boolean) {
+    if (!targetName) return;
+    setSaving(applyCategory ? "apply" : "leave");
+    setSaveError(null);
+    try {
+      await api.mergeMerchants({ source, target: targetName, apply_category: applyCategory });
+      onSaved();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setSaveError(message);
+      onError(message);
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  return (
+    <div
+      className={`modal-backdrop${armed ? "" : " is-pending"}`}
+      onClick={(event) => {
+        if (!armed || event.target !== event.currentTarget) return;
+        onClose();
+      }}
+      role="presentation"
+    >
+      <div
+        className="upload-modal merchant-edit-modal"
+        role="dialog"
+        aria-labelledby="merchant-merge-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h2 id="merchant-merge-title">Merge merchant</h2>
+        <p>
+          Fold <strong>{source}</strong> into a curated merchant.
+          {txnCount > 0
+            ? ` ${txnCount} transaction${txnCount === 1 ? "" : "s"} (${money(totalAmount)}) will be renamed.`
+            : " No ledger rows currently use this name."}
+        </p>
+        <label>
+          Source
+          <input value={source} readOnly />
+        </label>
+        {targets.length > 8 && (
+          <label>
+            Find target
+            <input
+              type="search"
+              value={targetQuery}
+              onChange={(event) => setTargetQuery(event.target.value)}
+              placeholder="Search curated merchants…"
+              aria-label="Search merge targets"
+            />
+          </label>
+        )}
+        <label>
+          Merge into
+          <select
+            value={targetName}
+            onChange={(event) => setTargetName(event.target.value)}
+            disabled={filteredTargets.length === 0}
+            aria-label="Target merchant"
+          >
+            {filteredTargets.length === 0 && <option value="">No matching merchants</option>}
+            {filteredTargets.map((merchant) => (
+              <option key={merchant.canonical} value={merchant.canonical}>
+                {merchant.canonical}
+                {merchant.category ? ` — ${merchant.category}` : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+        {selected?.category ? (
+          <p className="muted">
+            Default for {selected.canonical}: {defaultLabel}
+          </p>
+        ) : selected ? (
+          <p className="muted">{selected.canonical} has no default category.</p>
+        ) : (
+          <p className="muted">Confirm another curated merchant first; merge needs a target in merchants.yaml.</p>
+        )}
+        {saveError && <ErrorNote error={saveError} />}
+        <div className="review-actions">
+          <button
+            className="btn"
+            type="button"
+            disabled={!targetName || saving !== null}
+            onClick={() => void merge(true)}
+          >
+            {saving === "apply" ? "Merging…" : "Apply default"}
+          </button>
+          <button
+            className="btn subtle"
+            type="button"
+            disabled={!targetName || saving !== null}
+            onClick={() => void merge(false)}
+          >
+            {saving === "leave" ? "Merging…" : "Leave categories"}
+          </button>
+          <button className="btn ghost" type="button" onClick={onClose} disabled={saving !== null}>
             Cancel
           </button>
         </div>

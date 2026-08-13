@@ -194,6 +194,12 @@ export interface Merchant {
   total_amount: number;
 }
 
+export interface MerchantOrphan {
+  canonical: string;
+  txn_count: number;
+  total_amount: number;
+}
+
 export interface UnknownCluster {
   cluster_id: string;
   members: string[];

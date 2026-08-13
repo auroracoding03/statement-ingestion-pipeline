@@ -378,3 +378,60 @@ def update_merchant(
         doc["merchants"] = entries
         save_merchants(doc, target)
         return entry
+
+
+def _alias_key(alias: dict) -> tuple[str, str]:
+    return (str(alias.get("regex") or "").strip(), str(alias.get("exact") or "").strip())
+
+
+def merge_merchants(source: str, target: str, path: Path | None = None) -> dict:
+    """Fold ``source`` into ``target``. Source may be missing from YAML (orphan ledger name)."""
+    cleaned_source = " ".join(source.split()).strip()
+    cleaned_target = " ".join(target.split()).strip()
+    if not cleaned_source or not cleaned_target:
+        raise ValueError("Source and target names are required")
+    if cleaned_source.lower() == cleaned_target.lower():
+        raise ValueError("Pick a different merchant")
+    file_path = _path(path)
+    with FileLock(f"{file_path}.lock"):
+        doc = load_merchants(file_path)
+        entries = list(doc.get("merchants") or [])
+        target_index = next(
+            (
+                i
+                for i, entry in enumerate(entries)
+                if str(entry.get("canonical", "")).lower() == cleaned_target.lower()
+            ),
+            None,
+        )
+        if target_index is None:
+            raise KeyError(cleaned_target)
+        target_entry = dict(entries[target_index])
+        source_index = next(
+            (
+                i
+                for i, entry in enumerate(entries)
+                if str(entry.get("canonical", "")).lower() == cleaned_source.lower()
+            ),
+            None,
+        )
+        if source_index is not None:
+            existing = [alias for alias in (target_entry.get("aliases") or []) if isinstance(alias, dict)]
+            seen = {_alias_key(alias) for alias in existing}
+            for alias in entries[source_index].get("aliases") or []:
+                if not isinstance(alias, dict):
+                    continue
+                key = _alias_key(alias)
+                if (not key[0] and not key[1]) or key in seen:
+                    continue
+                existing.append({"regex": key[0]} if key[0] else {"exact": key[1]})
+                seen.add(key)
+            target_entry["aliases"] = existing
+            entries = [
+                target_entry if i == target_index else entry
+                for i, entry in enumerate(entries)
+                if i != source_index
+            ]
+            doc["merchants"] = entries
+            save_merchants(doc, file_path)
+        return target_entry

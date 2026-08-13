@@ -435,17 +435,43 @@ def recanonicalize() -> dict:
 
 def rename_canonical_on_ledger(old: str, new: str) -> int:
     """Stamp a renamed canonical onto existing ledger rows."""
-    if not old or not new or old == new:
+    return reassign_canonical_on_ledger(old, new)
+
+
+def reassign_canonical_on_ledger(
+    old: str,
+    new: str,
+    *,
+    category: str | None = None,
+    subcategory: str = "",
+) -> int:
+    """Rewrite ledger rows from one canonical name to another.
+
+    Optionally apply a category to those same rows only, not every row already
+    using the target name.
+    """
+    cleaned_old = " ".join((old or "").split()).strip()
+    cleaned_new = " ".join((new or "").split()).strip()
+    if not cleaned_old or not cleaned_new or cleaned_old.lower() == cleaned_new.lower():
         return 0
     with ledger_lock():
         ledger = load_ledger()
         if ledger.empty or "canonical_merchant" not in ledger.columns:
             return 0
-        match = ledger["canonical_merchant"].fillna("").astype(str) == old
+        names = ledger["canonical_merchant"].fillna("").astype(str)
+        match = names.str.casefold() == cleaned_old.casefold()
         count = int(match.sum())
-        if count:
-            ledger.loc[match, "canonical_merchant"] = new
-            write_ledger(_ensure_columns(ledger))
+        if not count:
+            return 0
+        ledger.loc[match, "canonical_merchant"] = cleaned_new
+        if category:
+            cleaned_sub = " ".join((subcategory or "").split()).strip()
+            ledger.loc[match, "category"] = " ".join(category.split()).strip()
+            ledger.loc[match, "subcategory"] = cleaned_sub
+            ledger.loc[match, "classified_by"] = "manual"
+            ledger.loc[match, "proposed_category"] = None
+            ledger.loc[match, "proposed_subcategory"] = None
+        write_ledger(_ensure_columns(ledger))
         return count
 
 
