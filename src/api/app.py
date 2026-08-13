@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 from src import pipeline
 from src import ai_review
-from src.ai_suggest import load_ollama_config, ollama_available
+from src.ai_suggest import ollama_available, recommended_config
 from src.atomic import atomic_copy_stream
 from src.api import jobs
 from src.api.schemas import (
@@ -186,7 +186,7 @@ def post_ai_analyze(body: AIAnalyzeRequest, background: BackgroundTasks) -> dict
 @app.post("/api/insights/chat")
 def post_insights_chat(body: InsightsChatRequest) -> dict:
     """Read-only ledger Q&A. POST carries the question; nothing is persisted."""
-    cfg = load_ollama_config()
+    cfg = recommended_config()
     host = str(cfg.get("host") or "")
     try:
         assert_loopback_ollama_host(host)

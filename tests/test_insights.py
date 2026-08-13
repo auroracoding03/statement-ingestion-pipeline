@@ -85,6 +85,29 @@ def test_insights_module_has_no_mutation_imports():
         assert needle not in source
 
 
+def test_insights_uses_qwen_when_desktop_yaml_still_says_llama32(monkeypatch):
+    seen: dict[str, str] = {}
+
+    def fake_yaml(_path=None):
+        return {"model": "llama3.2", "host": "http://127.0.0.1:11434", "temperature": 0.1}
+
+    monkeypatch.setattr("src.ai_suggest.load_ollama_config", fake_yaml)
+
+    def capture(prompt, schema, *, host, model):
+        seen["model"] = model
+        return {"action": "answer", "reply": "I can look up merchant spend."}
+
+    monkeypatch.setattr("src.insights._default_generate", capture)
+    out = run_insights_turn(
+        [{"role": "user", "content": "What can you do?"}],
+        _ledger(),
+        today=date(2026, 8, 13),
+        ollama_host="http://127.0.0.1:11434",
+    )
+    assert seen["model"] == "qwen3.5:9b"
+    assert out["reply"]
+
+
 def test_merchant_spend_sums_amazon_aliases_and_reports_net():
     frame = _ledger(
         [
@@ -424,7 +447,7 @@ def test_insights_chat_route_is_read_only_post(monkeypatch):
     _patch_mutations(monkeypatch)
     monkeypatch.setattr(api_app, "assert_loopback_ollama_host", lambda _host: None)
     monkeypatch.setattr(api_app, "ollama_available", lambda _host=None: True)
-    monkeypatch.setattr(api_app, "load_ollama_config", lambda: {"host": "http://127.0.0.1:11434", "model": "qwen3.5:9b"})
+    monkeypatch.setattr(api_app, "recommended_config", lambda: {"host": "http://127.0.0.1:11434", "model": "qwen3.5:9b"})
     monkeypatch.setattr(
         api_app,
         "run_insights_turn",

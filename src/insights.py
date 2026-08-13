@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 import httpx
 import pandas as pd
 
-from src.ai_suggest import load_ollama_config
+from src.ai_suggest import recommended_config
 from src.overview import build_month_summary
 
 PROMPT_VERSION = "insights-v2"
@@ -870,7 +870,7 @@ def run_insights_turn(
     history = _clip_messages(messages)
     frame = ledger_view.copy(deep=True) if isinstance(ledger_view, pd.DataFrame) else project_ledger_view(pd.DataFrame())
 
-    cfg = load_ollama_config()
+    cfg = recommended_config()
     host = ollama_host or str(cfg.get("host") or "")
     chosen_model = model or str(cfg.get("model") or "")
     assert_loopback_ollama_host(host)

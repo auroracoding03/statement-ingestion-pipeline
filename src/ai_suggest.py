@@ -32,6 +32,8 @@ DEFAULT_CONFIG = {
     "keep_alive": "10m",
 }
 
+RECOMMENDED_MODEL = "qwen3.5:9b"
+
 
 def load_ollama_config(path: Path = OLLAMA_PATH) -> dict:
     if not path.exists():
@@ -39,6 +41,21 @@ def load_ollama_config(path: Path = OLLAMA_PATH) -> dict:
     with path.open() as f:
         loaded = yaml.safe_load(f) or {}
     return {**DEFAULT_CONFIG, **loaded}
+
+
+def recommended_config(path: Path = OLLAMA_PATH) -> dict:
+    """Map the legacy llama3.2 default to the current local model.
+
+    Installed desktops keep an old ollama.yaml from earlier releases.  That
+    value was the application's historical default, not a deliberate choice.
+    """
+    cfg = load_ollama_config(path)
+    if str(cfg.get("model") or "") == "llama3.2":
+        cfg["model"] = RECOMMENDED_MODEL
+        cfg["temperature"] = 0
+        cfg["num_ctx"] = 8192
+        cfg["keep_alive"] = "10m"
+    return cfg
 
 
 def ollama_available(host: str | None = None) -> bool:

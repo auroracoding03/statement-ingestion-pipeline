@@ -21,14 +21,13 @@ import httpx
 import pandas as pd
 
 from src import paths
-from src.ai_suggest import load_ollama_config, ollama_available
+from src.ai_suggest import ollama_available, recommended_config
 from src.atomic import atomic_copy_file, atomic_write_parquet, atomic_write_text
 from src.classify import append_rule, load_rules
 from src.merchants import append_merchant, canonicalize, cluster_unknowns
 
 
 PROMPT_VERSION = "merchant-review-v3"
-RECOMMENDED_MODEL = "qwen3.5:9b"
 GAS_STATION_HINT = (
     "Gas stations and fuel brands (Shell, BP, Exxon, Chevron, Circle K, Speedway, "
     "Love's, Loves, Sheetz, QuikTrip, Wawa, Racetrack, Costco Gas, etc.) must use "
@@ -72,23 +71,6 @@ def _unjson(value: Any, fallback: Any) -> Any:
 
 def _proposal_path() -> Path:
     return paths.AI_PROPOSALS_PARQUET
-
-
-def recommended_config() -> dict:
-    """Keep legacy ``llama3.2`` defaults from silently defeating setup.
-
-    Old installations carry their user config forward on upgrade.  That value
-    was the application's historical default rather than a deliberate model
-    selection, so use the v0.3 recommended model for this new workflow while
-    retaining a genuinely custom model choice.
-    """
-    cfg = load_ollama_config()
-    if str(cfg.get("model") or "") == "llama3.2":
-        cfg["model"] = RECOMMENDED_MODEL
-        cfg["temperature"] = 0
-        cfg["num_ctx"] = 8192
-        cfg["keep_alive"] = "10m"
-    return cfg
 
 
 def _applications_path() -> Path:
