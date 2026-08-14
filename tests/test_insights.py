@@ -704,7 +704,7 @@ def test_planner_picks_spend_over_time_for_highest_amazon_month():
         generate=generate,
         ollama_host="http://127.0.0.1:11434",
     )
-    assert out["prompt_version"] == PROMPT_VERSION == "insights-v4"
+    assert out["prompt_version"] == PROMPT_VERSION == "insights-v5"
     assert out["tools_used"] == ["spend_over_time"]
     peak = out["facts"][0]["result"]["peak"]
     assert peak["month"] == "2024-10"
@@ -717,3 +717,238 @@ def test_planner_picks_spend_over_time_for_highest_amazon_month():
     prior = {"tool": "merchant_spend", "result": {"query": "Amazon", "net_spend": 53102.11, "charge_count": 3, "gross_charges": 53102.11, "credits_refunds": 0}}
     latest = out["facts"][0]
     assert "Peak Amazon" in build_headline([prior, latest])
+
+
+def _travel_budget():
+    return {
+        "envelopes": [
+            {"category": "Travel", "amount": 50.0, "show_on_overview": False, "subcategories": []},
+            {"category": "Food", "amount": 100.0, "show_on_overview": True, "subcategories": []},
+        ]
+    }
+
+
+def _as_of():
+    return date(2026, 8, 14)
+
+
+def test_remaining_budget_nets_refunds_ignores_payments_and_calendar_months(monkeypatch):
+    monkeypatch.setattr("src.insights_tools.load_budget", _travel_budget)
+    frame = _ledger(
+        [
+            _row(posted_date="2026-03-10", amount=100.0, category="Travel", canonical_merchant="Airline"),
+            _row(
+                posted_date="2026-04-02",
+                amount=-20.0,
+                category="Travel",
+                canonical_merchant="Airline",
+                normalized_merchant="AIRLINE REFUND",
+            ),
+            _row(
+                posted_date="2026-05-01",
+                amount=-200.0,
+                category="Transfers",
+                subcategory="Monthly Payment",
+                canonical_merchant="Chase Autopay",
+                normalized_merchant="CHASE AUTOPAY",
+            ),
+            _row(posted_date="2025-03-10", amount=40.0, category="Travel", canonical_merchant="Airline"),
+            _row(
+                posted_date="2026-06-01",
+                amount=75.0,
+                category="Shopping",
+                canonical_merchant="Love's Travel Stops",
+                normalized_merchant="LOVES TRAVEL STOPS",
+            ),
+        ]
+    )
+    fact = dispatch_tool("remaining_budget", {"category": "Travel"}, frame, today=_as_of())
+    result = fact["result"]
+    assert result["budget_set"] is True
+    assert result["monthly_budget"] == 50.0
+    assert result["actual"] == 80.0
+    assert result["charge_count"] == 1
+    assert result["horizon_budget"] == 600.0
+    assert result["remaining"] == 520.0
+    assert result["remaining_months"] == 5
+    assert result["remaining_per_month"] == 104.0
+    assert result["elapsed_months"] == 8
+    assert result["straight_line_budget"] == 400.0
+    assert result["pct_used"] == 13.3
+    assert result["on_pace"] is True
+    assert result["over_budget"] is False
+    assert result["prior_year_actual"] == 40.0
+    assert result["period"]["since"] == "2026-01-01"
+    assert result["period"]["until"] == "2026-08-14"
+    headline = build_headline([fact])
+    assert "$80.00" in headline
+    assert "$600.00" in headline
+    assert "$520.00" in headline
+    assert "$104.00" in headline
+    assert "$40.00" in headline
+    assert "13.3%" in headline
+
+
+def test_remaining_budget_months_horizon_and_missing_envelope(monkeypatch):
+    monkeypatch.setattr("src.insights_tools.load_budget", _travel_budget)
+    frame = _ledger(
+        [_row(posted_date="2026-08-02", amount=30.0, category="Travel", canonical_merchant="Hotel")]
+    )
+    three = dispatch_tool("remaining_budget", {"category": "Travel", "months": 3}, frame, today=_as_of())["result"]
+    assert three["months_in_horizon"] == 3
+    assert three["remaining_months"] == 3
+    assert three["elapsed_months"] == 1
+    assert three["horizon_budget"] == 150.0
+    assert three["actual"] == 30.0
+    assert three["remaining"] == 120.0
+    assert three["straight_line_budget"] == 50.0
+    assert three["period"]["since"] == "2026-08-01"
+    assert three["period"]["horizon_until"] == "2026-10-31"
+
+    monkeypatch.setattr("src.insights_tools.load_budget", lambda path=None: {"envelopes": []})
+    missing = dispatch_tool("remaining_budget", {"category": "Travel"}, frame, today=_as_of())["result"]
+    assert missing["budget_set"] is False
+    assert missing["horizon_budget"] is None
+    assert missing["remaining"] is None
+    assert missing["actual"] == 30.0
+    assert "No monthly Travel budget is set" in build_headline(
+        [dispatch_tool("remaining_budget", {"category": "Travel"}, frame, today=_as_of())]
+    )
+
+
+def test_planner_routes_travel_leftover_year_to_remaining_budget(monkeypatch):
+    monkeypatch.setattr("src.insights_tools.load_budget", _travel_budget)
+    frame = _ledger(
+        [_row(posted_date="2026-03-10", amount=80.0, category="Travel", canonical_merchant="Airline")]
+    )
+    assert "remaining_budget" in PLANNER_SCHEMA["properties"]["tool"]["enum"]
+    assert "budget_status" in PLANNER_SCHEMA["properties"]["tool"]["enum"]
+
+    def generate(prompt: str, schema: dict) -> dict:
+        if schema.get("required") == ["action", "reply"] or "Backend headline" in prompt:
+            return {"action": "answer", "reply": "Travel 2026: spent $80.00 of $600.00 budget (13.3% used). Remaining $520.00 over 5 months ($104.00/month). On pace vs YTD envelope; last year YTD $0.00."}
+        if "Facts from tools" in prompt:
+            return {"action": "answer", "reply": "Travel 2026: spent $80.00 of $600.00 budget (13.3% used). Remaining $520.00 over 5 months ($104.00/month). On pace vs YTD envelope; last year YTD $0.00."}
+        assert "remaining_budget" in prompt
+        assert "Never pass them as query to merchant_spend or spend_over_time" in prompt
+        assert "stay within budget" in prompt
+        return {"action": "tool", "tool": "remaining_budget", "args": {"category": "Travel"}}
+
+    out = run_insights_turn(
+        [
+            {
+                "role": "user",
+                "content": "Based on Travel spend to date this year, how much can I spend in the remaining months and stay on budget?",
+            }
+        ],
+        frame,
+        today=_as_of(),
+        generate=generate,
+        ollama_host="http://127.0.0.1:11434",
+    )
+    assert out["prompt_version"] == "insights-v5"
+    assert out["tools_used"] == ["remaining_budget"]
+    assert out["facts"][0]["args"]["category"] == "Travel"
+    assert "query" not in out["facts"][0]["args"]
+    assert out["facts"][0]["result"]["actual"] == 80.0
+
+
+def test_budget_status_sorts_overspent_first(monkeypatch):
+    monkeypatch.setattr("src.insights_tools.load_budget", _travel_budget)
+    frame = _ledger(
+        [
+            _row(posted_date="2026-02-01", amount=900.0, category="Food", canonical_merchant="Grocer"),
+            _row(posted_date="2026-03-01", amount=100.0, category="Travel", canonical_merchant="Airline"),
+        ]
+    )
+    fact = dispatch_tool("budget_status", {}, frame, today=_as_of())
+    rows = fact["result"]["rows"]
+    assert fact["result"]["over_count"] == 1
+    assert rows[0]["category"] == "Food"
+    assert rows[0]["over_budget"] is True
+    assert rows[0]["window_budget"] == 800.0
+    assert rows[0]["actual"] == 900.0
+    assert rows[0]["over_by"] == 100.0
+    assert rows[1]["category"] == "Travel"
+    assert rows[1]["over_budget"] is False
+    headline = build_headline([fact])
+    assert "1 envelope over budget" in headline
+    assert "Food $100.00 over" in headline
+
+
+def test_tagged_spend_trip_total_and_unknown_tag(monkeypatch):
+    monkeypatch.setattr(
+        "src.insights_tools.list_tags",
+        lambda path=None: [{"id": "beach", "label": "Beach trip", "kind": "trip"}],
+    )
+    frame = _ledger(
+        [
+            _row(posted_date="2026-07-15", amount=80.0, category="Travel", tags=["beach"], canonical_merchant="Hotel"),
+            _row(posted_date="2026-07-16", amount=20.0, category="Food", tags=["beach"], canonical_merchant="Cafe"),
+            _row(posted_date="2026-07-17", amount=50.0, category="Shopping", tags=[], canonical_merchant="Amazon"),
+        ]
+    )
+    hit = dispatch_tool("tagged_spend", {"tag": "beach"}, frame, today=_as_of())["result"]
+    assert hit["net_spend"] == 100.0
+    assert hit["charge_count"] == 2
+    assert hit["matched_tags"][0]["id"] == "beach"
+    assert hit["ambiguous"] is False
+
+    miss = dispatch_tool("tagged_spend", {"tag": "ski"}, frame, today=_as_of())["result"]
+    assert miss["matched_tags"] == []
+    assert miss["net_spend"] == 0.0
+    assert "no tag matching 'ski'" in build_headline(
+        [dispatch_tool("tagged_spend", {"tag": "ski"}, frame, today=_as_of())]
+    )
+
+
+def test_expected_bills_seen_vs_missing(monkeypatch):
+    monkeypatch.setattr(
+        "src.insights_tools.load_expected",
+        lambda path=None: [
+            {"name": "Internet", "merchant_regex": "(?i)comcast"},
+            {"name": "Electric", "merchant_regex": "(?i)duke"},
+        ],
+    )
+    frame = _ledger(
+        [
+            _row(
+                posted_date="2026-08-03",
+                amount=90.0,
+                category="Utilities",
+                canonical_merchant="Comcast",
+                normalized_merchant="COMCAST",
+            )
+        ]
+    )
+    fact = dispatch_tool("expected_bills", {"month": "2026-08"}, frame, today=_as_of())
+    by_name = {row["bill"]: row["status"] for row in fact["result"]["rows"]}
+    assert by_name["Internet"] == "seen"
+    assert by_name["Electric"] == "missing"
+    assert fact["result"]["seen_count"] == 1
+    assert fact["result"]["missing_count"] == 1
+    headline = build_headline([fact])
+    assert "1 seen, 1 missing" in headline
+    assert "Electric" in headline
+
+
+def test_uncategorized_spend_open_category_and_review(monkeypatch):
+    del monkeypatch
+    frame = _ledger(
+        [
+            _row(posted_date="2026-02-01", amount=50.0, category="Uncategorized", classified_by=None),
+            _row(posted_date="2026-03-01", amount=12.0, category="Shopping", classified_by="rule"),
+            _row(posted_date="2026-04-01", amount=9.0, category="Food", classified_by="ai"),
+        ]
+    )
+    fact = dispatch_tool("uncategorized_spend", {}, frame, today=_as_of())
+    result = fact["result"]
+    assert result["net_spend"] == 50.0
+    assert result["charge_count"] == 1
+    assert result["review_count"] == 2
+    assert "$50.00" in build_headline([fact])
+
+
+def test_remaining_budget_requires_category():
+    with pytest.raises(InsightsSandboxError, match="category"):
+        dispatch_tool("remaining_budget", {}, _ledger(), today=_as_of())

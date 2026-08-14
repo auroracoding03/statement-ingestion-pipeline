@@ -52,5 +52,4 @@ export function replaceHash(
   const next = hashHref(path, params);
   if (window.location.hash === next) return;
   history.replaceState(null, "", next);
-  window.dispatchEvent(new HashChangeEvent("hashchange"));
 }

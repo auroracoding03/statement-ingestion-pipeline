@@ -64,6 +64,12 @@ export function Transactions() {
   const [bulkCategory, setBulkCategory] = useState("");
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [debouncedQuery, setDebouncedQuery] = useState(query);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebouncedQuery(query), 250);
+    return () => window.clearTimeout(id);
+  }, [query]);
 
   useEffect(() => {
     const next = paramsFromHash(params);
@@ -104,7 +110,7 @@ export function Transactions() {
   const { data, loading, error, reload } = useAsync(
     () =>
       api.transactions({
-        q: query,
+        q: debouncedQuery,
         card,
         category,
         subcategory,
@@ -117,7 +123,7 @@ export function Transactions() {
         order,
         limit: 500,
       }),
-    [query, card, category, subcategory, tag, merchant, unclassified, since, until, sort, order],
+    [debouncedQuery, card, category, subcategory, tag, merchant, unclassified, since, until, sort, order],
   );
 
   const items = data?.items ?? [];
