@@ -129,8 +129,9 @@ export function Overview() {
           <div className="metrics">
             <Metric label={data.label ? `Spend · ${data.label}` : "Spend"} value={money(data.spend_total)} />
             <Metric label={deltaCaption(data)} value={deltaLabel(data)} />
+            <Metric label="Returns" value={money(data.returns_total)} />
+            <Metric label="Monthly payments" value={money(data.payments_total)} />
             <Metric label="Charges" value={data.charge_count} />
-            <Metric label="Payments & refunds" value={money(data.payments_and_refunds)} />
             <Metric
               label="Uncategorized"
               value={

@@ -237,10 +237,10 @@ def unknown_merchant_clusters(threshold: int = 88, with_ai: bool = False) -> lis
     return clusters
 
 
-def run_ai_analysis(mode: str = "full") -> dict:
+def run_ai_analysis(mode: str = "full", on_progress=None) -> dict:
     """Create resumable local-AI proposals without mutating the ledger."""
     with ledger_lock():
-        return ai_review.run_analysis(load_ledger(), mode=mode)
+        return ai_review.run_analysis(load_ledger(), mode=mode, on_progress=on_progress)
 
 
 def apply_ai_decisions(decisions: list[dict]) -> dict:

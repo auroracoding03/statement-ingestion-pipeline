@@ -11,7 +11,7 @@ const GROUPS = [
     links: [
       { to: "/", label: "Overview" },
       { to: "/transactions", label: "Transactions" },
-      { to: "/cards", label: "Cards" },
+      { to: "/accounts", label: "Accounts" },
       { to: "/categories", label: "Categories" },
       { to: "/budget", label: "Budget", writeOnly: true },
       { to: "/recurring", label: "Recurring" },
@@ -38,6 +38,11 @@ const GROUPS = [
   },
 ];
 
+function navIsActive(to: string, path: string): boolean {
+  if (to === "/accounts") return path === "/accounts" || path === "/cards";
+  return path === to;
+}
+
 export function Layout({ children }: { children: ReactNode }) {
   const path = useHashPath();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -63,8 +68,8 @@ export function Layout({ children }: { children: ReactNode }) {
                   <a
                     key={link.to}
                     href={hashHref(link.to)}
-                    className={path === link.to ? "active" : undefined}
-                    aria-current={path === link.to ? "page" : undefined}
+                    className={navIsActive(link.to, path) ? "active" : undefined}
+                    aria-current={navIsActive(link.to, path) ? "page" : undefined}
                   >
                     {link.label}
                   </a>

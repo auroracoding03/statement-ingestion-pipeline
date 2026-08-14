@@ -56,3 +56,33 @@ export function MerchantCell({
 export function StatusPill({ status }: { status: string }) {
   return <span className={`status status-${status}`}>{status.replace(/_/g, " ")}</span>;
 }
+
+export function JobProgressBar({
+  label,
+  current,
+  total,
+}: {
+  label: string;
+  current?: number | null;
+  total?: number | null;
+}) {
+  const determinate = typeof current === "number" && typeof total === "number" && total > 0;
+  const pct = determinate ? Math.min(100, Math.round((current / total) * 100)) : undefined;
+  return (
+    <div className="job-progress">
+      <p className="muted">{label}</p>
+      <div
+        className={determinate ? "progress" : "progress is-indeterminate"}
+        role="progressbar"
+        aria-busy="true"
+        aria-label={label}
+        aria-valuemin={0}
+        aria-valuemax={determinate ? total : undefined}
+        aria-valuenow={determinate ? current : undefined}
+      >
+        <span style={determinate ? { width: `${pct}%` } : undefined} />
+      </div>
+    </div>
+  );
+}
+

@@ -4,14 +4,18 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+import re
 
 import pandas as pd
 
+from src.cashflow import summarize_spend
 from src.upload_context import list_card_products
 
 UNASSIGNED = "Unassigned"
 GAP_DAYS = 14
 STALE_DAYS = 40
+BANK_NAME_RE = re.compile(r"(?i)\b(checking|savings|debit|banking|money market)\b")
+BANK_NAME_RE = re.compile(r"(?i)\b(checking|savings|debit|banking|money market)\b")
 
 
 def _money(value: float) -> float:
@@ -88,19 +92,29 @@ def _status(statement_count: int, gaps: list[dict], stale_days: int | None) -> s
     return "ok"
 
 
+def account_kind(issuer: str, product: str) -> str:
+    blob = f"{issuer} {product}"
+    return "bank" if BANK_NAME_RE.search(blob) else "card"
+
+
 def _statement_summary(frame: pd.DataFrame) -> dict:
     posted = [_as_date(value) for value in frame["posted_date"]]
     posted = [value for value in posted if value]
-    charges = frame[frame["amount"] > 0] if not frame.empty else frame
-    payments = frame[frame["amount"] < 0] if not frame.empty else frame
-    uncategorized = charges[charges["category"].map(_is_uncategorized)] if not charges.empty and "category" in charges.columns else charges.iloc[0:0]
+    stats = summarize_spend(frame)
+    uncategorized = (
+        frame[(frame["amount"] > 0) & frame["category"].map(_is_uncategorized)]
+        if not frame.empty and "category" in frame.columns
+        else frame.iloc[0:0]
+    )
     start = min(posted) if posted else None
     end = max(posted) if posted else None
     return {
         "txn_count": int(len(frame)),
-        "charge_count": int(len(charges)),
-        "spend_total": _money(charges["amount"].sum()) if not charges.empty else 0.0,
-        "payments_and_refunds": _money(abs(payments["amount"].sum())) if not payments.empty else 0.0,
+        "charge_count": stats["charge_count"],
+        "spend_total": stats["net_spend"],
+        "gross_charges": stats["gross_charges"],
+        "returns_total": stats["returns_total"],
+        "payments_total": stats["payments_total"],
         "uncategorized_count": int(len(uncategorized)),
         "uncategorized_total": _money(uncategorized["amount"].sum()) if not uncategorized.empty else 0.0,
         "first_posted": _iso(start),
@@ -141,11 +155,14 @@ def _empty_product(issuer: str, product: str, cardholder: str = "") -> dict:
         "product": product,
         "cardholder": cardholder or None,
         "label": _display_label(issuer, product, cardholder),
+        "account_kind": account_kind(issuer, product),
         "status": "none",
         "statement_count": 0,
         "charge_count": 0,
         "spend_total": 0.0,
-        "payments_and_refunds": 0.0,
+        "gross_charges": 0.0,
+        "returns_total": 0.0,
+        "payments_total": 0.0,
         "uncategorized_count": 0,
         "uncategorized_total": 0.0,
         "first_posted": None,
@@ -171,7 +188,9 @@ def _serialize_product(issuer: str, product: str, cardholder: str, frame: pd.Dat
                     "file_name": _file_name(chunk.iloc[0]),
                     "txn_count": stats["txn_count"],
                     "spend_total": stats["spend_total"],
-                    "payments_and_refunds": stats["payments_and_refunds"],
+                    "gross_charges": stats["gross_charges"],
+                    "returns_total": stats["returns_total"],
+                    "payments_total": stats["payments_total"],
                     "coverage_start": _iso(stats["coverage_start"]),
                     "coverage_end": _iso(stats["coverage_end"]),
                 }
@@ -192,11 +211,14 @@ def _serialize_product(issuer: str, product: str, cardholder: str, frame: pd.Dat
         "product": product,
         "cardholder": cardholder or None,
         "label": _display_label(issuer, product, cardholder),
+        "account_kind": account_kind(issuer, product),
         "status": _status(len(statements), gaps, stale),
         "statement_count": len(statements),
         "charge_count": summary["charge_count"],
         "spend_total": summary["spend_total"],
-        "payments_and_refunds": summary["payments_and_refunds"],
+        "gross_charges": summary["gross_charges"],
+        "returns_total": summary["returns_total"],
+        "payments_total": summary["payments_total"],
         "uncategorized_count": summary["uncategorized_count"],
         "uncategorized_total": summary["uncategorized_total"],
         "first_posted": summary["first_posted"],

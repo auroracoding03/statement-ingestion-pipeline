@@ -30,6 +30,7 @@ NETWORK_TIMEOUT_SECONDS = 30
 # Survive parent process/job teardown when the frozen WebView host exits.
 # Jobs that disallow breakaway reject this flag with WinError 5 — callers fall back.
 CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+CREATE_NO_WINDOW = 0x08000000
 
 
 class UpdateError(RuntimeError):
@@ -40,8 +41,18 @@ def _windows_desktop_build() -> bool:
     return sys.platform == "win32" and bool(getattr(sys, "frozen", False))
 
 
+def _hide_console_startupinfo() -> Any:
+    startupinfo = getattr(subprocess, "STARTUPINFO", None)
+    if startupinfo is None:
+        return None
+    info = startupinfo()
+    info.dwFlags |= int(getattr(subprocess, "STARTF_USESHOWWINDOW", 1))
+    info.wShowWindow = 0
+    return info
+
+
 def _detach_creationflags(*, breakaway: bool = True) -> int:
-    flags = int(getattr(subprocess, "DETACHED_PROCESS", 0)) | int(
+    flags = int(getattr(subprocess, "CREATE_NO_WINDOW", CREATE_NO_WINDOW) or CREATE_NO_WINDOW) | int(
         getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     )
     if breakaway:
@@ -64,12 +75,16 @@ def _spawn_detached(command: list[str]) -> subprocess.Popen[Any]:
     Prefer job breakaway; if the host job forbids it (Access Denied), retry without
     the breakaway flag so the handoff can still start.
     """
-    common = {
+    common: dict[str, Any] = {
         "close_fds": True,
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
     }
+    if sys.platform == "win32":
+        info = _hide_console_startupinfo()
+        if info is not None:
+            common["startupinfo"] = info
     try:
         return subprocess.Popen(
             command,

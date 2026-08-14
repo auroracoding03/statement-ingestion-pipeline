@@ -8,6 +8,7 @@ import pandas as pd
 
 from src import paths
 from src.budget import budget_rows_for_period
+from src.cashflow import charge_mask, non_payment_frame, summarize_spend
 from src.periods import filter_posted, has_prior_history, month_keys, resolve_period
 from src.recurring import load_expected
 from src.review import needs_review
@@ -44,7 +45,9 @@ def _empty_summary(
         "spend_delta": None,
         "spend_delta_pct": None,
         "charge_count": 0,
-        "payments_and_refunds": 0.0,
+        "gross_charges": 0.0,
+        "returns_total": 0.0,
+        "payments_total": 0.0,
         "uncategorized_total": 0.0,
         "uncategorized_count": 0,
         "review_count": 0,
@@ -153,12 +156,14 @@ def build_period_summary(
     )
     include_prior = has_prior_history(period, months)
 
-    charges = current[current["amount"] > 0] if not current.empty else current
-    prior_charges = prior[prior["amount"] > 0] if not prior.empty else prior
-    payments = current[current["amount"] < 0] if not current.empty else current
+    stats = summarize_spend(current)
+    prior_stats = summarize_spend(prior)
+    spend_total = stats["net_spend"]
+    prior_total = prior_stats["net_spend"]
+    charges = current.loc[charge_mask(current)] if not current.empty else current
+    spend = non_payment_frame(current)
+    prior_spend_rows = non_payment_frame(prior) if include_prior else prior.iloc[0:0].copy()
 
-    spend_total = _money(charges["amount"].sum()) if not charges.empty else 0.0
-    prior_total = _money(prior_charges["amount"].sum()) if not prior_charges.empty else 0.0
     if not include_prior:
         prior_spend = None
         delta = None
@@ -168,8 +173,8 @@ def build_period_summary(
         delta = _money(spend_total - prior_total)
         delta_pct = None if prior_total == 0 else round((spend_total - prior_total) / prior_total * 100, 1)
 
-    current_cats = _category_totals(charges)
-    prior_cats = _category_totals(prior_charges) if include_prior else {}
+    current_cats = _category_totals(spend)
+    prior_cats = _category_totals(prior_spend_rows) if include_prior else {}
     names = sorted(set(current_cats) | set(prior_cats), key=lambda name: (-current_cats.get(name, 0.0), name))
     categories = [
         {
@@ -182,9 +187,9 @@ def build_period_summary(
     ]
 
     holders: list[dict] = []
-    if holder is None and not charges.empty and "cardholder" in charges.columns:
-        labels = charges["cardholder"].fillna("").astype(str).str.strip().replace("", UNASSIGNED)
-        grouped = charges.assign(_holder=labels).groupby("_holder")["amount"].sum().sort_values(ascending=False)
+    if holder is None and not spend.empty and "cardholder" in spend.columns:
+        labels = spend["cardholder"].fillna("").astype(str).str.strip().replace("", UNASSIGNED)
+        grouped = spend.assign(_holder=labels).groupby("_holder")["amount"].sum().sort_values(ascending=False)
         holders = [{"name": str(name), "total": _money(total)} for name, total in grouped.items()]
 
     large_charges: list[dict] = []
@@ -210,9 +215,9 @@ def build_period_summary(
 
     tagged: list[dict] = []
     vocab = {item["id"]: item for item in list_tags()}
-    if not charges.empty and "tags" in charges.columns:
+    if not spend.empty and "tags" in spend.columns:
         rolls: dict[str, float] = {}
-        for _, row in charges.iterrows():
+        for _, row in spend.iterrows():
             for tag_id in normalize_tag_ids(row.get("tags")):
                 info = vocab.get(tag_id)
                 if not info or info["kind"] not in {"trip", "occasion"}:
@@ -236,7 +241,7 @@ def build_period_summary(
     bills: list[dict] = []
     if period.preset in MONTH_PRESETS:
         household = filter_posted(ledger, period.since, period.until)
-        household_charges = household[household["amount"] > 0] if not household.empty else household
+        household_charges = household.loc[charge_mask(household)] if not household.empty else household
         bills = _bills_for_month(household_charges)
 
     return {
@@ -250,11 +255,13 @@ def build_period_summary(
         "label": period.label,
         "cardholder": holder,
         "spend_total": spend_total,
+        "gross_charges": stats["gross_charges"],
         "prior_spend_total": prior_spend,
         "spend_delta": delta,
         "spend_delta_pct": delta_pct,
-        "charge_count": int(len(charges)),
-        "payments_and_refunds": _money(abs(payments["amount"].sum())) if not payments.empty else 0.0,
+        "charge_count": stats["charge_count"],
+        "returns_total": stats["returns_total"],
+        "payments_total": stats["payments_total"],
         "uncategorized_total": _money(uncategorized["amount"].sum()) if not uncategorized.empty else 0.0,
         "uncategorized_count": int(len(uncategorized)),
         "review_count": review_count,
@@ -263,7 +270,7 @@ def build_period_summary(
         "large_charges": large_charges,
         "tagged": tagged,
         "bills": bills,
-        "budget_rows": budget_rows_for_period(charges, period),
+        "budget_rows": budget_rows_for_period(spend, period),
     }
 
 

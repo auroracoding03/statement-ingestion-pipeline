@@ -18,9 +18,10 @@ import httpx
 import pandas as pd
 
 from src.ai_suggest import recommended_config
+from src.cashflow import is_payment_row, summarize_spend
 from src.overview import build_month_summary
 
-PROMPT_VERSION = "insights-v3"
+PROMPT_VERSION = "insights-v4"
 MAX_MESSAGES = 8
 MAX_QUESTION_CHARS = 500
 MAX_TOOL_ROUNDS = 3
@@ -463,15 +464,12 @@ def _filter_scope(frame: pd.DataFrame, args: dict) -> pd.DataFrame:
 
 
 def _bucket_spend(group: pd.DataFrame) -> dict[str, float | int]:
-    charges = group[group["amount"] > 0] if not group.empty else group
-    credits = group[group["amount"] < 0] if not group.empty else group
-    gross = _money(charges["amount"].sum()) if not charges.empty else 0.0
-    credit_total = _money(abs(credits["amount"].sum())) if not credits.empty else 0.0
+    stats = summarize_spend(group)
     return {
-        "gross_charges": gross,
-        "credits_refunds": credit_total,
-        "net_spend": _money(gross - credit_total),
-        "charge_count": int(len(charges)),
+        "gross_charges": stats["gross_charges"],
+        "credits_refunds": stats["returns_total"],
+        "net_spend": stats["net_spend"],
+        "charge_count": stats["charge_count"],
     }
 
 
@@ -483,6 +481,8 @@ def _matched_names(matched: pd.DataFrame) -> tuple[list[dict], bool]:
         label = _merchant_label(row)
         bucket = grouped.setdefault(label, {"gross_charges": 0.0, "net_spend": 0.0, "charge_count": 0})
         amount = float(row.get("amount") or 0)
+        if is_payment_row(row):
+            continue
         bucket["net_spend"] = float(bucket["net_spend"]) + amount
         if amount > 0:
             bucket["gross_charges"] = float(bucket["gross_charges"]) + amount
@@ -504,20 +504,16 @@ def _matched_names(matched: pd.DataFrame) -> tuple[list[dict], bool]:
 
 
 def _spend_bundle(matched: pd.DataFrame, *, query: str, since: str | None, until: str | None) -> dict:
-    charges = matched[matched["amount"] > 0] if not matched.empty else matched
-    credits = matched[matched["amount"] < 0] if not matched.empty else matched
-    gross = _money(charges["amount"].sum()) if not charges.empty else 0.0
-    credit_total = _money(abs(credits["amount"].sum())) if not credits.empty else 0.0
-    net = _money(gross - credit_total)
+    stats = summarize_spend(matched)
     names, ambiguous = _matched_names(matched)
     return {
         "query": query,
-        "gross_charges": gross,
-        "credits_refunds": credit_total,
-        "net_spend": net,
+        "gross_charges": stats["gross_charges"],
+        "credits_refunds": stats["returns_total"],
+        "net_spend": stats["net_spend"],
         "spent_means": "net",
-        "charge_count": int(len(charges)),
-        "credit_count": int(len(credits)),
+        "charge_count": stats["charge_count"],
+        "credit_count": stats["return_count"],
         "matched_names": names,
         "ambiguous": ambiguous,
         "period": _period(matched, since, until),
@@ -577,17 +573,14 @@ def tool_category_spend(frame: pd.DataFrame, args: dict) -> dict:
         matched = scoped.loc[cats.str.casefold() == needle].copy()
         if matched.empty:
             matched = scoped.loc[cats.str.casefold().str.contains(re.escape(needle), na=False)].copy()
-    charges = matched[matched["amount"] > 0] if not matched.empty else matched
-    credits = matched[matched["amount"] < 0] if not matched.empty else matched
-    gross = _money(charges["amount"].sum()) if not charges.empty else 0.0
-    credit_total = _money(abs(credits["amount"].sum())) if not credits.empty else 0.0
+    stats = summarize_spend(matched)
     return {
         "category": category,
-        "gross_charges": gross,
-        "credits_refunds": credit_total,
-        "net_spend": _money(gross - credit_total),
+        "gross_charges": stats["gross_charges"],
+        "credits_refunds": stats["returns_total"],
+        "net_spend": stats["net_spend"],
         "spent_means": "net",
-        "charge_count": int(len(charges)),
+        "charge_count": stats["charge_count"],
         "period": _period(matched, args.get("since"), args.get("until")),
         "cardholder": args.get("cardholder"),
     }
@@ -605,7 +598,9 @@ def tool_month_summary(frame: pd.DataFrame, args: dict) -> dict:
         "spend_delta": summary.get("spend_delta"),
         "spend_delta_pct": summary.get("spend_delta_pct"),
         "charge_count": summary.get("charge_count"),
-        "payments_and_refunds": summary.get("payments_and_refunds"),
+        "gross_charges": summary.get("gross_charges"),
+        "returns_total": summary.get("returns_total"),
+        "payments_total": summary.get("payments_total"),
         "uncategorized_total": summary.get("uncategorized_total"),
         "uncategorized_count": summary.get("uncategorized_count"),
         "categories": summary.get("categories") or [],
@@ -669,7 +664,7 @@ def tool_spend_breakdown(frame: pd.DataFrame, args: dict) -> dict:
             if amount > 0:
                 bucket["gross_charges"] = float(bucket["gross_charges"]) + amount
                 bucket["charge_count"] = int(bucket["charge_count"]) + 1
-            elif amount < 0:
+            elif amount < 0 and not is_payment_row(row):
                 bucket["credits_refunds"] = float(bucket["credits_refunds"]) + abs(amount)
     rows = [
         {
@@ -768,8 +763,8 @@ def _system_prompt(today: date) -> str:
             "You are not a general-purpose agent. You cannot change the ledger, rules, merchants, files, configuration, or application state.",
             "You have no PC, filesystem, SQL, shell, browser, or web access.",
             "Never invent amounts, dates, or counts. If facts are missing, call a tool. If a tool returns empty, say the ledger does not show it.",
-            "Spend means amount > 0 (charges). Payments and refunds are amount < 0. Do not mix them unless asked.",
-            'When the user says they "spent" money, report net spend (gross charges minus matched credits/refunds) and label that choice.',
+            "Spend is net of merchant returns (gross charges minus returns). Monthly card payments are not spend.",
+            'When the user says they "spent" money, report net spend (gross charges minus matched credits/refunds, excluding monthly payments) and label that choice.',
             "Merchant questions match canonical or normalized name (contains, case-insensitive). Report which names actually matched.",
             "If several unrelated merchant names match, say the match is combined/ambiguous and list the names. Do not hide the breakdown.",
             f"Today is {today.isoformat()}. Convert relative periods to ISO dates using this date.",

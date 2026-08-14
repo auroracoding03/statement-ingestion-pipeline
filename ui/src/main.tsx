@@ -25,6 +25,7 @@ function App() {
     "/ingestion": canWrite ? <Ingestion /> : <Overview />,
     "/transactions": <Transactions />,
     "/cards": <Cards />,
+    "/accounts": <Cards />,
     "/categories": <Categories />,
     "/budget": canWrite ? <Budget /> : <Overview />,
     "/recurring": <Recurring />,

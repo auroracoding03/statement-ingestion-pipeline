@@ -13,6 +13,7 @@ import json
 import re
 import shutil
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -413,7 +414,12 @@ def _history_proposal(profile: dict, model: str) -> dict:
     return _make_proposal("category", profile, result, model)
 
 
-def run_analysis(ledger: pd.DataFrame, *, mode: str = "full") -> dict:
+def run_analysis(
+    ledger: pd.DataFrame,
+    *,
+    mode: str = "full",
+    on_progress: Callable[[int, int, str], None] | None = None,
+) -> dict:
     """Create new proposal records without changing the supplied ledger.
 
     ``mode="full"`` rebuilds the review queue: pending and deferred proposals are
@@ -437,6 +443,10 @@ def run_analysis(ledger: pd.DataFrame, *, mode: str = "full") -> dict:
     created: list[dict] = []
     errors: list[str] = []
 
+    def report(current: int, total: int, message: str) -> None:
+        if on_progress:
+            on_progress(current, total, message)
+
     merchant_profiles = _profile_unknown_merchants(normalized)
     merchant_pending = []
     for profile in merchant_profiles:
@@ -444,16 +454,6 @@ def run_analysis(ledger: pd.DataFrame, *, mode: str = "full") -> dict:
         if mode == "incremental" and fingerprint in active:
             continue
         merchant_pending.append(profile)
-    for start in range(0, len(merchant_pending), 20):
-        batch = merchant_pending[start : start + 20]
-        try:
-            answers = {str(item.get("key")): item for item in _ask_batch("merchant", batch, categories, cfg)}
-            for profile in batch:
-                answer = answers.get(profile["key"], {"confidence": "low", "ambiguous": True, "reason": "No model answer."})
-                answer = _sanitize_merchant_answer(answer, categories)
-                created.append(_make_proposal("merchant", profile, answer, str(cfg["model"])))
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"merchant batch {start // 20 + 1}: {exc}")
 
     category_profiles = _category_profiles(normalized)
     category_pending: list[dict] = []
@@ -468,6 +468,27 @@ def run_analysis(ledger: pd.DataFrame, *, mode: str = "full") -> dict:
             created.append(_history_proposal(profile, str(cfg["model"])))
         else:
             category_pending.append(profile)
+
+    merchant_batches = (len(merchant_pending) + 19) // 20
+    category_batches = (len(category_pending) + 19) // 20
+    total_batches = merchant_batches + category_batches
+    if total_batches == 0:
+        report(0, 0, "No new profiles")
+    done = 0
+    for start in range(0, len(merchant_pending), 20):
+        batch = merchant_pending[start : start + 20]
+        try:
+            answers = {str(item.get("key")): item for item in _ask_batch("merchant", batch, categories, cfg)}
+            for profile in batch:
+                answer = answers.get(profile["key"], {"confidence": "low", "ambiguous": True, "reason": "No model answer."})
+                answer = _sanitize_merchant_answer(answer, categories)
+                created.append(_make_proposal("merchant", profile, answer, str(cfg["model"])))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"merchant batch {start // 20 + 1}: {exc}")
+        done += 1
+        report(done, total_batches, f"Merchant profiles {done}/{merchant_batches}")
+
+    category_done = 0
     for start in range(0, len(category_pending), 20):
         batch = category_pending[start : start + 20]
         try:
@@ -480,6 +501,9 @@ def run_analysis(ledger: pd.DataFrame, *, mode: str = "full") -> dict:
                 created.append(_make_proposal("category", profile, answer, str(cfg["model"])))
         except Exception as exc:  # noqa: BLE001
             errors.append(f"category batch {start // 20 + 1}: {exc}")
+        category_done += 1
+        done += 1
+        report(done, total_batches, f"Category profiles {category_done}/{category_batches}")
 
     if mode == "full":
         # Full rebuild: drop the waiting queue so obsolete clusters (e.g. after
@@ -552,12 +576,38 @@ def ai_status(*, warmup: bool = False) -> dict:
     return result
 
 
-def pull_model() -> dict:
+def pull_model(on_progress: Callable[[int, int, str], None] | None = None) -> dict:
     cfg = recommended_config()
     host = str(cfg["host"]).rstrip("/")
     try:
-        response = httpx.post(f"{host}/api/pull", json={"name": cfg["model"], "stream": False}, timeout=1800.0)
-        response.raise_for_status()
+        if on_progress is None:
+            response = httpx.post(f"{host}/api/pull", json={"name": cfg["model"], "stream": False}, timeout=1800.0)
+            response.raise_for_status()
+        else:
+            on_progress(0, 0, f"Downloading {cfg['model']}…")
+            with httpx.stream(
+                "POST",
+                f"{host}/api/pull",
+                json={"name": cfg["model"], "stream": True},
+                timeout=1800.0,
+            ) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    try:
+                        payload = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(payload, dict):
+                        continue
+                    total = int(payload.get("total") or 0)
+                    completed = int(payload.get("completed") or 0)
+                    status = str(payload.get("status") or "Downloading")
+                    if total > 0:
+                        on_progress(completed, total, status)
+                    else:
+                        on_progress(0, 0, status)
     except Exception as exc:  # noqa: BLE001
         return {"error": f"Could not download {cfg['model']}: {exc}"}
     return ai_status(warmup=True)

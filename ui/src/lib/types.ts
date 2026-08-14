@@ -95,11 +95,13 @@ export interface OverviewMonth {
   label?: string | null;
   cardholder: string | null;
   spend_total: number;
+  gross_charges?: number;
   prior_spend_total: number | null;
   spend_delta: number | null;
   spend_delta_pct: number | null;
   charge_count: number;
-  payments_and_refunds: number;
+  returns_total: number;
+  payments_total: number;
   uncategorized_total: number;
   uncategorized_count: number;
   review_count: number;
@@ -145,7 +147,9 @@ export interface CardStatement {
   file_name: string;
   txn_count: number;
   spend_total: number;
-  payments_and_refunds: number;
+  gross_charges?: number;
+  returns_total?: number;
+  payments_total?: number;
   coverage_start: string | null;
   coverage_end: string | null;
 }
@@ -161,11 +165,14 @@ export interface CardProductCoverage {
   product: string;
   cardholder: string | null;
   label: string;
+  account_kind?: "card" | "bank";
   status: "ok" | "gap" | "stale" | "none";
   statement_count: number;
   charge_count: number;
   spend_total: number;
-  payments_and_refunds: number;
+  gross_charges?: number;
+  returns_total?: number;
+  payments_total?: number;
   uncategorized_count: number;
   uncategorized_total: number;
   first_posted: string | null;
@@ -219,12 +226,19 @@ export interface Rule {
   subcategory: string;
 }
 
+export interface JobProgress {
+  current: number;
+  total: number;
+  message: string;
+}
+
 export interface Job {
   id: string;
   kind: string;
   status: "pending" | "running" | "done" | "error";
   result: unknown;
   error: string | null;
+  progress?: JobProgress | null;
 }
 
 /** Returned when a stage is kicked off; poll /api/jobs/{job_id} for the result. */

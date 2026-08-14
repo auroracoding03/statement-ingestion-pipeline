@@ -879,6 +879,33 @@ code {
   transition: width 200ms ease;
 }
 
+.progress.is-indeterminate span {
+  width: 32%;
+  transition: none;
+  animation: progress-indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes progress-indeterminate {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(350%);
+  }
+}
+
+.job-progress {
+  margin: 0.75rem 0 0;
+}
+
+.job-progress .progress {
+  margin-bottom: 0.4rem;
+}
+
+.job-progress .muted {
+  margin: 0 0 0.35rem;
+}
+
 /* -------------------------------------------------------------- clusters */
 
 .cluster-list {

@@ -193,6 +193,9 @@ def test_overview_month_summarizes_latest_month(client: TestClient):
     assert body["months"] == ["2026-01"]
     assert body["charge_count"] == 2
     assert body["spend_total"] == 90.94
+    assert body["gross_charges"] == 90.94
+    assert body["returns_total"] == 0.0
+    assert body["payments_total"] == 0.0
     assert body["spend_delta"] is None
     assert body["uncategorized_count"] == 2
     assert body["review_count"] == 2
@@ -616,6 +619,17 @@ def test_classify_job_runs_to_completion(client: TestClient):
 
 def test_unknown_job_is_404(client: TestClient):
     assert client.get("/api/jobs/nope").status_code == 404
+
+
+def test_job_progress_is_returned_from_get(client: TestClient):
+    from src.api import jobs
+
+    job_id = jobs.create_job("ai-analyze")
+    jobs.set_progress(job_id, 3, 8, "Merchant profiles 3/8")
+    body = client.get(f"/api/jobs/{job_id}").json()
+    assert body["id"] == job_id
+    assert body["status"] == "pending"
+    assert body["progress"] == {"current": 3, "total": 8, "message": "Merchant profiles 3/8"}
 
 
 def test_upload_never_overwrites_an_existing_source_document(client: TestClient, workspace: dict):

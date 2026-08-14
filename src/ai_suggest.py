@@ -43,6 +43,8 @@ OLLAMA_START_TIMEOUT_SECONDS = 20.0
 OLLAMA_START_POLL_SECONDS = 0.25
 OLLAMA_WINDOWS_INSTALL_URL = "https://ollama.com/download/windows"
 CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+CREATE_NO_WINDOW = 0x08000000
+_SHIM_SUFFIXES = {".cmd", ".bat", ".ps1"}
 
 
 def load_ollama_config(path: Path = OLLAMA_PATH) -> dict:
@@ -78,10 +80,23 @@ def ollama_available(host: str | None = None) -> bool:
 
 
 def resolve_ollama_binary() -> Path | None:
-    """Locate the Ollama CLI on PATH or in the default Windows install folders."""
+    """Locate the Ollama CLI, preferring a real .exe over PATHEXT shims."""
+    def _usable(path: Path | None) -> Path | None:
+        if path is None:
+            return None
+        if path.suffix.lower() in _SHIM_SUFFIXES:
+            sibling = path.with_suffix(".exe")
+            return sibling if sibling.is_file() else None
+        return path
+
+    found_exe = shutil.which("ollama.exe")
+    resolved = _usable(Path(found_exe) if found_exe else None)
+    if resolved is not None:
+        return resolved
     found = shutil.which("ollama")
-    if found:
-        return Path(found)
+    resolved = _usable(Path(found) if found else None)
+    if resolved is not None:
+        return resolved
     candidates: list[Path] = []
     local_app_data = os.environ.get("LOCALAPPDATA")
     program_files = os.environ.get("ProgramFiles") or os.environ.get("PROGRAMFILES")
@@ -103,8 +118,18 @@ def _is_access_denied(exc: BaseException) -> bool:
     return isinstance(exc, OSError) and getattr(exc, "errno", None) in {13, 5}
 
 
+def _hide_console_startupinfo() -> Any:
+    startupinfo = getattr(subprocess, "STARTUPINFO", None)
+    if startupinfo is None:
+        return None
+    info = startupinfo()
+    info.dwFlags |= int(getattr(subprocess, "STARTF_USESHOWWINDOW", 1))
+    info.wShowWindow = 0
+    return info
+
+
 def _detach_creationflags(*, breakaway: bool = True) -> int:
-    flags = int(getattr(subprocess, "DETACHED_PROCESS", 0)) | int(
+    flags = int(getattr(subprocess, "CREATE_NO_WINDOW", CREATE_NO_WINDOW) or CREATE_NO_WINDOW) | int(
         getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     )
     if breakaway:
@@ -122,6 +147,9 @@ def _spawn_detached(command: list[str]) -> subprocess.Popen[Any]:
     }
     if sys.platform != "win32":
         return subprocess.Popen(command, start_new_session=True, **common)
+    info = _hide_console_startupinfo()
+    if info is not None:
+        common["startupinfo"] = info
     try:
         return subprocess.Popen(
             command,

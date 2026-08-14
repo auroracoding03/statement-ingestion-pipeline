@@ -1,6 +1,6 @@
 import { useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 
-import { Empty, ErrorNote, Loading, PageHeader } from "../components/ui";
+import { Empty, ErrorNote, JobProgressBar, Loading, PageHeader } from "../components/ui";
 import { api } from "../lib/dataSource";
 import { money } from "../lib/format";
 import { hashHref } from "../lib/router";
@@ -181,7 +181,7 @@ export function Insights() {
             )}
           </article>
         ))}
-        {busy && <p className="muted">Looking that up in the ledger…</p>}
+        {busy && <JobProgressBar label="Looking that up in the ledger…" />}
       </div>
 
       <div className="insights-starters">

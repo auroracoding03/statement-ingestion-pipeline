@@ -54,6 +54,7 @@ from src.insights import (
     run_insights_turn,
 )
 from src.budget import list_budget, save_envelopes
+from src.cashflow import non_payment_frame
 from src.classify import (
     append_category,
     append_rule,
@@ -206,12 +207,23 @@ def post_ai_start() -> dict:
 
 @app.post("/api/ai/model/pull")
 def post_ai_model_pull(background: BackgroundTasks) -> dict:
-    return _start("ai-model-pull", ai_review.pull_model, background)
+    return _start(
+        "ai-model-pull",
+        lambda on_progress: ai_review.pull_model(on_progress=on_progress),
+        background,
+        progress=True,
+    )
 
 
 @app.post("/api/ai/analyze")
 def post_ai_analyze(body: AIAnalyzeRequest, background: BackgroundTasks) -> dict:
-    return _start("ai-analyze", lambda: pipeline.run_ai_analysis(body.mode), background)
+    mode = body.mode
+    return _start(
+        "ai-analyze",
+        lambda on_progress: pipeline.run_ai_analysis(mode, on_progress=on_progress),
+        background,
+        progress=True,
+    )
 
 
 @app.post("/api/insights/chat")
@@ -285,9 +297,15 @@ def post_install_update() -> dict:
 # --------------------------------------------------------------------------- jobs
 
 
-def _start(kind: str, fn, background: BackgroundTasks) -> dict:
+def _start(kind: str, fn, background: BackgroundTasks, *, progress: bool = False) -> dict:
     job_id = jobs.create_job(kind)
-    background.add_task(jobs.run_job, job_id, fn)
+    if progress:
+        def body():
+            return fn(lambda current, total, message: jobs.set_progress(job_id, current, total, message))
+
+        background.add_task(jobs.run_job, job_id, body)
+    else:
+        background.add_task(jobs.run_job, job_id, fn)
     return {"job_id": job_id, "kind": kind, "status": "pending"}
 
 
@@ -645,12 +663,14 @@ def get_categories_monthly() -> list[dict]:
     ledger = pipeline.load_ledger()
     if ledger.empty:
         return []
+    spend = non_payment_frame(ledger)
+    if spend.empty:
+        return []
     frame = (
-        ledger.assign(
+        spend.assign(
             month=lambda d: pd.to_datetime(d["posted_date"]).dt.strftime("%Y-%m"),
             category=lambda d: d["category"].fillna("Uncategorized"),
         )
-        .loc[lambda d: d["amount"] > 0]
         .groupby(["month", "category"], as_index=False)
         .agg(total=("amount", "sum"), txn_count=("amount", "count"))
         .sort_values(["month", "category"])
@@ -702,8 +722,9 @@ def get_merchants() -> dict:
 
     usage: dict[str, dict] = {}
     if not ledger.empty and "canonical_merchant" in ledger.columns:
+        spend = non_payment_frame(ledger)
         grouped = (
-            ledger[ledger["canonical_merchant"].notna()]
+            spend[spend["canonical_merchant"].notna()]
             .groupby("canonical_merchant")
             .agg(txn_count=("amount", "count"), total_amount=("amount", "sum"))
         )

@@ -625,6 +625,37 @@ def test_spend_breakdown_splits_holders_and_ranks_categories():
     assert tool_spend_breakdown(unlabeled, {"group_by": "cardholder"})["rows"][0]["name"] == "Unassigned"
 
 
+def test_spend_breakdown_does_not_treat_autopay_as_refund():
+    frame = _ledger(
+        [
+            _row(amount=40.0, cardholder="Alex Example"),
+            _row(
+                amount=-200.0,
+                posted_date="2026-07-16",
+                raw_description="CHASE AUTOPAY",
+                canonical_merchant="Chase Autopay",
+                normalized_merchant="CHASE AUTOPAY",
+                category="Transfers",
+                subcategory="Monthly Payment",
+                cardholder="Alex Example",
+            ),
+            _row(
+                amount=-14.0,
+                posted_date="2026-07-17",
+                canonical_merchant="Amazon",
+                normalized_merchant="AMAZON",
+                category="Shopping",
+                cardholder="Alex Example",
+            ),
+        ]
+    )
+    result = tool_spend_breakdown(frame, {"group_by": "cardholder"})
+    alex = {row["name"]: row for row in result["rows"]}["Alex Example"]
+    assert alex["gross_charges"] == 40.0
+    assert alex["credits_refunds"] == 14.0
+    assert alex["net_spend"] == 26.0
+
+
 def test_ambiguous_merchant_query_on_aggregates():
     frame = _amazon_series_ledger()
     series = tool_spend_over_time(frame, {"query": "am"})
@@ -673,7 +704,7 @@ def test_planner_picks_spend_over_time_for_highest_amazon_month():
         generate=generate,
         ollama_host="http://127.0.0.1:11434",
     )
-    assert out["prompt_version"] == PROMPT_VERSION == "insights-v3"
+    assert out["prompt_version"] == PROMPT_VERSION == "insights-v4"
     assert out["tools_used"] == ["spend_over_time"]
     peak = out["facts"][0]["result"]["peak"]
     assert peak["month"] == "2024-10"

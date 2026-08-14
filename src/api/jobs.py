@@ -33,6 +33,7 @@ def create_job(kind: str) -> str:
             "finished_at": None,
             "result": None,
             "error": None,
+            "progress": None,
         }
         if len(_JOBS) > _MAX_JOBS:
             oldest = sorted(_JOBS.values(), key=lambda j: j["created_at"])[: len(_JOBS) - _MAX_JOBS]
@@ -66,6 +67,18 @@ def run_job(job_id: str, fn: Callable[[], Any]) -> None:
                 job["error"] = f"{type(exc).__name__}: {exc}"
                 job["traceback"] = traceback.format_exc()
                 job["finished_at"] = _now()
+
+
+def set_progress(job_id: str, current: int, total: int, message: str = "") -> None:
+    with _LOCK:
+        job = _JOBS.get(job_id)
+        if job is None:
+            return
+        job["progress"] = {
+            "current": int(current),
+            "total": int(total),
+            "message": str(message or ""),
+        }
 
 
 def get_job(job_id: str) -> dict | None:

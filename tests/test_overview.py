@@ -75,9 +75,41 @@ def test_month_summary_excludes_payments_from_spend_and_reports_them(monkeypatch
 
     assert summary["spend_total"] == 40.0
     assert summary["charge_count"] == 1
-    assert summary["payments_and_refunds"] == 200.0
+    assert summary["payments_total"] == 200.0
+    assert summary["returns_total"] == 0.0
+    assert summary["gross_charges"] == 40.0
     assert summary["prior_spend_total"] == 25.0
     assert summary["spend_delta"] == 15.0
+
+
+def test_month_summary_nets_merchant_returns_not_payments(monkeypatch):
+    _stub_overview_deps(monkeypatch)
+
+    ledger = pd.DataFrame(
+        [
+            _row(posted_date="2026-07-02", amount=40.0, raw_description="GROCERIES", category="Food"),
+            _row(
+                posted_date="2026-07-04",
+                amount=-10.0,
+                raw_description="AMAZON.COM",
+                canonical_merchant="Amazon",
+                category="Shopping",
+            ),
+            _row(
+                posted_date="2026-07-03",
+                amount=-200.0,
+                raw_description="PAYMENT THANK YOU",
+                category="Transfers",
+                subcategory="Monthly Payment",
+            ),
+        ]
+    )
+    summary = build_month_summary(ledger, month="2026-07")
+    assert summary["gross_charges"] == 40.0
+    assert summary["returns_total"] == 10.0
+    assert summary["payments_total"] == 200.0
+    assert summary["spend_total"] == 30.0
+    assert summary["charge_count"] == 1
 
 
 def test_cardholder_filter_and_unassigned_split(monkeypatch):

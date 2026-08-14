@@ -17,6 +17,7 @@ from src.atomic import (
     atomic_write_parquet,
     atomic_write_text,
 )
+from src.cashflow import non_payment_frame
 from src.paths import (
     EXPORT_DIR,
     FINANCE_DB,
@@ -104,6 +105,7 @@ def rebuild_duckdb(
             con.register("ledger_df", ledger)
             con.register("recurring_df", recurring)
             con.register("reconciliation_df", reconciliation)
+            con.register("spend_df", non_payment_frame(ledger))
             con.execute("CREATE TABLE ledger AS SELECT * FROM ledger_df")
             con.execute("CREATE TABLE recurring AS SELECT * FROM recurring_df")
             con.execute("CREATE TABLE reconciliation AS SELECT * FROM reconciliation_df")
@@ -116,8 +118,7 @@ def rebuild_duckdb(
                   COALESCE(subcategory, '') AS subcategory,
                   SUM(amount) AS total,
                   COUNT(*) AS txn_count
-                FROM ledger
-                WHERE amount > 0
+                FROM spend_df
                 GROUP BY 1, 2, 3
                 ORDER BY 1, 2
                 """
@@ -131,8 +132,7 @@ def rebuild_duckdb(
                   canonical_merchant IS NOT NULL AS is_canonical,
                   SUM(amount) AS total,
                   COUNT(*) AS txn_count
-                FROM ledger
-                WHERE amount > 0
+                FROM spend_df
                 GROUP BY 1, 2, 3
                 ORDER BY 1, 4 DESC
                 """
@@ -162,24 +162,23 @@ def export_for_dashboard(
     if mode not in {"aggregates_only", "full"}:
         raise ValueError(f"Unsupported publish mode: {mode}")
 
+    spend = non_payment_frame(ledger)
     category_monthly = (
-        ledger.assign(
+        spend.assign(
             month=lambda d: pd.to_datetime(d["posted_date"]).dt.strftime("%Y-%m"),
             category=lambda d: d["category"].fillna("Uncategorized"),
             subcategory=lambda d: d["subcategory"].fillna(""),
         )
-        .loc[lambda d: d["amount"] > 0]
         .groupby(["month", "category", "subcategory"], as_index=False)
         .agg(total=("amount", "sum"), txn_count=("amount", "count"))
         .sort_values(["month", "category"])
     )
 
     merchant_totals = (
-        ledger.assign(
+        spend.assign(
             merchant=lambda d: d["canonical_merchant"].fillna(d["normalized_merchant"]),
             canonical=lambda d: d["canonical_merchant"].notna(),
         )
-        .loc[lambda d: d["amount"] > 0]
         .groupby(["merchant", "canonical"], as_index=False)
         .agg(total=("amount", "sum"), txn_count=("amount", "count"))
         .sort_values("total", ascending=False)

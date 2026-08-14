@@ -158,9 +158,62 @@ def test_payments_are_excluded_from_spend(monkeypatch):
     sapphire = _by_label(payload)["Chase Sapphire Preferred · Alex Example"]
     assert sapphire["spend_total"] == 40.0
     assert sapphire["charge_count"] == 1
-    assert sapphire["payments_and_refunds"] == 200.0
+    assert sapphire["payments_total"] == 200.0
+    assert sapphire["returns_total"] == 0.0
+    assert sapphire["gross_charges"] == 40.0
+    assert sapphire["account_kind"] == "card"
     assert sapphire["statements"][0]["spend_total"] == 40.0
-    assert sapphire["statements"][0]["payments_and_refunds"] == 200.0
+    assert sapphire["statements"][0]["payments_total"] == 200.0
+    assert sapphire["statements"][0]["returns_total"] == 0.0
+
+
+def test_refund_reduces_net_and_splits_from_payments(monkeypatch):
+    monkeypatch.setattr("src.cards.list_card_products", lambda: {})
+    ledger = pd.DataFrame(
+        [
+            _row(amount=53.0, raw_description="AMAZON.COM", canonical_merchant="Amazon"),
+            _row(
+                amount=-14.0,
+                posted_date="2026-07-16",
+                raw_description="AMAZON.COM",
+                canonical_merchant="Amazon",
+            ),
+            _row(
+                amount=-200.0,
+                posted_date="2026-07-17",
+                raw_description="PAYMENT THANK YOU",
+                category="Transfers",
+                subcategory="Monthly Payment",
+            ),
+        ]
+    )
+    payload = build_cards_coverage(ledger, today=date(2026, 8, 1))
+    sapphire = _by_label(payload)["Chase Sapphire Preferred · Alex Example"]
+    assert sapphire["gross_charges"] == 53.0
+    assert sapphire["returns_total"] == 14.0
+    assert sapphire["payments_total"] == 200.0
+    assert sapphire["spend_total"] == 39.0
+
+
+def test_checking_product_is_bank_kind(monkeypatch):
+    monkeypatch.setattr("src.cards.list_card_products", lambda: {"Bank of America": ["Advantage Checking"]})
+    ledger = pd.DataFrame(
+        [
+            _row(
+                card="boa-checking",
+                card_issuer="Bank of America",
+                card_product="Advantage Checking",
+                posted_date="2026-07-02",
+                amount=12.0,
+                raw_description="GROCERIES",
+                source_document_id="boa-jul",
+                source_file="boa/jul.csv",
+            )
+        ]
+    )
+    payload = build_cards_coverage(ledger, today=date(2026, 8, 1))
+    row = _by_label(payload)["Bank of America Advantage Checking · Alex Example"]
+    assert row["account_kind"] == "bank"
 
 
 def test_same_product_for_two_cardholders_stays_separate(monkeypatch):

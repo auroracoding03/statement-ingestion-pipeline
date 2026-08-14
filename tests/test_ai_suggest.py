@@ -71,3 +71,52 @@ def test_resolve_ollama_binary_windows_fallback(monkeypatch, tmp_path: Path):
     monkeypatch.delenv("ProgramFiles", raising=False)
     monkeypatch.delenv("PROGRAMFILES", raising=False)
     assert ai_suggest.resolve_ollama_binary() == exe
+
+
+def test_resolve_ollama_binary_ignores_cmd_shim(monkeypatch, tmp_path: Path):
+    cmd = tmp_path / "ollama.cmd"
+    exe = tmp_path / "ollama.exe"
+    cmd.write_text("")
+    exe.write_text("")
+
+    def which(name: str):
+        if name == "ollama":
+            return str(cmd)
+        return None
+
+    monkeypatch.setattr(ai_suggest.shutil, "which", which)
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.delenv("ProgramFiles", raising=False)
+    monkeypatch.delenv("PROGRAMFILES", raising=False)
+    assert ai_suggest.resolve_ollama_binary() == exe
+
+
+def test_resolve_ollama_binary_ignores_ps1_shim(monkeypatch, tmp_path: Path):
+    ps1 = tmp_path / "ollama.ps1"
+    ps1.write_text("")
+    monkeypatch.setattr(ai_suggest.shutil, "which", lambda name: str(ps1) if name == "ollama" else None)
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.delenv("ProgramFiles", raising=False)
+    monkeypatch.delenv("PROGRAMFILES", raising=False)
+    assert ai_suggest.resolve_ollama_binary() is None
+
+
+def test_spawn_detached_uses_create_no_window(monkeypatch):
+    captured: dict = {}
+
+    class FakePopen:
+        def __init__(self, *_args, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(ai_suggest.sys, "platform", "win32")
+    monkeypatch.setattr(ai_suggest.subprocess, "Popen", FakePopen)
+    ai_suggest._spawn_detached(["ollama", "serve"])
+    flags = int(captured["creationflags"])
+    assert flags & ai_suggest.CREATE_NO_WINDOW
+    detached = int(getattr(ai_suggest.subprocess, "DETACHED_PROCESS", 0x00000008))
+    assert flags & detached == 0
+    assert captured["stdin"] is ai_suggest.subprocess.DEVNULL
+    assert captured["stdout"] is ai_suggest.subprocess.DEVNULL
+    assert captured["stderr"] is ai_suggest.subprocess.DEVNULL
+    if hasattr(ai_suggest.subprocess, "STARTUPINFO"):
+        assert "startupinfo" in captured

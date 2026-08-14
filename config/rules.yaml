@@ -47,6 +47,7 @@ subcategories:
   Personal: []
   Transfers:
     - CardPayment
+    - Monthly Payment
   Fees:
     - CardFee
   Income: []
@@ -94,9 +95,9 @@ rules:
     subcategory: Mortgage
 
   - match:
-      merchant_regex: "(?i)payment thank you|autopay|online payment|credit card payment"
+      merchant_regex: "(?i)payment thank you|mobile payment|autopay|online payment|credit card payment|payment received|web payment"
     category: Transfers
-    subcategory: CardPayment
+    subcategory: Monthly Payment
 
   - match:
       merchant_regex: "(?i)interest charge|late fee|annual fee|foreign transaction fee"

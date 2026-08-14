@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
 
 import { CategoryFields } from "../components/CategoryFields";
-import { Empty, ErrorNote, Loading, PageHeader, StatusPill } from "../components/ui";
+import { Empty, ErrorNote, JobProgressBar, Loading, PageHeader, StatusPill } from "../components/ui";
 import { api, waitForJob } from "../lib/dataSource";
 import { money } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
-import type { AiProposal } from "../lib/types";
+import type { AiProposal, JobProgress } from "../lib/types";
 
 export function AiAssistant() {
   const status = useAsync(() => api.aiStatus(), []);
@@ -13,6 +13,7 @@ export function AiAssistant() {
   const categories = useAsync(() => api.aiProposals("category"), []);
   const rules = useAsync(() => api.rules(), []);
   const [busy, setBusy] = useState("");
+  const [progress, setProgress] = useState<JobProgress | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -36,9 +37,12 @@ export function AiAssistant() {
     setBusy(label);
     setError(null);
     setMessage("");
+    setProgress(null);
     try {
       const started = await start();
-      const completed = await waitForJob(started.job_id);
+      const completed = await waitForJob(started.job_id, (job) => {
+        if (job.progress) setProgress(job.progress);
+      });
       if (completed.status === "error") throw new Error(completed.error ?? "The job failed.");
       setMessage(label === "download" ? "Model download and hardware check completed." : "Analysis completed. Review the proposals below.");
       refresh();
@@ -46,6 +50,7 @@ export function AiAssistant() {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy("");
+      setProgress(null);
     }
   }
 
@@ -53,6 +58,7 @@ export function AiAssistant() {
     setBusy("start");
     setError(null);
     setMessage("");
+    setProgress(null);
     try {
       const result = await api.startOllama();
       setMessage(result.available ? "Ollama is running." : "Ollama did not become reachable.");
@@ -152,6 +158,16 @@ export function AiAssistant() {
             <button className="btn subtle" disabled={!modelReady || busy !== ""} onClick={() => void run("analyze", () => api.startAiAnalysis("full"))}>Reanalyze all</button>
             <button className="btn danger subtle" disabled={busy !== ""} onClick={() => void rollback()}>Undo latest batch</button>
           </div>
+          {(busy === "analyze" || busy === "download" || busy === "start") && (
+            <JobProgressBar
+              label={
+                progress?.message
+                  || (busy === "analyze" ? "Analyzing new data…" : busy === "download" ? "Downloading model…" : "Starting Ollama…")
+              }
+              current={progress?.current}
+              total={progress?.total}
+            />
+          )}
         </div>
       </section>
 

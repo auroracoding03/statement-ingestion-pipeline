@@ -1,13 +1,22 @@
 import { useState } from "react";
 
+import { JobProgressBar } from "./ui";
 import { api, waitForJob } from "../lib/dataSource";
-import type { JobStart } from "../lib/types";
+import type { JobProgress, JobStart } from "../lib/types";
 
 type Stage = "ingest" | "classify" | "classify-ai" | "build" | null;
+
+const STAGE_LABEL: Record<Exclude<Stage, null>, string> = {
+  ingest: "Ingesting statements…",
+  classify: "Classifying…",
+  "classify-ai": "Classify + AI…",
+  build: "Building exports…",
+};
 
 /** Drives the pipeline stages from the dedicated Ingestion page. */
 export function PipelineBar() {
   const [running, setRunning] = useState<Stage>(null);
+  const [progress, setProgress] = useState<JobProgress | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -15,10 +24,13 @@ export function PipelineBar() {
     setRunning(stage);
     setError(null);
     setMessage(null);
+    setProgress(null);
     try {
       const started = await start();
       if (!started.job_id) throw new Error("Server did not return a job id");
-      const job = await waitForJob(started.job_id);
+      const job = await waitForJob(started.job_id, (tick) => {
+        if (tick.progress) setProgress(tick.progress);
+      });
       if (job.status === "error") {
         const details = Array.isArray((job.result as { details?: unknown } | null)?.details)
           ? ((job.result as { details: string[] }).details as string[])
@@ -37,6 +49,7 @@ export function PipelineBar() {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setRunning(null);
+      setProgress(null);
     }
   }
 
@@ -67,6 +80,13 @@ export function PipelineBar() {
           {running === "build" ? "Building…" : "Build"}
         </button>
       </div>
+      {running && (
+        <JobProgressBar
+          label={progress?.message || STAGE_LABEL[running]}
+          current={progress?.current}
+          total={progress?.total}
+        />
+      )}
       {message && <p className="pipeline-msg ok">{message}</p>}
       {error && <p className="pipeline-msg bad">{error}</p>}
     </section>
