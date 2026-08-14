@@ -3,6 +3,7 @@ import { useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Empty, ErrorNote, Loading, PageHeader } from "../components/ui";
 import { api } from "../lib/dataSource";
 import { money } from "../lib/format";
+import { hashHref } from "../lib/router";
 import { useAsync } from "../lib/useAsync";
 import type { InsightsChatResponse, InsightsFact, InsightsMessage } from "../lib/types";
 
@@ -70,10 +71,27 @@ export function Insights() {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
 
-  const offline = status.data && (!status.data.available || !status.data.model_installed);
+  const daemonDown = Boolean(status.data && !status.data.available);
+  const modelMissing = Boolean(status.data?.available && !status.data.model_installed);
+  const offline = daemonDown || modelMissing;
+
+  async function startOllama() {
+    if (starting) return;
+    setStarting(true);
+    setError(null);
+    try {
+      await api.startOllama();
+      status.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setStarting(false);
+    }
+  }
 
   async function send(text: string) {
     const question = text.trim();
@@ -126,9 +144,18 @@ export function Insights() {
       />
       {status.loading && <Loading what="local AI status" />}
       {status.error && <ErrorNote error={status.error} />}
-      {offline && (
+      {daemonDown && (
         <p className="pipeline-msg warn">
-          Local AI is offline. Start Ollama with the configured model to use Insights. The existing AI assistant setup page can download it.
+          Local AI is offline because Ollama is not running.
+          <button className="btn small" type="button" style={{ marginLeft: "0.75rem" }} disabled={starting} onClick={() => void startOllama()}>
+            {starting ? "Starting…" : "Start Ollama"}
+          </button>
+        </p>
+      )}
+      {modelMissing && (
+        <p className="pipeline-msg warn">
+          Ollama is running, but the configured model is not installed.{" "}
+          <a href={hashHref("/ai-assistant")}>Download it on the AI proposals page</a>.
         </p>
       )}
       {error && <ErrorNote error={error} />}

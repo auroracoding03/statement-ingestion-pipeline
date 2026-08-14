@@ -235,6 +235,75 @@ def test_ai_setup_and_proposal_routes(client: TestClient, monkeypatch):
     assert proposals.json() == {"total": 0, "items": []}
 
 
+def _ai_status_payload(**overrides):
+    body = {
+        "available": True,
+        "model_installed": True,
+        "gpu_resident": False,
+        "model": "qwen3.5:9b",
+        "host": "http://127.0.0.1:11434",
+        "size_vram": 0,
+        "message": "ready",
+    }
+    body.update(overrides)
+    return body
+
+
+def test_ai_start_when_already_online(client: TestClient, monkeypatch):
+    spawned = []
+    monkeypatch.setattr(api_app, "start_ollama_serve", lambda **_kwargs: spawned.append("called") or {"started": False, "available": True})
+    monkeypatch.setattr(api_app.ai_review, "ai_status", lambda warmup=False: _ai_status_payload())
+
+    response = client.post("/api/ai/start")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["started"] is False
+    assert body["available"] is True
+    assert spawned == ["called"]
+
+
+def test_ai_start_missing_binary_is_404(client: TestClient, monkeypatch):
+    def missing(**_kwargs):
+        raise FileNotFoundError("Ollama is not installed.")
+
+    monkeypatch.setattr(api_app, "start_ollama_serve", missing)
+    response = client.post("/api/ai/start")
+    assert response.status_code == 404
+    assert "not installed" in response.json()["detail"]
+
+
+def test_ai_start_spawn_success(client: TestClient, monkeypatch):
+    monkeypatch.setattr(api_app, "start_ollama_serve", lambda **_kwargs: {"started": True, "available": True})
+    monkeypatch.setattr(api_app.ai_review, "ai_status", lambda warmup=False: _ai_status_payload())
+
+    response = client.post("/api/ai/start")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["started"] is True
+    assert body["available"] is True
+
+
+def test_ai_start_timeout_is_503(client: TestClient, monkeypatch):
+    def timed_out(**_kwargs):
+        raise TimeoutError("Ollama did not become reachable. Check that it is installed and try again.")
+
+    monkeypatch.setattr(api_app, "start_ollama_serve", timed_out)
+    response = client.post("/api/ai/start")
+    assert response.status_code == 503
+    assert "did not become reachable" in response.json()["detail"]
+
+
+def test_ai_start_rejects_remote_host(client: TestClient, monkeypatch):
+    spawned = []
+    monkeypatch.setattr(api_app, "recommended_config", lambda: {"host": "http://8.8.8.8:11434", "model": "qwen3.5:9b"})
+    monkeypatch.setattr(api_app, "start_ollama_serve", lambda **kwargs: spawned.append(kwargs) or {"started": True, "available": True})
+
+    response = client.post("/api/ai/start")
+    assert response.status_code == 422
+    assert "loopback" in response.json()["detail"].lower()
+    assert spawned == []
+
+
 def test_updates_are_exposed_without_network_access(client: TestClient):
     r = client.get("/api/updates")
 

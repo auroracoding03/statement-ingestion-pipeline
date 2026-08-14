@@ -10,6 +10,7 @@
 import type {
   AiProposal,
   AiStatus,
+  Alias,
   BudgetEnvelope,
   CategoryMonthly,
   ContextTag,
@@ -196,6 +197,11 @@ export const api = {
   async aiStatus(warmup = false): Promise<AiStatus> {
     if (!canWrite) throw new DataError("Local AI setup is only available in the desktop app.");
     return req<AiStatus>(`/api/ai/status${warmup ? "?warmup=true" : ""}`);
+  },
+
+  async startOllama(): Promise<AiStatus & { started: boolean }> {
+    if (!canWrite) throw new DataError("Local AI setup is only available in the desktop app.");
+    return req<AiStatus & { started: boolean }>("/api/ai/start", { method: "POST" });
   },
 
   async insightsChat(messages: InsightsMessage[]): Promise<InsightsChatResponse> {
@@ -531,7 +537,18 @@ export const api = {
     restamp?: boolean;
   }) {
     if (!canWrite) writeGuard();
-    return req<unknown>("/api/merchants", { method: "POST", body: JSON.stringify(body) });
+    return req<{
+      merchant: {
+        canonical: string;
+        category?: string | null;
+        subcategory?: string | null;
+        aliases?: Alias[];
+      };
+      stamped: number;
+    }>("/api/merchants", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
   },
 
   updateMerchant(

@@ -11,8 +11,14 @@ before anything is written into rules.yaml or merchants.yaml.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import subprocess
+import sys
+import time
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pandas as pd
@@ -33,6 +39,10 @@ DEFAULT_CONFIG = {
 }
 
 RECOMMENDED_MODEL = "qwen3.5:9b"
+OLLAMA_START_TIMEOUT_SECONDS = 20.0
+OLLAMA_START_POLL_SECONDS = 0.25
+OLLAMA_WINDOWS_INSTALL_URL = "https://ollama.com/download/windows"
+CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 
 
 def load_ollama_config(path: Path = OLLAMA_PATH) -> dict:
@@ -65,6 +75,100 @@ def ollama_available(host: str | None = None) -> bool:
         return r.status_code == 200
     except Exception:  # noqa: BLE001
         return False
+
+
+def resolve_ollama_binary() -> Path | None:
+    """Locate the Ollama CLI on PATH or in the default Windows install folders."""
+    found = shutil.which("ollama")
+    if found:
+        return Path(found)
+    candidates: list[Path] = []
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    program_files = os.environ.get("ProgramFiles") or os.environ.get("PROGRAMFILES")
+    if local_app_data:
+        candidates.append(Path(local_app_data) / "Programs" / "Ollama" / "ollama.exe")
+    if program_files:
+        candidates.append(Path(program_files) / "Ollama" / "ollama.exe")
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _is_access_denied(exc: BaseException) -> bool:
+    if isinstance(exc, PermissionError):
+        return True
+    if getattr(exc, "winerror", None) == 5:
+        return True
+    return isinstance(exc, OSError) and getattr(exc, "errno", None) in {13, 5}
+
+
+def _detach_creationflags(*, breakaway: bool = True) -> int:
+    flags = int(getattr(subprocess, "DETACHED_PROCESS", 0)) | int(
+        getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    )
+    if breakaway:
+        flags |= CREATE_BREAKAWAY_FROM_JOB
+    return flags
+
+
+def _spawn_detached(command: list[str]) -> subprocess.Popen[Any]:
+    """Start Ollama so it outlives this API request (and the WebView host)."""
+    common: dict[str, Any] = {
+        "close_fds": True,
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if sys.platform != "win32":
+        return subprocess.Popen(command, start_new_session=True, **common)
+    try:
+        return subprocess.Popen(
+            command,
+            creationflags=_detach_creationflags(breakaway=True),
+            **common,
+        )
+    except OSError as exc:
+        if not _is_access_denied(exc):
+            raise
+        return subprocess.Popen(
+            command,
+            creationflags=_detach_creationflags(breakaway=False),
+            **common,
+        )
+
+
+def start_ollama_serve(
+    *,
+    host: str | None = None,
+    timeout: float = OLLAMA_START_TIMEOUT_SECONDS,
+    poll_interval: float = OLLAMA_START_POLL_SECONDS,
+) -> dict:
+    """Start the local Ollama daemon if it is not already reachable.
+
+    Returns ``{"started": bool, "available": bool}``. Raises ``FileNotFoundError``
+    when the binary is missing and ``TimeoutError`` if the HTTP API never comes up.
+    """
+    host = host or str(load_ollama_config()["host"])
+    if ollama_available(host):
+        return {"started": False, "available": True}
+
+    binary = resolve_ollama_binary()
+    if binary is None:
+        raise FileNotFoundError(
+            "Ollama is not installed. Install Ollama for Windows from "
+            f"{OLLAMA_WINDOWS_INSTALL_URL}, then try again."
+        )
+
+    _spawn_detached([str(binary), "serve"])
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if ollama_available(host):
+            return {"started": True, "available": True}
+        time.sleep(poll_interval)
+    raise TimeoutError(
+        "Ollama did not become reachable. Check that it is installed and try again."
+    )
 
 
 def _parse_json_payload(text: str) -> dict:

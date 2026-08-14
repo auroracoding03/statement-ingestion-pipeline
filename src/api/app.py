@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 from src import pipeline
 from src import ai_review
-from src.ai_suggest import ollama_available, recommended_config
+from src.ai_suggest import ollama_available, recommended_config, start_ollama_serve
 from src.atomic import atomic_copy_stream
 from src.api import jobs
 from src.api.schemas import (
@@ -183,6 +183,25 @@ def get_status() -> dict:
 def get_ai_status(warmup: bool = False) -> dict:
     """Report local runtime/model state; no financial data leaves the machine."""
     return ai_review.ai_status(warmup=warmup)
+
+
+@app.post("/api/ai/start")
+def post_ai_start() -> dict:
+    """Start the local Ollama daemon when it is installed but not running."""
+    cfg = recommended_config()
+    host = str(cfg.get("host") or "")
+    try:
+        assert_loopback_ollama_host(host)
+    except InsightsSandboxError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        started = start_ollama_serve(host=host)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except TimeoutError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    status = ai_review.ai_status()
+    return {**status, "started": started["started"]}
 
 
 @app.post("/api/ai/model/pull")

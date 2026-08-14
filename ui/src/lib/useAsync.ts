@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+interface ReloadOptions {
+  silent?: boolean;
+}
 
 interface AsyncState<T> {
   data: T | null;
   loading: boolean;
   error: string | null;
-  reload: () => void;
+  reload: (options?: ReloadOptions) => void;
 }
 
 /** Fetch-on-mount with a manual reload handle, cancelling stale responses. */
@@ -13,12 +17,18 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []): AsyncSt
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
+  const silentRef = useRef(false);
 
-  const reload = useCallback(() => setNonce((n) => n + 1), []);
+  const reload = useCallback((options?: ReloadOptions) => {
+    silentRef.current = Boolean(options?.silent);
+    setNonce((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     let active = true;
-    setLoading(true);
+    const silent = silentRef.current;
+    silentRef.current = false;
+    if (!silent) setLoading(true);
     setError(null);
     fn()
       .then((result) => {

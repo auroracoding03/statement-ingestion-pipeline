@@ -6,7 +6,7 @@ import { api, canWrite } from "../lib/dataSource";
 import { money } from "../lib/format";
 import { compareLabel } from "../lib/sort";
 import { useAsync } from "../lib/useAsync";
-import type { Merchant, MerchantOrphan, UnknownCluster } from "../lib/types";
+import type { Alias, Merchant, MerchantOrphan, UnknownCluster } from "../lib/types";
 
 const HIDE_KEY = "fin.merchants.hideUnresolved";
 
@@ -61,6 +61,35 @@ function compareMerchants(a: Merchant, b: Merchant, key: MerchantSortKey, order:
   return (left - right) * dir;
 }
 
+function upsertMerchant(items: Merchant[], incoming: Merchant): Merchant[] {
+  const needle = incoming.canonical.toLowerCase();
+  const index = items.findIndex((item) => item.canonical.toLowerCase() === needle);
+  if (index === -1) return [incoming, ...items];
+  const next = [...items];
+  next[index] = { ...next[index], ...incoming };
+  return next;
+}
+
+function merchantFromSave(
+  entry: {
+    canonical: string;
+    category?: string | null;
+    subcategory?: string | null;
+    aliases?: Alias[];
+  },
+  cluster: UnknownCluster,
+  existing: Merchant | undefined,
+): Merchant {
+  return {
+    canonical: entry.canonical,
+    category: entry.category ?? existing?.category ?? null,
+    subcategory: entry.subcategory ?? existing?.subcategory ?? null,
+    aliases: entry.aliases ?? existing?.aliases ?? [],
+    txn_count: (existing?.txn_count ?? 0) + cluster.txn_count,
+    total_amount: (existing?.total_amount ?? 0) + cluster.total_amount,
+  };
+}
+
 export function Merchants() {
   const merchants = useAsync(() => api.merchants(), []);
   const rules = useAsync(() => api.rules(), []);
@@ -76,23 +105,36 @@ export function Merchants() {
   );
   const [sort, setSort] = useState<MerchantSortKey>("canonical");
   const [order, setOrder] = useState<"asc" | "desc">("asc");
+  const [dismissedClusterIds, setDismissedClusterIds] = useState<Set<string>>(() => new Set());
+  const [localMerchants, setLocalMerchants] = useState<Merchant[]>([]);
   const categories = rules.data?.categories ?? [];
   const subcategories = rules.data?.subcategories ?? {};
   const needle = query.trim().toLowerCase();
 
+  useEffect(() => {
+    setLocalMerchants(merchants.data?.items ?? []);
+  }, [merchants.data?.items]);
+
+  useEffect(() => {
+    const live = new Set((unknown.data?.items ?? []).map((cluster) => cluster.cluster_id));
+    setDismissedClusterIds((prior) => {
+      const next = new Set([...prior].filter((id) => live.has(id)));
+      return next.size === prior.size ? prior : next;
+    });
+  }, [unknown.data?.items]);
+
   const clusters = useMemo(() => {
-    const items = unknown.data?.items ?? [];
+    const items = (unknown.data?.items ?? []).filter((cluster) => !dismissedClusterIds.has(cluster.cluster_id));
     if (!needle) return items;
     return items.filter((cluster) => clusterHaystack(cluster).includes(needle));
-  }, [needle, unknown.data?.items]);
+  }, [dismissedClusterIds, needle, unknown.data?.items]);
 
   const curated = useMemo(() => {
-    const items = merchants.data?.items ?? [];
     const filtered = needle
-      ? items.filter((merchant) => merchantHaystack(merchant).includes(needle))
-      : items;
+      ? localMerchants.filter((merchant) => merchantHaystack(merchant).includes(needle))
+      : localMerchants;
     return [...filtered].sort((left, right) => compareMerchants(left, right, sort, order));
-  }, [merchants.data?.items, needle, order, sort]);
+  }, [localMerchants, needle, order, sort]);
 
   const leftover = useMemo((): MerchantOrphan[] => {
     const items = merchants.data?.orphans ?? [];
@@ -100,9 +142,14 @@ export function Merchants() {
     return items.filter((orphan) => orphan.canonical.toLowerCase().includes(needle));
   }, [merchants.data?.orphans, needle]);
 
-  function refreshAll() {
-    merchants.reload();
+  function refreshAll(options?: { silentMerchants?: boolean }) {
+    merchants.reload({ silent: options?.silentMerchants });
     unknown.reload();
+  }
+
+  function onClusterSaved(clusterId: string, merchant: Merchant) {
+    setDismissedClusterIds((prior) => new Set(prior).add(clusterId));
+    setLocalMerchants((prior) => upsertMerchant(prior, merchant));
   }
 
   function toggleHidden() {
@@ -141,7 +188,7 @@ export function Merchants() {
         {canWrite && (
           <button className="btn subtle small" type="button" onClick={toggleHidden}>
             {hideUnresolved
-              ? `Show unresolved (${unknown.data?.items.length ?? 0})`
+              ? `Show unresolved (${(unknown.data?.items ?? []).filter((cluster) => !dismissedClusterIds.has(cluster.cluster_id)).length})`
               : "Hide unresolved"}
           </button>
         )}
@@ -173,7 +220,7 @@ export function Merchants() {
               Ask local AI for brand names
               {unknown.data?.ollama_available === false && " (Ollama offline)"}
             </label>
-            <button className="btn subtle small" onClick={refreshAll}>
+            <button className="btn subtle small" onClick={() => refreshAll()}>
               Refresh
             </button>
           </div>
@@ -191,10 +238,10 @@ export function Merchants() {
               <ClusterCard
                 key={cluster.cluster_id}
                 cluster={cluster}
-                merchants={merchants.data?.items ?? []}
+                merchants={localMerchants}
                 categories={categories}
                 subcategories={subcategories}
-                onSaved={refreshAll}
+                onSaved={onClusterSaved}
                 onError={setError}
               />
             ))}
@@ -339,7 +386,7 @@ export function Merchants() {
                             setError(null);
                             try {
                               await api.deleteMerchant(merchant.canonical);
-                              refreshAll();
+                              refreshAll({ silentMerchants: true });
                             } catch (err) {
                               setError(err instanceof Error ? err.message : String(err));
                             }
@@ -365,7 +412,7 @@ export function Merchants() {
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
-            refreshAll();
+            refreshAll({ silentMerchants: true });
           }}
           onError={setError}
         />
@@ -375,13 +422,13 @@ export function Merchants() {
           source={merging.canonical}
           txnCount={merging.txn_count}
           totalAmount={merging.total_amount}
-          targets={(merchants.data?.items ?? []).filter(
+          targets={localMerchants.filter(
             (merchant) => merchant.canonical.toLowerCase() !== merging.canonical.toLowerCase(),
           )}
           onClose={() => setMerging(null)}
           onSaved={() => {
             setMerging(null);
-            refreshAll();
+            refreshAll({ silentMerchants: true });
           }}
           onError={setError}
         />
@@ -462,7 +509,7 @@ function ClusterCard({
   merchants: Merchant[];
   categories: string[];
   subcategories: Record<string, string[]>;
-  onSaved: () => void;
+  onSaved: (clusterId: string, merchant: Merchant) => void;
   onError: (msg: string) => void;
 }) {
   const [canonical, setCanonical] = useState(
@@ -485,24 +532,23 @@ function ClusterCard({
     setSaving(true);
     setSaveError(null);
     try {
-      if (appending) {
-        await api.saveMerchant({
-          canonical: targetName,
-          members: cluster.members,
-          restamp: true,
-        });
-      } else {
-        const cleanedCategory = category.trim() || null;
-        const cleanedSub = cleanedCategory && subcategory.trim() ? subcategory.trim() : null;
-        await api.saveMerchant({
-          canonical: canonical.trim(),
-          members: cluster.members,
-          category: cleanedCategory,
-          subcategory: cleanedSub,
-          restamp: true,
-        });
-      }
-      onSaved();
+      const saved = appending
+        ? await api.saveMerchant({
+            canonical: targetName,
+            members: cluster.members,
+            restamp: true,
+          })
+        : await api.saveMerchant({
+            canonical: canonical.trim(),
+            members: cluster.members,
+            category: category.trim() || null,
+            subcategory: category.trim() && subcategory.trim() ? subcategory.trim() : null,
+            restamp: true,
+          });
+      const existing = merchants.find(
+        (item) => item.canonical.toLowerCase() === saved.merchant.canonical.toLowerCase(),
+      );
+      onSaved(cluster.cluster_id, merchantFromSave(saved.merchant, cluster, existing));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setSaveError(message);

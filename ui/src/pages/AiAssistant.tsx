@@ -49,6 +49,21 @@ export function AiAssistant() {
     }
   }
 
+  async function startOllama() {
+    setBusy("start");
+    setError(null);
+    setMessage("");
+    try {
+      const result = await api.startOllama();
+      setMessage(result.available ? "Ollama is running." : "Ollama did not become reachable.");
+      refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy("");
+    }
+  }
+
   function toggle(id: string) {
     setSelected((prior) => {
       const next = new Set(prior);
@@ -113,6 +128,11 @@ export function AiAssistant() {
             </p>
           )}
           <div className="review-actions">
+            {status.data && !status.data.available && (
+              <button className="btn" disabled={busy !== ""} onClick={() => void startOllama()}>
+                {busy === "start" ? "Starting…" : "Start Ollama"}
+              </button>
+            )}
             <button className="btn" disabled={!status.data?.available || busy !== ""} onClick={() => void run("download", () => api.startAiModelPull())}>
               {busy === "download" ? "Downloading…" : modelReady ? "Recheck GPU" : "Download recommended model"}
             </button>
