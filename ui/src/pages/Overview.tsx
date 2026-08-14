@@ -4,6 +4,8 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  Line,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -11,11 +13,13 @@ import {
 } from "recharts";
 
 import { PeriodPicker, type PeriodValue } from "../components/PeriodPicker";
-import { ErrorNote, Loading, Metric, PageHeader, StatusPill } from "../components/ui";
+import { Empty, ErrorNote, Loading, Metric, PageHeader, StatusPill } from "../components/ui";
 import { api, canWrite } from "../lib/dataSource";
 import { compactMoney, money, shortDate } from "../lib/format";
+import { enumerateMonths, resolveClientPeriod } from "../lib/period";
 import { hashHref } from "../lib/router";
-import type { OverviewMonth } from "../lib/types";
+import { sortedLabels } from "../lib/sort";
+import type { CategoryMonthly, OverviewMonth } from "../lib/types";
 import { useAsync } from "../lib/useAsync";
 
 const COLORS = [
@@ -380,9 +384,159 @@ export function Overview() {
               </div>
             </section>
           )}
+          <CategorySpendTrend
+            cardholder={cardholder}
+            defaultCategory={
+              (data.budget_rows ?? []).find((row) => !row.subcategory)?.category
+              ?? (data.budget_rows ?? [])[0]?.category
+              ?? ""
+            }
+          />
         </>
       )}
     </>
+  );
+}
+
+function topCategoryBySpend(rows: CategoryMonthly[]): string {
+  const totals = new Map<string, number>();
+  for (const row of rows) {
+    totals.set(row.category, (totals.get(row.category) ?? 0) + row.total);
+  }
+  let best = "";
+  let bestTotal = -Infinity;
+  for (const [category, total] of totals) {
+    if (total > bestTotal) {
+      best = category;
+      bestTotal = total;
+    }
+  }
+  return best;
+}
+
+function CategorySpendTrend({
+  cardholder,
+  defaultCategory,
+}: {
+  cardholder: string;
+  defaultCategory: string;
+}) {
+  const monthly = useAsync(
+    () => api.categoriesMonthly({ cardholder: cardholder || undefined }),
+    [cardholder],
+  );
+  const rules = useAsync(
+    () =>
+      canWrite
+        ? api.rules()
+        : Promise.resolve({ categories: [] as string[], subcategories: {} as Record<string, string[]>, rules: [] }),
+    [],
+  );
+  const [period, setPeriod] = useState<PeriodValue>({ preset: "t12m", month: "", since: "", until: "" });
+  const [category, setCategory] = useState("");
+  const [subcategory, setSubcategory] = useState("");
+
+  const rows = monthly.data ?? [];
+  const months = useMemo(() => [...new Set(rows.map((row) => row.month))].sort(), [rows]);
+  const ready = period.preset !== "custom" || Boolean(period.since && period.until);
+  const resolved = resolveClientPeriod({ ...period, months });
+  const timeline = useMemo(
+    () => (ready ? enumerateMonths(resolved.since, resolved.until) : []),
+    [ready, resolved.since, resolved.until],
+  );
+
+  const categories = useMemo(() => {
+    const labels = new Set(rows.map((row) => row.category));
+    if (defaultCategory) labels.add(defaultCategory);
+    return sortedLabels(labels);
+  }, [rows, defaultCategory]);
+
+  const activeCategory = category || defaultCategory || topCategoryBySpend(rows);
+
+  const subcategoryOptions = useMemo(() => {
+    if (!activeCategory) return [];
+    const fromData = rows
+      .filter((row) => row.category === activeCategory)
+      .map((row) => (row.subcategory ?? "").trim())
+      .filter(Boolean);
+    const fromRules = rules.data?.subcategories?.[activeCategory] ?? [];
+    return sortedLabels(new Set([...fromData, ...fromRules]));
+  }, [rows, activeCategory, rules.data]);
+
+  const series = useMemo(() => {
+    if (!activeCategory || timeline.length === 0) return [];
+    const byMonth = new Map<string, number>();
+    for (const month of timeline) byMonth.set(month, 0);
+    for (const row of rows) {
+      if (row.category !== activeCategory) continue;
+      if (subcategory && (row.subcategory ?? "") !== subcategory) continue;
+      if (!byMonth.has(row.month)) continue;
+      byMonth.set(row.month, (byMonth.get(row.month) ?? 0) + row.total);
+    }
+    return timeline.map((month) => ({ month, total: byMonth.get(month) ?? 0 }));
+  }, [rows, activeCategory, subcategory, timeline]);
+
+  return (
+    <section className="overview-trend">
+      <h2>Category spend over time</h2>
+      <p className="chart-caption">
+        Net spend by month for one category. Gaps in the selected window plot as $0. Uses its own timeline so a
+        single-month Overview still shows a trend.
+      </p>
+
+      {monthly.error && <ErrorNote error={monthly.error} />}
+      {monthly.loading && <Loading what="category spend" />}
+      {!monthly.loading && rows.length === 0 && <Empty>No categorized spend yet.</Empty>}
+
+      {months.length > 0 && (
+        <div className="toolbar overview-controls">
+          <PeriodPicker months={months} value={period} onChange={setPeriod} />
+          <label>
+            Category
+            <select
+              value={activeCategory}
+              onChange={(event) => {
+                setCategory(event.target.value);
+                setSubcategory("");
+              }}
+            >
+              {categories.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {activeCategory && (
+            <label>
+              Subcategory
+              <select value={subcategory} onChange={(event) => setSubcategory(event.target.value)}>
+                <option value="">All subcategories</option>
+                {subcategoryOptions.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
+      )}
+
+      {series.length > 0 && (
+        <div className="chart-wrap">
+          <ResponsiveContainer width="100%" height={260}>
+            <LineChart data={series} margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e7dfd2" vertical={false} />
+              <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+              <YAxis tick={{ fontSize: 12 }} tickFormatter={(value) => compactMoney(Number(value))} />
+              <Tooltip formatter={(value) => money(Number(value))} contentStyle={{ fontSize: 13, borderRadius: 4 }} />
+              <Line type="monotone" dataKey="total" stroke="#0f5c4c" strokeWidth={2} dot={{ r: 3 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </section>
   );
 }
 

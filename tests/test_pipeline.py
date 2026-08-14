@@ -143,17 +143,18 @@ def test_classify_applies_rules(tmp_path: Path):
 
 def test_detect_recurring_flags_monthly():
     rows = []
-    for month, day, amt in [(1, 20, 2100.0), (2, 20, 2100.0), (3, 20, 2100.0)]:
+    for month, day, amt in [(1, 20, 15.99), (2, 20, 15.99), (3, 20, 15.99)]:
         rows.append(
             {
                 "txn_id": f"m{month}",
                 "card": "chase",
                 "posted_date": f"2026-{month:02d}-{day:02d}",
                 "amount": amt,
-                "raw_description": "ROCKET MORTGAGE AUTOPAY",
-                "normalized_merchant": "ROCKET MORTGAGE AUTOPAY",
-                "category": "Housing",
-                "subcategory": "Mortgage",
+                "raw_description": "NETFLIX.COM",
+                "normalized_merchant": "NETFLIX.COM",
+                "canonical_merchant": "Netflix",
+                "category": "Subscriptions",
+                "subcategory": "Streaming",
                 "source_file": "x",
             }
         )
@@ -170,8 +171,22 @@ def test_detect_recurring_flags_monthly():
             "source_file": "x",
         }
     )
+    rows.append(
+        {
+            "txn_id": "m-house",
+            "card": "chase",
+            "posted_date": "2026-01-20",
+            "amount": 2100.0,
+            "raw_description": "ROCKET MORTGAGE AUTOPAY",
+            "normalized_merchant": "ROCKET MORTGAGE AUTOPAY",
+            "category": "Housing",
+            "subcategory": "Mortgage",
+            "source_file": "x",
+        }
+    )
     recurring = detect_recurring(pd.DataFrame(rows), min_occurrences=2)
-    rocket = recurring[recurring["normalized_merchant"] == "ROCKET MORTGAGE AUTOPAY"].iloc[0]
+    assert list(recurring["canonical_merchant"]) == ["Netflix"]
+    rocket = recurring[recurring["normalized_merchant"] == "NETFLIX.COM"].iloc[0]
     assert bool(rocket["is_recurring"]) is True
 
 

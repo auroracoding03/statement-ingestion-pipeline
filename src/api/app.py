@@ -69,7 +69,7 @@ from src.classify import (
 from src.extract import iter_statement_files
 from src.merchants import append_merchant, delete_merchant, load_merchants, merge_merchants, update_merchant
 from src.cards import build_cards_coverage
-from src.overview import build_period_summary, cardholders
+from src.overview import _filter_cardholder, build_period_summary, cardholders
 from src.taxonomy import category_impact, delete_category
 from src.paths import DASHBOARD, EXPORT_DIR, FINANCE_DB, INBOX, PENDING_UPLOADS, UI, ensure_dirs
 from src.periods import PRESETS, filter_posted
@@ -685,21 +685,25 @@ def get_reconciliation() -> list[dict]:
 
 
 @app.get("/api/categories/monthly")
-def get_categories_monthly() -> list[dict]:
+def get_categories_monthly(cardholder: str | None = Query(default=None)) -> list[dict]:
     ledger = pipeline.load_ledger()
     if ledger.empty:
         return []
-    spend = non_payment_frame(ledger)
+    scoped = _filter_cardholder(ledger, cardholder.strip() if cardholder and cardholder.strip() else None)
+    spend = non_payment_frame(scoped)
     if spend.empty:
         return []
+    if "subcategory" not in spend.columns:
+        spend["subcategory"] = ""
     frame = (
         spend.assign(
             month=lambda d: pd.to_datetime(d["posted_date"]).dt.strftime("%Y-%m"),
             category=lambda d: d["category"].fillna("Uncategorized"),
+            subcategory=lambda d: d["subcategory"].fillna("").astype(str).str.strip(),
         )
-        .groupby(["month", "category"], as_index=False)
+        .groupby(["month", "category", "subcategory"], as_index=False)
         .agg(total=("amount", "sum"), txn_count=("amount", "count"))
-        .sort_values(["month", "category"])
+        .sort_values(["month", "category", "subcategory"])
     )
     return _records(frame)
 

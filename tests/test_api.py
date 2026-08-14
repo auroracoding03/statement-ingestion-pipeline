@@ -1166,3 +1166,85 @@ def test_delete_transaction_removes_row(client: TestClient, workspace: dict):
 def test_delete_unknown_transaction_is_404(client: TestClient):
     missing = client.delete("/api/transactions/not-a-real-id")
     assert missing.status_code == 404
+
+
+def test_categories_monthly_splits_subcategory_and_cardholder(client: TestClient, workspace: dict):
+    ledger_path = workspace["root"] / "data" / "ledger.parquet"
+    ledger = pd.read_parquet(ledger_path)
+    extra = pd.DataFrame(
+        [
+            {
+                "txn_id": make_txn_id("amex", "2026-05-10", 400.0, "HOTEL DOWNTOWN"),
+                "card": "amex",
+                "posted_date": "2026-05-10",
+                "amount": 400.0,
+                "raw_description": "HOTEL DOWNTOWN",
+                "normalized_merchant": "HOTEL DOWNTOWN",
+                "canonical_merchant": None,
+                "merchant_source": "none",
+                "proposed_canonical": None,
+                "source_file": "amex/2026-05.csv",
+                "category": "Travel",
+                "subcategory": "Lodging",
+                "tags": [],
+                "classified_by": "manual",
+                "proposed_category": None,
+                "proposed_subcategory": None,
+                "cardholder": "Alex Example",
+            },
+            {
+                "txn_id": make_txn_id("amex", "2026-06-08", 200.0, "AIRLINE TICKET"),
+                "card": "amex",
+                "posted_date": "2026-06-08",
+                "amount": 200.0,
+                "raw_description": "AIRLINE TICKET",
+                "normalized_merchant": "AIRLINE TICKET",
+                "canonical_merchant": None,
+                "merchant_source": "none",
+                "proposed_canonical": None,
+                "source_file": "amex/2026-06.csv",
+                "category": "Travel",
+                "subcategory": "Transit",
+                "tags": [],
+                "classified_by": "manual",
+                "proposed_category": None,
+                "proposed_subcategory": None,
+                "cardholder": "Alex Example",
+            },
+            {
+                "txn_id": make_txn_id("amex", "2026-06-09", 80.0, "AIRBNB"),
+                "card": "amex",
+                "posted_date": "2026-06-09",
+                "amount": 80.0,
+                "raw_description": "AIRBNB",
+                "normalized_merchant": "AIRBNB",
+                "canonical_merchant": None,
+                "merchant_source": "none",
+                "proposed_canonical": None,
+                "source_file": "amex/2026-06.csv",
+                "category": "Travel",
+                "subcategory": "Lodging",
+                "tags": [],
+                "classified_by": "manual",
+                "proposed_category": None,
+                "proposed_subcategory": None,
+                "cardholder": "Sam Example",
+            },
+        ]
+    )
+    pd.concat([ledger, extra], ignore_index=True).to_parquet(ledger_path, index=False)
+
+    body = client.get("/api/categories/monthly").json()
+    travel = [row for row in body if row["category"] == "Travel"]
+    assert {(row["month"], row["subcategory"], round(row["total"], 2)) for row in travel} == {
+        ("2026-05", "Lodging", 400.0),
+        ("2026-06", "Transit", 200.0),
+        ("2026-06", "Lodging", 80.0),
+    }
+
+    alex = client.get("/api/categories/monthly", params={"cardholder": "Alex Example"}).json()
+    alex_travel = [row for row in alex if row["category"] == "Travel"]
+    assert {(row["month"], row["subcategory"], round(row["total"], 2)) for row in alex_travel} == {
+        ("2026-05", "Lodging", 400.0),
+        ("2026-06", "Transit", 200.0),
+    }

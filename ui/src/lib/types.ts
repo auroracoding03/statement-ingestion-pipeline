@@ -53,6 +53,7 @@ export interface Status {
 
 export interface RecurringRow {
   normalized_merchant: string;
+  canonical_merchant?: string | null;
   occurrences: number;
   avg_amount: number;
   std_amount: number;
@@ -60,6 +61,7 @@ export interface RecurringRow {
   is_recurring: boolean;
   category: string | null;
   subcategory: string | null;
+  months: number;
   last_seen?: string | null;
   last_amount?: number | null;
   prior_avg_amount?: number | null;
@@ -75,11 +77,13 @@ export interface ReconciliationRow {
   matched_merchant: string | null;
   matched_avg: number | null;
   last_seen: string | null;
+  last_amount?: number | null;
 }
 
 export interface CategoryMonthly {
   month: string;
   category: string;
+  subcategory?: string;
   total: number;
   txn_count: number;
 }

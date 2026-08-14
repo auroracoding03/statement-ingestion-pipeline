@@ -59,3 +59,17 @@ export function resolveClientPeriod(opts: {
   const start = `${asOf.slice(0, 4)}-01`;
   return { since: `${start}-01`, until: lastDayOfMonth(asOf), month: asOf };
 }
+
+export function enumerateMonths(since: string, until: string): string[] {
+  const start = since.slice(0, 7);
+  const end = until.slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(start) || !/^\d{4}-\d{2}$/.test(end) || start > end) return [];
+  const months: string[] = [];
+  let cursor = start;
+  while (cursor <= end) {
+    months.push(cursor);
+    cursor = shiftMonth(cursor, 1);
+    if (months.length > 120) break;
+  }
+  return months;
+}

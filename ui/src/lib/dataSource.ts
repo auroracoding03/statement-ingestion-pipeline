@@ -251,8 +251,13 @@ export const api = {
     return filterStaticTransactions(items, params);
   },
 
-  async categoriesMonthly(): Promise<CategoryMonthly[]> {
-    if (canWrite) return req<CategoryMonthly[]>("/api/categories/monthly");
+  async categoriesMonthly(params: { cardholder?: string } = {}): Promise<CategoryMonthly[]> {
+    if (canWrite) {
+      const qs = new URLSearchParams();
+      if (params.cardholder) qs.set("cardholder", params.cardholder);
+      const suffix = qs.toString() ? `?${qs}` : "";
+      return req<CategoryMonthly[]>(`/api/categories/monthly${suffix}`);
+    }
     return staticJSON<CategoryMonthly[]>("category_monthly", []);
   },
 

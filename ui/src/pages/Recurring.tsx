@@ -29,7 +29,10 @@ export function Recurring() {
   const [onlyRecurring, setOnlyRecurring] = useState(true);
 
   const rows = useMemo(() => {
-    const items = (recurring.data ?? []).filter((row) => !onlyRecurring || row.is_recurring);
+    const items = (recurring.data ?? []).filter((row) => {
+      if ((row.category ?? "").trim().toLowerCase() !== "subscriptions") return false;
+      return !onlyRecurring || row.is_recurring;
+    });
     return [...items].sort((left, right) => {
       const leftFlags = flagList(left.flags).length;
       const rightFlags = flagList(right.flags).length;
@@ -63,6 +66,7 @@ export function Recurring() {
                 <th className="num">Expected</th>
                 <th>Matched merchant</th>
                 <th className="num">Average</th>
+                <th className="num">Last price</th>
                 <th>Last seen</th>
               </tr>
             </thead>
@@ -85,6 +89,7 @@ export function Recurring() {
                   <td className="num">{money(row.expected_amount)}</td>
                   <td>{row.matched_merchant ?? "—"}</td>
                   <td className="num">{money(row.matched_avg)}</td>
+                  <td className="num">{money(row.last_amount)}</td>
                   <td>{shortDate(row.last_seen)}</td>
                 </tr>
               ))}
@@ -95,7 +100,7 @@ export function Recurring() {
         !recon.loading && <Empty>No expected bills configured in config/expected_recurring.yaml.</Empty>
       )}
 
-      <h2>Detected recurring merchants</h2>
+      <h2>Subscriptions</h2>
       <div className="toolbar">
         <label className="checkbox">
           <input
@@ -107,7 +112,7 @@ export function Recurring() {
         </label>
       </div>
 
-      {recurring.loading && <Loading what="recurring merchants" />}
+      {recurring.loading && <Loading what="subscriptions" />}
       {recurring.error && <ErrorNote error={recurring.error} />}
       {!recurring.loading && rows.length === 0 && (
         <Empty>Nothing detected yet. Run build after ingesting a few months of statements.</Empty>
@@ -120,35 +125,36 @@ export function Recurring() {
               <tr>
                 <th>Merchant</th>
                 <th>Flags</th>
-                <th>Recurring</th>
-                <th className="num">Occurrences</th>
-                <th className="num">Average</th>
-                <th className="num">Last</th>
+                <th className="num">Average spend</th>
+                <th className="num">Months</th>
+                <th className="num">Last price</th>
                 <th>Last seen</th>
                 <th>Category</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
+              {rows.map((row) => {
+                const merchant = row.canonical_merchant || row.normalized_merchant;
+                return (
                 <tr
-                  key={row.normalized_merchant}
+                  key={merchant}
                   className="clickable-row"
                   onClick={() => {
-                    window.location.hash = hashHref("/transactions", { merchant: row.normalized_merchant });
+                    window.location.hash = hashHref("/transactions", { merchant });
                   }}
                 >
-                  <td>{row.normalized_merchant}</td>
+                  <td>{merchant}</td>
                   <td>
                     <FlagPills row={row} />
                   </td>
-                  <td>{row.is_recurring ? "yes" : "no"}</td>
-                  <td className="num">{row.occurrences}</td>
                   <td className="num">{money(row.avg_amount)}</td>
+                  <td className="num">{row.months ?? 1}</td>
                   <td className="num">{money(row.last_amount)}</td>
                   <td>{shortDate(row.last_seen ?? null)}</td>
                   <td>{[row.category, row.subcategory].filter(Boolean).join(" / ") || "—"}</td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -165,8 +171,8 @@ function FlagPills({ row }: { row: RecurringRow }) {
       {flags.includes("price_hike") && (
         <span className="flag-pill">
           price hike
-          {row.prior_avg_amount != null && row.last_amount != null
-            ? ` ${money(row.prior_avg_amount)} → ${money(row.last_amount)}`
+          {row.avg_amount != null && row.last_amount != null
+            ? ` ${money(row.avg_amount)} → ${money(row.last_amount)}`
             : ""}
         </span>
       )}

@@ -1050,6 +1050,10 @@ code {
   width: 100%;
 }
 
+.overview-trend {
+  margin-top: 1.6rem;
+}
+
 @media (max-width: 960px) {
   .overview-charts,
   .overview-lists {
@@ -1361,6 +1365,20 @@ th.sortable.secondary {
   inset: 0;
   z-index: 40;
   background: rgba(28, 25, 22, 0.28);
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(28rem, 100%);
+  z-index: 41;
+  overflow: auto;
+  padding: 1.4rem;
+  background: var(--card);
+  border-left: 1px solid var(--line);
+  box-shadow: -12px 0 32px rgba(28, 25, 22, 0.12);
 }
 
 .drawer .review-actions {

@@ -43,6 +43,13 @@ def _runtime_roots(
     is_frozen = getattr(sys, "frozen", False) if frozen is None else frozen
     current_platform = sys.platform if platform is None else platform
     checkout = source_root or Path(__file__).resolve().parents[1]
+    env_home = os.environ.get("STATEMENT_PIPELINE_HOME")
+    if env_home:
+        home = Path(env_home).expanduser()
+        if is_frozen:
+            assets = bundle_root or Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+            return assets, home
+        return checkout, home
 
     if not is_frozen:
         return checkout, checkout

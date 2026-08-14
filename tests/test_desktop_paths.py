@@ -27,6 +27,15 @@ def test_source_checkout_keeps_existing_layout(tmp_path: Path) -> None:
     assert data == tmp_path
 
 
+def test_statement_pipeline_home_overrides_user_data(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / "household"
+    monkeypatch.setenv("STATEMENT_PIPELINE_HOME", str(home))
+    assets, data = _runtime_roots(frozen=False, source_root=tmp_path / "checkout")
+
+    assert assets == tmp_path / "checkout"
+    assert data == home
+
+
 def test_seed_default_config_copies_only_missing_files(tmp_path: Path) -> None:
     defaults = tmp_path / "defaults"
     defaults.mkdir()
