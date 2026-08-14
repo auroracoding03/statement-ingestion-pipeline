@@ -517,6 +517,30 @@ h2 {
   background: var(--card);
 }
 
+.merchants-table .alias-cell {
+  max-width: 22rem;
+}
+
+.merchants-table .alias-cell .tag {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.merchants-table .actions-cell {
+  position: sticky;
+  right: 0;
+  background: var(--card);
+  white-space: nowrap;
+  z-index: 1;
+  box-shadow: -8px 0 8px -8px rgba(36, 32, 28, 0.18);
+}
+
+.merchants-table thead .actions-cell {
+  z-index: 2;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;

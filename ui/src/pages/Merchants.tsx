@@ -226,15 +226,15 @@ export function Merchants() {
 
       {curated.length > 0 && (
         <div className="table-wrap">
-          <table>
+          <table className="merchants-table">
             <thead>
               <tr>
                 <th>Canonical</th>
                 <th>Default category</th>
-                <th>Aliases</th>
+                <th className="alias-cell">Aliases</th>
                 <th className="num">Transactions</th>
                 <th className="num">Total</th>
-                {canWrite && <th />}
+                {canWrite && <th className="actions-cell">Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -244,7 +244,7 @@ export function Merchants() {
                     <strong>{merchant.canonical}</strong>
                   </td>
                   <td>{[merchant.category, merchant.subcategory].filter(Boolean).join(" / ") || "—"}</td>
-                  <td>
+                  <td className="alias-cell">
                     {merchant.aliases.length === 0 && <span className="muted">—</span>}
                     {merchant.aliases.map((alias, index) => (
                       <code key={index} className="tag">
@@ -255,7 +255,7 @@ export function Merchants() {
                   <td className="num">{merchant.txn_count}</td>
                   <td className="num">{money(merchant.total_amount)}</td>
                   {canWrite && (
-                    <td>
+                    <td className="actions-cell">
                       <div className="toolbar" style={{ margin: 0, gap: "0.35rem" }}>
                         <button
                           className="btn small"
