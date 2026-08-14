@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { Empty, ErrorNote, Loading, PageHeader } from "../components/ui";
 import { api } from "../lib/dataSource";
+import { sortedLabels } from "../lib/sort";
 import { useAsync } from "../lib/useAsync";
 import type { Rule, TagKind } from "../lib/types";
 
@@ -45,14 +46,15 @@ export function Rules() {
   const [deleting, setDeleting] = useState(false);
 
   const categories = data?.categories ?? [];
+  const categoryOptions = useMemo(() => sortedLabels(categories), [categories]);
   const subcategories = data?.subcategories ?? {};
   const tags = tagsState.data?.items ?? [];
   const formSubs = useMemo(
-    () => (form.category ? subcategories[form.category] ?? [] : []),
+    () => sortedLabels(form.category ? subcategories[form.category] ?? [] : []),
     [form.category, subcategories],
   );
   const editSubs = useMemo(
-    () => (editDraft.category ? subcategories[editDraft.category] ?? [] : []),
+    () => sortedLabels(editDraft.category ? subcategories[editDraft.category] ?? [] : []),
     [editDraft.category, subcategories],
   );
   const tagsByKind = useMemo(() => {
@@ -273,7 +275,7 @@ export function Rules() {
             onChange={(e) => setNewSubcategory({ ...newSubcategory, category: e.target.value })}
           >
             <option value="">Primary</option>
-            {categories.map((category) => (
+            {categoryOptions.map((category) => (
               <option key={category} value={category}>
                 {category}
               </option>
@@ -368,7 +370,7 @@ export function Rules() {
             onChange={(e) => setForm({ ...form, category: e.target.value, subcategory: "" })}
           >
             <option value="">Category</option>
-            {categories.map((category) => (
+            {categoryOptions.map((category) => (
               <option key={category} value={category}>
                 {category}
               </option>
@@ -440,7 +442,7 @@ export function Rules() {
                             disabled={savingEdit}
                           >
                             <option value="">Category</option>
-                            {categories.map((category) => (
+                            {categoryOptions.map((category) => (
                               <option key={category} value={category}>
                                 {category}
                               </option>
@@ -575,17 +577,21 @@ function CategoryDeleteModal({
   onClose: () => void;
 }) {
   const label = vocabLabel(target.category, target.subcategory);
-  const reassignCategories = categories.filter((category) => {
-    if (category === "Uncategorized") return false;
-    if (!target.subcategory && category === target.category) return false;
-    return true;
-  });
-  const reassignSubs = (reassignCategory ? subcategories[reassignCategory] ?? [] : []).filter((sub) => {
-    if (target.subcategory && reassignCategory === target.category && sub === target.subcategory) {
-      return false;
-    }
-    return true;
-  });
+  const reassignCategories = sortedLabels(
+    categories.filter((category) => {
+      if (category === "Uncategorized") return false;
+      if (!target.subcategory && category === target.category) return false;
+      return true;
+    }),
+  );
+  const reassignSubs = sortedLabels(
+    (reassignCategory ? subcategories[reassignCategory] ?? [] : []).filter((sub) => {
+      if (target.subcategory && reassignCategory === target.category && sub === target.subcategory) {
+        return false;
+      }
+      return true;
+    }),
+  );
   const samePair =
     Boolean(target.subcategory) &&
     reassignCategory === target.category &&

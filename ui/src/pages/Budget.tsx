@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { Empty, ErrorNote, Loading, PageHeader } from "../components/ui";
 import { api } from "../lib/dataSource";
+import { sortedLabels } from "../lib/sort";
 import type { BudgetEnvelope } from "../lib/types";
 import { useAsync } from "../lib/useAsync";
 
@@ -296,7 +297,7 @@ function CategoryBlock({
               aria-label={`Existing ${env.category} subcategory`}
             >
               <option value="">Existing subcategory</option>
-              {(env.available_subcategories ?? []).map((name) => (
+              {(sortedLabels(env.available_subcategories ?? [])).map((name) => (
                 <option key={name} value={name}>
                   {name}
                 </option>

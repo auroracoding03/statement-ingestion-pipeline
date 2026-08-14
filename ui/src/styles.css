@@ -157,8 +157,40 @@ a {
   font-size: 0.78rem;
 }
 
+.icon-button {
+  width: 2.4rem;
+  height: 2.4rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ece8e1;
+}
+
+.icon-button:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.icon-button svg {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  display: block;
+}
+
 .update-message {
   max-width: 22rem;
+  margin: 0.85rem 0 0;
+}
+
+.settings-modal .review-fields {
+  margin: 1rem 0 0;
+}
+
+.settings-modal .review-actions {
+  margin-top: 1.1rem;
 }
 
 /* --------------------------------------------------------------- ingestion */
@@ -526,6 +558,9 @@ h2 {
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
+  border-radius: calc(var(--radius) * 2);
+  padding: 0.28rem 0.5rem;
+  line-height: 1.35;
 }
 
 .merchants-table .actions-cell {
@@ -872,16 +907,57 @@ code {
 
 .cluster-form {
   display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.85rem;
   margin-top: 0.9rem;
   padding-top: 0.9rem;
   border-top: 1px solid var(--line-soft);
 }
 
-.cluster-form input[type="text"] {
+.cluster-choice h3 {
+  margin: 0 0 0.45rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.cluster-choice-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: flex-end;
+}
+
+.cluster-choice-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.82rem;
+  color: var(--muted);
   min-width: 12rem;
+  flex: 1;
+}
+
+.cluster-form input[type="text"],
+.cluster-form input[type="search"],
+.cluster-form select {
+  min-width: 12rem;
+}
+
+.cluster-or {
+  margin: 0;
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.cluster-form > .btn {
+  align-self: flex-start;
 }
 
 .chart-wrap {

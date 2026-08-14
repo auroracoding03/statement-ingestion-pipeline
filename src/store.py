@@ -58,6 +58,24 @@ def write_ingest_manifest(frame: pd.DataFrame, path: Path = INGEST_MANIFEST) -> 
     return atomic_write_parquet(history, path)
 
 
+def last_statement_upload_at(path: Path = INGEST_MANIFEST) -> str | None:
+    """Latest successful statement ingest time, or None when none have been processed."""
+    if not path.exists():
+        return None
+    try:
+        frame = pd.read_parquet(path, columns=["processed_at", "status"])
+    except Exception:  # noqa: BLE001 — settings should still open if the manifest is unreadable
+        return None
+    if frame.empty or "processed_at" not in frame.columns:
+        return None
+    if "status" in frame.columns:
+        frame = frame[frame["status"].isin(["parsed", "duplicate_document"])]
+    stamps = pd.to_datetime(frame["processed_at"], utc=True, errors="coerce").dropna()
+    if stamps.empty:
+        return None
+    return stamps.max().isoformat()
+
+
 def write_transaction_sources(
     frame: pd.DataFrame, path: Path = TRANSACTION_SOURCES_PARQUET
 ) -> Path:

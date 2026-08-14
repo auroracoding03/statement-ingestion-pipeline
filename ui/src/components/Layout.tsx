@@ -1,7 +1,9 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Settings } from "lucide-react";
 
 import { api, canWrite } from "../lib/dataSource";
 import { hashHref, useHashPath } from "../lib/router";
+import { useAsync } from "../lib/useAsync";
 
 const GROUPS = [
   {
@@ -38,32 +40,7 @@ const GROUPS = [
 
 export function Layout({ children }: { children: ReactNode }) {
   const path = useHashPath();
-  const [updateMessage, setUpdateMessage] = useState("");
-  const [checkingUpdate, setCheckingUpdate] = useState(false);
-
-  async function checkForUpdates() {
-    setCheckingUpdate(true);
-    try {
-      const update = await api.updates();
-      if (!update.update_available) {
-        setUpdateMessage(update.message);
-        return;
-      }
-      const confirmed = window.confirm(
-        `Version ${update.latest_version} is ready. Download and install it now? The app will restart.`,
-      );
-      if (!confirmed) {
-        setUpdateMessage(`Version ${update.latest_version} is ready to install.`);
-        return;
-      }
-      const result = await api.installUpdate();
-      setUpdateMessage(result.message);
-    } catch (error) {
-      setUpdateMessage(error instanceof Error ? error.message : "Could not check for updates.");
-    } finally {
-      setCheckingUpdate(false);
-    }
-  }
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const groups = GROUPS.map((group) => ({
     ...group,
@@ -98,16 +75,106 @@ export function Layout({ children }: { children: ReactNode }) {
         </nav>
         {canWrite && (
           <div className="update-control">
-            <button className="btn subtle small" onClick={checkForUpdates} disabled={checkingUpdate}>
-              {checkingUpdate ? "Checking…" : "Check for updates"}
+            <button
+              className="btn icon-button"
+              type="button"
+              aria-label="Settings"
+              onClick={() => setSettingsOpen(true)}
+            >
+              <Settings size={22} strokeWidth={2} absoluteStrokeWidth aria-hidden="true" />
             </button>
-            {updateMessage && <span className="update-message">{updateMessage}</span>}
           </div>
         )}
       </header>
-      <main>
-        {children}
-      </main>
+      <main>{children}</main>
+      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+    </div>
+  );
+}
+
+function formatUploadStamp(value: string | null | undefined): string {
+  if (!value) return "No statements uploaded yet";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+function SettingsModal({ onClose }: { onClose: () => void }) {
+  const status = useAsync(() => api.status(), []);
+  const [armed, setArmed] = useState(false);
+  const [updateMessage, setUpdateMessage] = useState("");
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setArmed(true), 0);
+    return () => window.clearTimeout(id);
+  }, []);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  async function checkForUpdates() {
+    setCheckingUpdate(true);
+    try {
+      const update = await api.updates();
+      if (!update.update_available) {
+        setUpdateMessage(update.message);
+        return;
+      }
+      const confirmed = window.confirm(
+        `Version ${update.latest_version} is ready. Download and install it now? The app will restart.`,
+      );
+      if (!confirmed) {
+        setUpdateMessage(`Version ${update.latest_version} is ready to install.`);
+        return;
+      }
+      const result = await api.installUpdate();
+      setUpdateMessage(result.message);
+    } catch (error) {
+      setUpdateMessage(error instanceof Error ? error.message : "Could not check for updates.");
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }
+
+  return (
+    <div
+      className={`modal-backdrop${armed ? "" : " is-pending"}`}
+      onClick={(event) => {
+        if (!armed || event.target !== event.currentTarget) return;
+        onClose();
+      }}
+      role="presentation"
+    >
+      <div
+        className="upload-modal settings-modal"
+        role="dialog"
+        aria-labelledby="settings-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h2 id="settings-title">Settings</h2>
+        <dl className="review-fields">
+          <dt>Last statement upload</dt>
+          <dd>{status.loading ? "Loading…" : formatUploadStamp(status.data?.last_statement_upload_at)}</dd>
+          <dt>Application version</dt>
+          <dd>{status.loading ? "Loading…" : status.data?.version || "Unknown"}</dd>
+        </dl>
+        {status.error && <p className="pipeline-msg bad">{status.error}</p>}
+        {updateMessage && <p className="update-message">{updateMessage}</p>}
+        <div className="review-actions">
+          <button className="btn" type="button" onClick={() => void checkForUpdates()} disabled={checkingUpdate}>
+            {checkingUpdate ? "Checking…" : "Check for updates"}
+          </button>
+          <button className="btn subtle" type="button" onClick={onClose} disabled={checkingUpdate}>
+            Close
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

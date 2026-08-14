@@ -73,6 +73,7 @@ from src.paths import DASHBOARD, EXPORT_DIR, FINANCE_DB, INBOX, PENDING_UPLOADS,
 from src.periods import PRESETS, filter_posted
 from src.review import cluster_open_review, needs_review, rule_from_row
 from src.statement_identity import detect_statement_identity
+from src.store import last_statement_upload_at
 from src.tags import create_tag, delete_tag, list_tags, normalize_tag_ids
 from src.updater import UpdateError, check_for_update, install_latest_update
 from src.upload_context import (
@@ -170,6 +171,8 @@ def get_status() -> dict:
         "duckdb": FINANCE_DB.exists(),
         "exports": EXPORT_DIR.exists(),
         "ollama_available": ollama_available(),
+        "version": APP_VERSION,
+        "last_statement_upload_at": last_statement_upload_at(),
     }
 
 

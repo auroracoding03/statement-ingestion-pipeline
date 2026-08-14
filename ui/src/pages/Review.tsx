@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Empty, ErrorNote, Loading, PageHeader } from "../components/ui";
 import { api } from "../lib/dataSource";
 import { money, shortDate } from "../lib/format";
+import { sortedLabels } from "../lib/sort";
 import { useAsync } from "../lib/useAsync";
 import type { ContextTag, ReviewCluster, TagKind, Transaction } from "../lib/types";
 
@@ -340,15 +341,15 @@ export function Review() {
               aria-label="Subcategory"
             >
               <option value="">Subcategory (optional)</option>
-              {categories.map((category) => {
-                const options = [...(subcategories[category] ?? [])];
-                if (
-                  proposal === category &&
+              {sortedLabels(categories).map((category) => {
+                const options = sortedLabels([
+                  ...(subcategories[category] ?? []),
+                  ...(proposal === category &&
                   current.proposed_subcategory &&
-                  !options.includes(current.proposed_subcategory)
-                ) {
-                  options.push(current.proposed_subcategory);
-                }
+                  !(subcategories[category] ?? []).includes(current.proposed_subcategory)
+                    ? [current.proposed_subcategory]
+                    : []),
+                ]);
                 if (options.length === 0) return null;
                 return (
                   <optgroup key={category} label={category}>

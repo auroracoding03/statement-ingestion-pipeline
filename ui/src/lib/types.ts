@@ -47,6 +47,8 @@ export interface Status {
   duckdb: boolean;
   exports: boolean;
   ollama_available: boolean;
+  version: string;
+  last_statement_upload_at: string | null;
 }
 
 export interface RecurringRow {

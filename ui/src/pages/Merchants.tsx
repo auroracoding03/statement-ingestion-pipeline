@@ -4,6 +4,7 @@ import { CategoryFields } from "../components/CategoryFields";
 import { Empty, ErrorNote, Loading, PageHeader } from "../components/ui";
 import { api, canWrite } from "../lib/dataSource";
 import { money } from "../lib/format";
+import { compareLabel } from "../lib/sort";
 import { useAsync } from "../lib/useAsync";
 import type { Merchant, MerchantOrphan, UnknownCluster } from "../lib/types";
 
@@ -36,9 +37,28 @@ function clusterHaystack(cluster: UnknownCluster): string {
     .toLowerCase();
 }
 
+type MerchantSortKey = "canonical" | "category" | "txn_count" | "total_amount";
+
 function merchantHaystack(merchant: Merchant): string {
   const aliases = merchant.aliases.map((alias) => alias.regex ?? alias.exact ?? "").join(" ");
   return `${merchant.canonical} ${merchant.category ?? ""} ${merchant.subcategory ?? ""} ${aliases}`.toLowerCase();
+}
+
+function categoryLabel(merchant: Merchant): string {
+  return [merchant.category, merchant.subcategory].filter(Boolean).join(" / ");
+}
+
+function compareMerchants(a: Merchant, b: Merchant, key: MerchantSortKey, order: "asc" | "desc"): number {
+  const dir = order === "asc" ? 1 : -1;
+  if (key === "canonical") {
+    return a.canonical.localeCompare(b.canonical, undefined, { sensitivity: "base" }) * dir;
+  }
+  if (key === "category") {
+    return categoryLabel(a).localeCompare(categoryLabel(b), undefined, { sensitivity: "base" }) * dir;
+  }
+  const left = key === "txn_count" ? a.txn_count : a.total_amount;
+  const right = key === "txn_count" ? b.txn_count : b.total_amount;
+  return (left - right) * dir;
 }
 
 export function Merchants() {
@@ -54,6 +74,8 @@ export function Merchants() {
   const [merging, setMerging] = useState<{ canonical: string; txn_count: number; total_amount: number } | null>(
     null,
   );
+  const [sort, setSort] = useState<MerchantSortKey>("canonical");
+  const [order, setOrder] = useState<"asc" | "desc">("asc");
   const categories = rules.data?.categories ?? [];
   const subcategories = rules.data?.subcategories ?? {};
   const needle = query.trim().toLowerCase();
@@ -66,9 +88,11 @@ export function Merchants() {
 
   const curated = useMemo(() => {
     const items = merchants.data?.items ?? [];
-    if (!needle) return items;
-    return items.filter((merchant) => merchantHaystack(merchant).includes(needle));
-  }, [merchants.data?.items, needle]);
+    const filtered = needle
+      ? items.filter((merchant) => merchantHaystack(merchant).includes(needle))
+      : items;
+    return [...filtered].sort((left, right) => compareMerchants(left, right, sort, order));
+  }, [merchants.data?.items, needle, order, sort]);
 
   const leftover = useMemo((): MerchantOrphan[] => {
     const items = merchants.data?.orphans ?? [];
@@ -85,6 +109,15 @@ export function Merchants() {
     const next = !hideUnresolved;
     setHideUnresolved(next);
     writeHidden(next);
+  }
+
+  function toggleSort(key: MerchantSortKey) {
+    if (sort === key) {
+      setOrder(order === "asc" ? "desc" : "asc");
+      return;
+    }
+    setSort(key);
+    setOrder(key === "txn_count" || key === "total_amount" ? "desc" : "asc");
   }
 
   return (
@@ -158,6 +191,7 @@ export function Merchants() {
               <ClusterCard
                 key={cluster.cluster_id}
                 cluster={cluster}
+                merchants={merchants.data?.items ?? []}
                 categories={categories}
                 subcategories={subcategories}
                 onSaved={refreshAll}
@@ -229,11 +263,33 @@ export function Merchants() {
           <table className="merchants-table">
             <thead>
               <tr>
-                <th>Canonical</th>
-                <th>Default category</th>
+                <SortHeader
+                  label="Canonical Name"
+                  active={sort === "canonical"}
+                  order={order}
+                  onClick={() => toggleSort("canonical")}
+                />
+                <SortHeader
+                  label="Default Category"
+                  active={sort === "category"}
+                  order={order}
+                  onClick={() => toggleSort("category")}
+                />
                 <th className="alias-cell">Aliases</th>
-                <th className="num">Transactions</th>
-                <th className="num">Total</th>
+                <SortHeader
+                  label="Transactions"
+                  active={sort === "txn_count"}
+                  order={order}
+                  onClick={() => toggleSort("txn_count")}
+                  numeric
+                />
+                <SortHeader
+                  label="Total"
+                  active={sort === "total_amount"}
+                  order={order}
+                  onClick={() => toggleSort("total_amount")}
+                  numeric
+                />
                 {canWrite && <th className="actions-cell">Actions</th>}
               </tr>
             </thead>
@@ -243,7 +299,7 @@ export function Merchants() {
                   <td>
                     <strong>{merchant.canonical}</strong>
                   </td>
-                  <td>{[merchant.category, merchant.subcategory].filter(Boolean).join(" / ") || "—"}</td>
+                  <td>{categoryLabel(merchant) || "—"}</td>
                   <td className="alias-cell">
                     {merchant.aliases.length === 0 && <span className="muted">—</span>}
                     {merchant.aliases.map((alias, index) => (
@@ -334,14 +390,76 @@ export function Merchants() {
   );
 }
 
+function MerchantTargetPicker({
+  targets,
+  value,
+  onChange,
+  selectLabel,
+  includeEmpty = false,
+  emptyLabel = "Select a curated merchant",
+}: {
+  targets: Merchant[];
+  value: string;
+  onChange: (canonical: string) => void;
+  selectLabel: string;
+  includeEmpty?: boolean;
+  emptyLabel?: string;
+}) {
+  const [targetQuery, setTargetQuery] = useState("");
+  const filteredTargets = useMemo(() => {
+    const needle = targetQuery.trim().toLowerCase();
+    const matched = needle
+      ? targets.filter((merchant) => merchantHaystack(merchant).includes(needle))
+      : targets;
+    return [...matched].sort((left, right) => compareLabel(left.canonical, right.canonical));
+  }, [targetQuery, targets]);
+
+  return (
+    <>
+      {targets.length > 8 && (
+        <label>
+          Find target
+          <input
+            type="search"
+            value={targetQuery}
+            onChange={(event) => setTargetQuery(event.target.value)}
+            placeholder="Search curated merchants…"
+            aria-label="Search curated merchants"
+          />
+        </label>
+      )}
+      <label>
+        {selectLabel}
+        <select
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          disabled={filteredTargets.length === 0 && !includeEmpty}
+          aria-label={selectLabel}
+        >
+          {includeEmpty && <option value="">{emptyLabel}</option>}
+          {filteredTargets.length === 0 && !includeEmpty && <option value="">No matching merchants</option>}
+          {filteredTargets.map((merchant) => (
+            <option key={merchant.canonical} value={merchant.canonical}>
+              {merchant.canonical}
+              {merchant.category ? ` — ${merchant.category}` : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+    </>
+  );
+}
+
 function ClusterCard({
   cluster,
+  merchants,
   categories,
   subcategories,
   onSaved,
   onError,
 }: {
   cluster: UnknownCluster;
+  merchants: Merchant[];
   categories: string[];
   subcategories: Record<string, string[]>;
   onSaved: () => void;
@@ -352,24 +470,43 @@ function ClusterCard({
   );
   const [category, setCategory] = useState("");
   const [subcategory, setSubcategory] = useState("");
+  const [targetName, setTargetName] = useState("");
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   async function save() {
-    if (!canonical.trim()) return;
+    const creating = Boolean(canonical.trim());
+    const appending = Boolean(targetName);
+    if (creating && appending) {
+      setSaveError("Error: Please choose whether to append OR create a new merchant.");
+      return;
+    }
+    if (!creating && !appending) return;
     setSaving(true);
+    setSaveError(null);
     try {
-      const cleanedCategory = category.trim() || null;
-      const cleanedSub = cleanedCategory && subcategory.trim() ? subcategory.trim() : null;
-      await api.saveMerchant({
-        canonical: canonical.trim(),
-        members: cluster.members,
-        category: cleanedCategory,
-        subcategory: cleanedSub,
-        restamp: true,
-      });
+      if (appending) {
+        await api.saveMerchant({
+          canonical: targetName,
+          members: cluster.members,
+          restamp: true,
+        });
+      } else {
+        const cleanedCategory = category.trim() || null;
+        const cleanedSub = cleanedCategory && subcategory.trim() ? subcategory.trim() : null;
+        await api.saveMerchant({
+          canonical: canonical.trim(),
+          members: cluster.members,
+          category: cleanedCategory,
+          subcategory: cleanedSub,
+          restamp: true,
+        });
+      }
       onSaved();
     } catch (err) {
-      onError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setSaveError(message);
+      onError(message);
     } finally {
       setSaving(false);
     }
@@ -399,30 +536,54 @@ function ClusterCard({
       )}
 
       <div className="cluster-form">
-        <input
-          type="text"
-          value={canonical}
-          onChange={(e) => setCanonical(e.target.value)}
-          placeholder="Canonical brand name"
-          aria-label="Canonical brand name"
-        />
-        <CategoryFields
-          categories={categories}
-          subcategories={subcategories}
-          category={category}
-          subcategory={subcategory}
-          categoryLabel="Default category (optional)"
-          subcategoryLabel="Subcategory (optional)"
-          onCategoryChange={(nextCategory, nextSub) => {
-            setCategory(nextCategory);
-            setSubcategory(nextSub);
-          }}
-          onPairChange={(nextCategory, nextSub) => {
-            setCategory(nextCategory);
-            setSubcategory(nextSub);
-          }}
-        />
-        <button className="btn" onClick={save} disabled={saving || !canonical.trim()}>
+        <div className="cluster-choice">
+          <h3>Create a new merchant</h3>
+          <div className="cluster-choice-fields">
+            <input
+              type="text"
+              value={canonical}
+              onChange={(e) => setCanonical(e.target.value)}
+              placeholder="Canonical brand name"
+              aria-label="Canonical brand name"
+            />
+            <CategoryFields
+              categories={categories}
+              subcategories={subcategories}
+              category={category}
+              subcategory={subcategory}
+              categoryLabel="Default category (optional)"
+              subcategoryLabel="Subcategory (optional)"
+              onCategoryChange={(nextCategory, nextSub) => {
+                setCategory(nextCategory);
+                setSubcategory(nextSub);
+              }}
+              onPairChange={(nextCategory, nextSub) => {
+                setCategory(nextCategory);
+                setSubcategory(nextSub);
+              }}
+            />
+          </div>
+        </div>
+        <p className="cluster-or">or</p>
+        <div className="cluster-choice">
+          <h3>Add to an existing merchant</h3>
+          <div className="cluster-choice-fields">
+            <MerchantTargetPicker
+              targets={merchants}
+              value={targetName}
+              onChange={setTargetName}
+              selectLabel="Existing merchant"
+              includeEmpty
+            />
+          </div>
+        </div>
+        {saveError && <ErrorNote error={saveError} />}
+        <button
+          className="btn"
+          type="button"
+          onClick={() => void save()}
+          disabled={saving || (!canonical.trim() && !targetName)}
+        >
           {saving ? "Saving…" : "Confirm merchant"}
         </button>
       </div>
@@ -621,8 +782,10 @@ function MergeModal({
 
   const filteredTargets = useMemo(() => {
     const needle = targetQuery.trim().toLowerCase();
-    if (!needle) return targets;
-    return targets.filter((merchant) => merchantHaystack(merchant).includes(needle));
+    const matched = needle
+      ? targets.filter((merchant) => merchantHaystack(merchant).includes(needle))
+      : targets;
+    return [...matched].sort((left, right) => compareLabel(left.canonical, right.canonical));
   }, [targetQuery, targets]);
 
   useEffect(() => {
@@ -738,6 +901,29 @@ function MergeModal({
         </div>
       </div>
     </div>
+  );
+}
+
+function SortHeader({
+  label,
+  active,
+  order,
+  onClick,
+  numeric,
+}: {
+  label: string;
+  active: boolean;
+  order: "asc" | "desc";
+  onClick: () => void;
+  numeric?: boolean;
+}) {
+  return (
+    <th className={`sortable${numeric ? " num" : ""}${active ? " active" : ""}`}>
+      <button type="button" onClick={onClick}>
+        {label}
+        {active ? (order === "asc" ? " ▲" : " ▼") : ""}
+      </button>
+    </th>
   );
 }
 

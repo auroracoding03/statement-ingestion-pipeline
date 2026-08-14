@@ -181,6 +181,8 @@ def test_status_reports_counts(client: TestClient):
     assert body["ledger_exists"] is True
     assert body["counts"]["total"] == 2
     assert body["cardholders"] == []
+    assert body["version"]
+    assert "last_statement_upload_at" in body
 
 
 def test_overview_month_summarizes_latest_month(client: TestClient):

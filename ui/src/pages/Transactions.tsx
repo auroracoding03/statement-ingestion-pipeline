@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Empty, ErrorNote, Loading, MerchantCell, PageHeader } from "../components/ui";
 import { api, canWrite } from "../lib/dataSource";
 import { cashflow, shortDate } from "../lib/format";
+import { sortedLabels } from "../lib/sort";
 import { replaceHash, useHashLocation } from "../lib/router";
 import type { Transaction } from "../lib/types";
 import { useAsync } from "../lib/useAsync";
@@ -124,8 +125,8 @@ export function Transactions() {
   const categories = rulesState.data?.categories ?? [];
   const subcategoryOptions = useMemo(() => {
     const fromRules = category ? rulesState.data?.subcategories?.[category] ?? [] : [];
-    if (subcategory && !fromRules.includes(subcategory)) return [...fromRules, subcategory];
-    return fromRules;
+    const options = subcategory && !fromRules.includes(subcategory) ? [...fromRules, subcategory] : fromRules;
+    return sortedLabels(options);
   }, [category, rulesState.data?.subcategories, subcategory]);
   const selected = items.find((row) => row.txn_id === selectedId) ?? null;
   const facets = useMemo(() => {
@@ -135,7 +136,7 @@ export function Transactions() {
       cards.add(txn.card);
       cats.add(txn.category ?? "Uncategorized");
     }
-    return { cards: [...cards].sort(), categories: [...cats].sort() };
+    return { cards: sortedLabels(cards), categories: sortedLabels(cats) };
   }, [items]);
 
   const tagLabel = useMemo(() => {
@@ -255,7 +256,7 @@ export function Transactions() {
           <span className="muted">{picked.size} selected</span>
           <select value={bulkCategory} onChange={(event) => setBulkCategory(event.target.value)}>
             <option value="">Set category…</option>
-            {categories.map((name) => (
+            {sortedLabels(categories).map((name) => (
               <option key={name} value={name}>
                 {name}
               </option>

@@ -15,6 +15,7 @@ import { api } from "../lib/dataSource";
 import { compactMoney, money } from "../lib/format";
 import { monthsInRange, resolveClientPeriod } from "../lib/period";
 import { hashHref } from "../lib/router";
+import { sortedLabels } from "../lib/sort";
 import { useAsync } from "../lib/useAsync";
 
 export function Categories() {
@@ -38,7 +39,7 @@ export function Categories() {
   );
 
   const categories = useMemo(
-    () => [...new Set(scoped.map((row) => row.category))].sort(),
+    () => sortedLabels(new Set(scoped.map((row) => row.category))),
     [scoped],
   );
 

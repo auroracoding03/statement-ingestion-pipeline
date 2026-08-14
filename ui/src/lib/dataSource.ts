@@ -226,6 +226,8 @@ export const api = {
       duckdb: false,
       exports: true,
       ollama_available: false,
+      version: "",
+      last_statement_upload_at: null,
     };
   },
 

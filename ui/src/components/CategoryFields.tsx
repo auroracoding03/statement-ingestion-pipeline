@@ -1,5 +1,9 @@
 /** Linked category + subcategory selects. Choosing a subcategory sets its parent category. */
 
+import { useMemo } from "react";
+
+import { sortedLabels } from "../lib/sort";
+
 const SEP = "::";
 
 export function encodeSubcategory(category: string, subcategory: string): string {
@@ -35,7 +39,10 @@ export function CategoryFields({
   requiredCategory?: boolean;
 }) {
   const encoded = category && subcategory ? encodeSubcategory(category, subcategory) : "";
-  const primaries = categories.filter((entry) => entry && entry !== "Uncategorized");
+  const primaries = useMemo(
+    () => sortedLabels(categories.filter((entry) => entry && entry !== "Uncategorized")),
+    [categories],
+  );
 
   return (
     <>
@@ -71,7 +78,7 @@ export function CategoryFields({
       >
         <option value="">{subcategoryLabel}</option>
         {primaries.map((primary) => {
-          const options = subcategories[primary] ?? [];
+          const options = sortedLabels(subcategories[primary] ?? []);
           if (options.length === 0) return null;
           return (
             <optgroup key={primary} label={primary}>
