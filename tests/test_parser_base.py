@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from config.parsers.base import parse_month_day, resolve_cycle_date
+from config.parsers.base import finalize, parse_month_day, resolve_cycle_date
 
 
 def test_parse_month_day_does_not_use_year_1900():
@@ -33,3 +33,31 @@ def test_resolve_cycle_date_skips_leap_day_outside_non_leap_cycle():
 
 def test_resolve_cycle_date_skips_far_outside_period():
     assert resolve_cycle_date(10, 1, date(2024, 11, 8), date(2024, 12, 8)) is None
+
+
+def test_finalize_fills_blank_cardholder_from_metadata():
+    frame = finalize(
+        [
+            {"posted_date": "2026-01-01", "amount": 10.0, "raw_description": "Coffee", "cardholder": None},
+            {"posted_date": "2026-01-02", "amount": 5.0, "raw_description": "Uber", "cardholder": "Alex Example"},
+            {"posted_date": "2026-01-03", "amount": 7.0, "raw_description": "Lyft", "cardholder": "  "},
+        ],
+        card="amex-gold",
+        source_file="amex.csv",
+        metadata={
+            "card_issuer": "American Express",
+            "card_product": "Gold",
+            "cardholder": "Sam Example",
+        },
+    )
+    assert frame["cardholder"].tolist() == ["Sam Example", "Alex Example", "Sam Example"]
+
+
+def test_finalize_copies_missing_cardholder_column_from_metadata():
+    frame = finalize(
+        [{"posted_date": "2026-01-01", "amount": 10.0, "raw_description": "Coffee"}],
+        card="chase",
+        source_file="chase.csv",
+        metadata={"cardholder": "Alex Example"},
+    )
+    assert frame["cardholder"].tolist() == ["Alex Example"]

@@ -166,6 +166,20 @@ def append_card_product(
         return list_card_products(target)
 
 
+def normalize_cardholder(value: str | None) -> str:
+    """Trim a cardholder name. Reject blanks and the Unassigned sentinel."""
+    if value is None:
+        raise ValueError("Cardholder is required")
+    clean = " ".join(str(value).split())
+    if not clean:
+        raise ValueError("Cardholder is required")
+    if len(clean) > 80:
+        raise ValueError("Cardholder is too long")
+    if clean.casefold() == "unassigned":
+        raise ValueError("Cardholder cannot be Unassigned")
+    return clean
+
+
 def normalize_product(issuer: str | None, value: str | None, *, path: Path | None = None) -> str | None:
     """Trim a product name and enforce the issuer vocabulary when configured."""
     if value is None:
@@ -208,8 +222,16 @@ def sidecar_path(statement: Path) -> Path:
     return statement.with_name(f".{statement.name}.upload.json")
 
 
-def write_upload_context(statement: Path, *, issuer: str, product: str | None) -> None:
-    context = {"card_issuer": issuer, "card_product": product}
+def write_upload_context(
+    statement: Path,
+    *,
+    issuer: str,
+    product: str | None,
+    cardholder: str | None = None,
+) -> None:
+    context: dict[str, Any] = {"card_issuer": issuer, "card_product": product}
+    if cardholder:
+        context["cardholder"] = cardholder
     atomic_write_text(sidecar_path(statement), json.dumps(context, sort_keys=True) + "\n")
 
 

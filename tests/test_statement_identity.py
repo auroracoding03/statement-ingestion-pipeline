@@ -30,7 +30,7 @@ def test_wells_header_wins_over_chase_merchant_in_body(monkeypatch, tmp_path: Pa
     path = tmp_path / "statement.pdf"
     path.write_bytes(b"%PDF-fake")
     pages = [
-        "WELLS FARGO AUTOGRAPH VISA SIGNATURE CARD\nStatement Period 04/08/2026 to 05/08/2026",
+        "ALEX EXAMPLE\nWELLS FARGO AUTOGRAPH VISA SIGNATURE CARD\nStatement Period 04/08/2026 to 05/08/2026",
         "Trans Date Post Date Description Credits Charges\n05/02 05/02 CHASE CREDIT CRD AUTOPAY 100.00",
     ]
     monkeypatch.setattr(identity.pdfplumber, "open", lambda _path: _FakePdf(pages))
@@ -40,6 +40,7 @@ def test_wells_header_wins_over_chase_merchant_in_body(monkeypatch, tmp_path: Pa
     assert result.issuer == "Wells Fargo"
     assert result.confidence == "detected"
     assert result.needs_manual_details is False
+    assert result.needs_cardholder is False
     assert "header" in result.message.lower()
 
 
@@ -99,6 +100,45 @@ def test_wells_generic_credit_label_requires_product_selection(monkeypatch, tmp_
 def test_chase_header_still_detects_chase(monkeypatch, tmp_path: Path) -> None:
     path = tmp_path / "card.pdf"
     path.write_bytes(b"%PDF-fake")
+    pages = ["ALEX EXAMPLE\nChase Sapphire Preferred\nAccount ending in 1234\nTransaction details"]
+    monkeypatch.setattr(identity.pdfplumber, "open", lambda _path: _FakePdf(pages))
+
+    result = identity.detect_statement_identity(path)
+
+    assert result.issuer == "Chase"
+    assert result.product == "Sapphire Preferred"
+    assert result.confidence == "detected"
+    assert result.needs_cardholder is False
+    assert result.needs_manual_details is False
+
+
+def test_amex_csv_without_card_member_names_needs_cardholder(tmp_path: Path) -> None:
+    path = tmp_path / "amex.csv"
+    path.write_text("Date,Description,Card Member,Account #,Amount\n05/24/2026,UBER,,,26.95\n")
+
+    result = identity.detect_statement_identity(path)
+
+    assert result.issuer == "American Express"
+    assert result.confidence == "product_required"
+    assert result.needs_cardholder is True
+    assert result.needs_manual_details is True
+    assert "cardholder" in result.message.lower()
+
+
+def test_amex_csv_with_card_member_names_does_not_need_cardholder(tmp_path: Path) -> None:
+    path = tmp_path / "amex.csv"
+    path.write_text("Date,Description,Card Member,Account #,Amount\n05/24/2026,UBER,ALEX EXAMPLE,,26.95\n")
+
+    result = identity.detect_statement_identity(path)
+
+    assert result.issuer == "American Express"
+    assert result.needs_cardholder is False
+    assert result.needs_manual_details is True
+
+
+def test_pdf_without_name_needs_cardholder(monkeypatch, tmp_path: Path) -> None:
+    path = tmp_path / "card.pdf"
+    path.write_bytes(b"%PDF-fake")
     pages = ["Chase Sapphire Preferred\nAccount ending in 1234\nTransaction details"]
     monkeypatch.setattr(identity.pdfplumber, "open", lambda _path: _FakePdf(pages))
 
@@ -107,3 +147,5 @@ def test_chase_header_still_detects_chase(monkeypatch, tmp_path: Path) -> None:
     assert result.issuer == "Chase"
     assert result.product == "Sapphire Preferred"
     assert result.confidence == "detected"
+    assert result.needs_cardholder is True
+    assert result.needs_manual_details is True

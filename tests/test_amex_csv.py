@@ -61,3 +61,24 @@ def test_extraction_passes_persisted_upload_context_to_amex_parser(tmp_path: Pat
     assert len(result.frame) == 3
     assert result.frame["card_product"].unique().tolist() == ["Platinum"]
     assert result.frame["cardholder"].iloc[-1] == "Sam Example"
+
+
+def test_amex_csv_blank_card_member_uses_sidecar_cardholder(tmp_path: Path):
+    statement = tmp_path / "amex.csv"
+    statement.write_text(
+        "Date,Description,Card Member,Account #,Amount\n"
+        "05/24/2026,UBER,,,26.95\n"
+        "05/21/2026,MOBILE PAYMENT - THANK YOU,SAM EXAMPLE,,-947.69\n"
+    )
+
+    parsed = parse_amex_csv(
+        statement,
+        card="amex-delta-gold",
+        metadata={
+            "card_issuer": "American Express",
+            "card_product": "Delta Gold",
+            "cardholder": "Alex Example",
+        },
+    )
+
+    assert parsed["cardholder"].tolist() == ["Alex Example", "Sam Example"]

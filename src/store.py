@@ -18,53 +18,49 @@ from src.atomic import (
     atomic_write_text,
 )
 from src.cashflow import non_payment_frame
-from src.paths import (
-    EXPORT_DIR,
-    FINANCE_DB,
-    INGEST_MANIFEST,
-    LEDGER_PARQUET,
-    PUBLISH_PATH,
-    RECONCILE_PARQUET,
-    RECURRING_PARQUET,
-    TRANSACTION_SOURCES_PARQUET,
-    ensure_dirs,
-)
+from src import paths as path_config
+from src.paths import ensure_dirs
 
 
-def write_ledger(ledger: pd.DataFrame, path: Path = LEDGER_PARQUET) -> Path:
+def write_ledger(ledger: pd.DataFrame, path: Path | None = None) -> Path:
+    target = path if path is not None else path_config.LEDGER_PARQUET
     ensure_dirs()
-    if path.exists():
-        atomic_copy_file(path, path.with_suffix(path.suffix + ".bak"))
-    return atomic_write_parquet(ledger, path)
+    if target.exists():
+        atomic_copy_file(target, target.with_suffix(target.suffix + ".bak"))
+    return atomic_write_parquet(ledger, target)
 
 
-def write_recurring(recurring: pd.DataFrame, path: Path = RECURRING_PARQUET) -> Path:
+def write_recurring(recurring: pd.DataFrame, path: Path | None = None) -> Path:
+    target = path if path is not None else path_config.RECURRING_PARQUET
     ensure_dirs()
-    return atomic_write_parquet(recurring, path)
+    return atomic_write_parquet(recurring, target)
 
 
-def write_reconciliation(frame: pd.DataFrame, path: Path = RECONCILE_PARQUET) -> Path:
+def write_reconciliation(frame: pd.DataFrame, path: Path | None = None) -> Path:
+    target = path if path is not None else path_config.RECONCILE_PARQUET
     ensure_dirs()
-    return atomic_write_parquet(frame, path)
+    return atomic_write_parquet(frame, target)
 
 
-def write_ingest_manifest(frame: pd.DataFrame, path: Path = INGEST_MANIFEST) -> Path:
+def write_ingest_manifest(frame: pd.DataFrame, path: Path | None = None) -> Path:
+    target = path if path is not None else path_config.INGEST_MANIFEST
     ensure_dirs()
     history = frame
-    if path.exists():
+    if target.exists():
         try:
-            history = pd.concat([pd.read_parquet(path), frame], ignore_index=True)
+            history = pd.concat([pd.read_parquet(target), frame], ignore_index=True)
         except Exception:  # noqa: BLE001 — a bad manifest must not block ledger recovery
             history = frame
-    return atomic_write_parquet(history, path)
+    return atomic_write_parquet(history, target)
 
 
-def last_statement_upload_at(path: Path = INGEST_MANIFEST) -> str | None:
+def last_statement_upload_at(path: Path | None = None) -> str | None:
     """Latest successful statement ingest time, or None when none have been processed."""
-    if not path.exists():
+    target = path if path is not None else path_config.INGEST_MANIFEST
+    if not target.exists():
         return None
     try:
-        frame = pd.read_parquet(path, columns=["processed_at", "status"])
+        frame = pd.read_parquet(target, columns=["processed_at", "status"])
     except Exception:  # noqa: BLE001 — settings should still open if the manifest is unreadable
         return None
     if frame.empty or "processed_at" not in frame.columns:
@@ -78,25 +74,61 @@ def last_statement_upload_at(path: Path = INGEST_MANIFEST) -> str | None:
 
 
 def write_transaction_sources(
-    frame: pd.DataFrame, path: Path = TRANSACTION_SOURCES_PARQUET
+    frame: pd.DataFrame, path: Path | None = None
 ) -> Path:
     """Append distinct source-document links without losing earlier provenance."""
+    target = path if path is not None else path_config.TRANSACTION_SOURCES_PARQUET
     ensure_dirs()
     history = frame
-    if path.exists():
+    if target.exists():
         try:
-            history = pd.concat([pd.read_parquet(path), frame], ignore_index=True).drop_duplicates()
+            history = pd.concat([pd.read_parquet(target), frame], ignore_index=True).drop_duplicates()
         except Exception:  # noqa: BLE001 — recovery can reconstruct links from the inbox
             history = frame
-    return atomic_write_parquet(history, path)
+    return atomic_write_parquet(history, target)
+
+
+def load_suppressed_txn_ids(path: Path | None = None) -> set[str]:
+    target = path if path is not None else path_config.SUPPRESSED_TXN_PATH
+    if not target.exists():
+        return set()
+    try:
+        frame = pd.read_parquet(target)
+    except Exception:  # noqa: BLE001 — a bad suppression file must not block ingest
+        return set()
+    if frame.empty or "txn_id" not in frame.columns:
+        return set()
+    return {str(value).strip() for value in frame["txn_id"].dropna() if str(value).strip()}
+
+
+def write_suppressed_txn_ids(ids: set[str], path: Path | None = None) -> Path:
+    target = path if path is not None else path_config.SUPPRESSED_TXN_PATH
+    ensure_dirs()
+    cleaned = sorted({str(value).strip() for value in ids if str(value).strip()})
+    return atomic_write_parquet(pd.DataFrame({"txn_id": cleaned}), target)
+
+
+def drop_transaction_sources(txn_id: str, path: Path | None = None) -> None:
+    target = path if path is not None else path_config.TRANSACTION_SOURCES_PARQUET
+    if not target.exists():
+        return
+    try:
+        frame = pd.read_parquet(target)
+    except Exception:  # noqa: BLE001 — provenance is best-effort
+        return
+    if frame.empty or "txn_id" not in frame.columns:
+        return
+    kept = frame[frame["txn_id"].astype(str) != str(txn_id)]
+    atomic_write_parquet(kept, target)
 
 
 def rebuild_duckdb(
     ledger: pd.DataFrame,
     recurring: pd.DataFrame,
     reconciliation: pd.DataFrame,
-    db_path: Path = FINANCE_DB,
+    db_path: Path | None = None,
 ) -> Path:
+    target = db_path if db_path is not None else path_config.FINANCE_DB
     ensure_dirs()
 
     def build(path: Path) -> None:
@@ -140,22 +172,24 @@ def rebuild_duckdb(
         finally:
             con.close()
 
-    return atomic_build_file(db_path, build)
+    return atomic_build_file(target, build)
 
 
 def export_for_dashboard(
     ledger: pd.DataFrame,
     recurring: pd.DataFrame,
     reconciliation: pd.DataFrame,
-    publish_path: Path = PUBLISH_PATH,
-    export_dir: Path = EXPORT_DIR,
+    publish_path: Path | None = None,
+    export_dir: Path | None = None,
 ) -> Path:
     """Write JSON/CSV artifacts the static dashboard consumes."""
+    publish = publish_path if publish_path is not None else path_config.PUBLISH_PATH
+    out_dir = export_dir if export_dir is not None else path_config.EXPORT_DIR
     ensure_dirs()
     mode = "aggregates_only"
     include_merchant_names = False
-    if publish_path.exists():
-        with publish_path.open() as f:
+    if publish.exists():
+        with publish.open() as f:
             config = yaml.safe_load(f) or {}
             mode = config.get("mode", mode)
             include_merchant_names = bool(config.get("include_merchant_names", False))
@@ -242,4 +276,4 @@ def export_for_dashboard(
             atomic_write_csv(uncategorized, out / "uncategorized.csv")
             write_json(uncategorized, out / "uncategorized.json")
 
-    return atomic_replace_directory(export_dir, build)
+    return atomic_replace_directory(out_dir, build)

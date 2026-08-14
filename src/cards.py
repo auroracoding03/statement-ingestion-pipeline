@@ -9,7 +9,7 @@ import re
 import pandas as pd
 
 from src.cashflow import summarize_spend
-from src.upload_context import list_card_products
+from src.upload_context import list_card_products, normalize_cardholder
 
 UNASSIGNED = "Unassigned"
 GAP_DAYS = 14
@@ -28,6 +28,42 @@ def _blank(value) -> bool:
     if isinstance(value, float) and pd.isna(value):
         return True
     return not str(value).strip() or str(value).strip().lower() in {"nan", "none"}
+
+
+def _holder_blank(value) -> bool:
+    if _blank(value):
+        return True
+    return str(value).strip().casefold() == UNASSIGNED.casefold()
+
+
+def assign_cardholder(
+    ledger: pd.DataFrame,
+    *,
+    issuer: str,
+    product: str,
+    cardholder: str,
+) -> tuple[pd.DataFrame, list[str]]:
+    """Stamp a name onto blank/Unassigned rows for one issuer+product."""
+    name = normalize_cardholder(cardholder)
+    issuer_name = " ".join((issuer or "").split())
+    product_name = " ".join((product or "").split())
+    if not issuer_name or not product_name:
+        raise ValueError("Issuer and card product are required")
+    if ledger.empty or "cardholder" not in ledger.columns:
+        return ledger, []
+
+    issuers = ledger["card_issuer"].map(_label) if "card_issuer" in ledger.columns else pd.Series("", index=ledger.index)
+    products = ledger["card_product"].map(_label) if "card_product" in ledger.columns else pd.Series("", index=ledger.index)
+    match = (issuers == issuer_name) & (products == product_name) & ledger["cardholder"].map(_holder_blank)
+    if not match.any():
+        return ledger, []
+
+    out = ledger.copy()
+    out.loc[match, "cardholder"] = name
+    txn_ids = []
+    if "txn_id" in out.columns:
+        txn_ids = [str(value) for value in out.loc[match, "txn_id"].tolist()]
+    return out, txn_ids
 
 
 def _label(value) -> str:

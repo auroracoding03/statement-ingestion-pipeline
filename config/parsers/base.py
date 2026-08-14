@@ -29,6 +29,13 @@ def _is_missing(value: Any) -> bool:
     return value is None or (not isinstance(value, (list, tuple, dict)) and bool(pd.isna(value)))
 
 
+def _is_blank_holder(value: Any) -> bool:
+    if _is_missing(value):
+        return True
+    text = str(value).strip()
+    return not text or text.lower() in {"nan", "none"}
+
+
 def coerce_optional_amount(value: Any) -> float | None:
     if _is_missing(value) or (isinstance(value, str) and not value.strip()):
         return None
@@ -139,9 +146,14 @@ def finalize(
     frame = pd.DataFrame(rows)
     frame["card"] = card
     metadata = metadata or {}
+    fallback_holder = metadata.get("cardholder")
     for column in ("card_issuer", "card_product", "cardholder"):
         if column not in frame.columns:
             frame[column] = metadata.get(column)
+        elif column == "cardholder" and fallback_holder:
+            frame[column] = [
+                fallback_holder if _is_blank_holder(value) else value for value in frame[column]
+            ]
     frame["source_file"] = source_file
     try:
         frame["posted_date"] = frame["posted_date"].map(coerce_date)

@@ -29,6 +29,7 @@ from src.api.schemas import (
     AIAnalyzeRequest,
     AIProposalDecisionsRequest,
     BudgetPut,
+    CardholderAssignIn,
     CardProductIn,
     CategoryDelete,
     CategoryIn,
@@ -81,6 +82,7 @@ from src.upload_context import (
     append_card_product,
     card_key,
     list_card_products,
+    normalize_cardholder,
     normalize_issuer,
     normalize_product,
     resolve_card_product_for_issuer,
@@ -383,6 +385,7 @@ async def inspect_uploads(files: list[UploadFile] = ()) -> dict:
                 "confidence": identity.confidence,
                 "message": identity.message,
                 "needs_manual_details": identity.needs_manual_details,
+                "needs_cardholder": identity.needs_cardholder,
             }
         )
     return {"items": staged}
@@ -392,7 +395,7 @@ async def inspect_uploads(files: list[UploadFile] = ()) -> dict:
 def commit_uploads(body: UploadCommitRequest) -> dict:
     """Move inspected statements into their durable issuer folders."""
     ensure_dirs()
-    prepared: list[tuple[Path, str, str, str | None, str]] = []
+    prepared: list[tuple[Path, str, str, str | None, str | None, str]] = []
     for item in body.items:
         candidates = list(PENDING_UPLOADS.glob(f"{item.token}--*"))
         if len(candidates) != 1:
@@ -403,6 +406,7 @@ def commit_uploads(body: UploadCommitRequest) -> dict:
             issuer = normalize_issuer(item.issuer) if item.issuer else identity.issuer
             raw_product = item.product if item.product is not None else identity.product
             product = normalize_product(issuer, raw_product)
+            holder = normalize_cardholder(item.cardholder) if item.cardholder else None
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if not issuer:
@@ -418,17 +422,22 @@ def commit_uploads(body: UploadCommitRequest) -> dict:
                 status_code=422,
                 detail="American Express CSV files need a card product because the export does not include it.",
             )
+        if identity.needs_cardholder and not holder:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Select a cardholder for {staged.name[34:]} before adding it to the inbox.",
+            )
         card = card_key(issuer, product) if issuer != "Generic" else "generic"
-        prepared.append((staged, issuer, card, product, staged.name[34:]))
+        prepared.append((staged, issuer, card, product, holder, staged.name[34:]))
 
     written: list[str] = []
-    for staged, issuer, card, product, original_name in prepared:
+    for staged, issuer, card, product, holder, original_name in prepared:
         destination_dir = INBOX / card
         destination_dir.mkdir(parents=True, exist_ok=True)
         target = _unique_target(destination_dir, original_name)
         os.replace(staged, target)
         if issuer != "Generic":
-            write_upload_context(target, issuer=issuer, product=product)
+            write_upload_context(target, issuer=issuer, product=product, cardholder=holder)
         written.append(f"{card}/{target.name}")
     return {"written": written}
 
@@ -438,12 +447,14 @@ async def post_upload(
     card: str = Query("generic"),
     issuer: str | None = Query(None),
     product: str | None = Query(None),
+    cardholder: str | None = Query(None),
     files: list[UploadFile] = (),
 ) -> dict:
     ensure_dirs()
     try:
         selected_issuer = normalize_issuer(issuer) if issuer else None
         selected_product = normalize_product(selected_issuer, product)
+        selected_holder = normalize_cardholder(cardholder) if cardholder else None
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if selected_issuer == "American Express" and not selected_product:
@@ -462,7 +473,12 @@ async def post_upload(
         target = _unique_target(dest_dir, name)
         atomic_copy_stream(target, upload.file)
         if selected_issuer:
-            write_upload_context(target, issuer=selected_issuer, product=selected_product)
+            write_upload_context(
+                target,
+                issuer=selected_issuer,
+                product=selected_product,
+                cardholder=selected_holder,
+            )
         written.append(f"{safe_card}/{target.name}")
 
     return {"card": safe_card, "written": written}
@@ -560,6 +576,16 @@ def post_transactions_bulk(body: BulkTransactionsRequest) -> dict:
     )
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.delete("/api/transactions/{txn_id}")
+def delete_transaction(txn_id: str) -> dict:
+    result = pipeline.delete_transaction(txn_id)
+    error = result.get("error")
+    if error:
+        status = 404 if error == "Unknown transaction" else 400
+        raise HTTPException(status_code=status, detail=error)
     return result
 
 
@@ -710,6 +736,14 @@ def get_cards(
 ) -> dict:
     ledger = pipeline.load_ledger()
     return build_cards_coverage(ledger, issuer=issuer, product=product, cardholder=cardholder)
+
+
+@app.post("/api/cards/cardholder")
+def post_cards_cardholder(body: CardholderAssignIn) -> dict:
+    result = pipeline.assign_cardholder(body.issuer, body.product, body.cardholder)
+    if result.get("error"):
+        raise HTTPException(status_code=422, detail=result["error"])
+    return result
 
 
 # --------------------------------------------------------------------------- merchants

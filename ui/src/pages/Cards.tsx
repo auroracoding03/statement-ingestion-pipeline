@@ -1,21 +1,113 @@
 import { useMemo, useState } from "react";
 
-import { Empty, ErrorNote, Loading, Metric, PageHeader, StatusPill } from "../components/ui";
-import { api } from "../lib/dataSource";
+import { Empty, ErrorNote, Loading, Metric, PageHeader, SortHeader, StatusPill } from "../components/ui";
+import { api, canWrite } from "../lib/dataSource";
 import { money, shortDate } from "../lib/format";
+import {
+  compareNumber,
+  compareText,
+  compareWithSecondary,
+  nextColumnSort,
+  type ColumnSort,
+} from "../lib/sort";
 import type { CardProductCoverage } from "../lib/types";
 import { useAsync } from "../lib/useAsync";
 
+type AccountSortKey =
+  | "product"
+  | "cardholder"
+  | "status"
+  | "statements"
+  | "coverage"
+  | "gross"
+  | "returns"
+  | "net"
+  | "last_statement";
+
+const ACCOUNT_NUMERIC_SORT = new Set<AccountSortKey>([
+  "statements",
+  "coverage",
+  "gross",
+  "returns",
+  "net",
+  "last_statement",
+]);
+
+const STATUS_RANK: Record<string, number> = { gap: 0, stale: 1, ok: 2, none: 3 };
+
+function productLabel(row: CardProductCoverage): string {
+  return `${row.issuer} ${row.product}`.trim() || row.label;
+}
+
+function dateValue(value: string | null | undefined): number {
+  if (!value) return 0;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function compareAccounts(
+  left: CardProductCoverage,
+  right: CardProductCoverage,
+  key: AccountSortKey,
+  order: ColumnSort<AccountSortKey>["order"],
+): number {
+  if (key === "product") return compareText(productLabel(left), productLabel(right), order);
+  if (key === "cardholder") return compareText(left.cardholder ?? "", right.cardholder ?? "", order);
+  if (key === "status") {
+    return compareNumber(STATUS_RANK[left.status] ?? 99, STATUS_RANK[right.status] ?? 99, order);
+  }
+  if (key === "statements") return compareNumber(left.statement_count, right.statement_count, order);
+  if (key === "coverage") {
+    return compareWithSecondary(
+      compareNumber(dateValue(left.coverage_start), dateValue(right.coverage_start), order),
+      compareNumber(dateValue(left.coverage_end), dateValue(right.coverage_end), order),
+    );
+  }
+  if (key === "gross") return compareNumber(left.gross_charges ?? left.spend_total, right.gross_charges ?? right.spend_total, order);
+  if (key === "returns") return compareNumber(left.returns_total ?? 0, right.returns_total ?? 0, order);
+  if (key === "net") return compareNumber(left.spend_total, right.spend_total, order);
+  return compareNumber(dateValue(left.coverage_end), dateValue(right.coverage_end), order);
+}
+
+function sortAccounts(rows: CardProductCoverage[], sort: ColumnSort<AccountSortKey>): CardProductCoverage[] {
+  return [...rows].sort((left, right) => {
+    const primary = compareAccounts(left, right, sort.key, sort.order);
+    if (!sort.secondaryKey) return primary;
+    return compareWithSecondary(
+      primary,
+      compareAccounts(left, right, sort.secondaryKey, sort.secondaryOrder),
+    );
+  });
+}
+
 export function Cards() {
   const coverage = useAsync(() => api.cards(), []);
+  const status = useAsync(() => api.status(), []);
   const [selectedKey, setSelectedKey] = useState("");
+  const [sort, setSort] = useState<ColumnSort<AccountSortKey>>({
+    key: "product",
+    order: "asc",
+    secondaryKey: null,
+    secondaryOrder: "asc",
+  });
   const products = coverage.data?.products ?? [];
   const selected = useMemo(
     () => products.find((row) => productKey(row) === selectedKey) ?? null,
     [products, selectedKey],
   );
-  const cards = products.filter((row) => (row.account_kind ?? "card") !== "bank");
-  const banks = products.filter((row) => row.account_kind === "bank");
+  const cards = useMemo(
+    () => sortAccounts(products.filter((row) => (row.account_kind ?? "card") !== "bank"), sort),
+    [products, sort],
+  );
+  const banks = useMemo(
+    () => sortAccounts(products.filter((row) => row.account_kind === "bank"), sort),
+    [products, sort],
+  );
+  const holders = status.data?.cardholders ?? [];
+
+  function toggleSort(key: AccountSortKey) {
+    setSort((current) => nextColumnSort(current, key, ACCOUNT_NUMERIC_SORT));
+  }
 
   return (
     <>
@@ -44,18 +136,27 @@ export function Cards() {
           </div>
 
           {selected ? (
-            <ProductDetail product={selected} />
+            <ProductDetail
+              key={productKey(selected)}
+              product={selected}
+              holders={holders}
+              onAssigned={(name) => {
+                setSelectedKey(`${selected.issuer}||${selected.product}||${name}`);
+                coverage.reload({ silent: true });
+                status.reload({ silent: true });
+              }}
+            />
           ) : (
             <>
               <h2>Cards</h2>
               {cards.length > 0 ? (
-                <ProductTable products={cards} onSelect={setSelectedKey} />
+                <ProductTable products={cards} sort={sort} onSort={toggleSort} onSelect={setSelectedKey} />
               ) : (
                 <Empty>No card products on the ledger yet. Ingest a statement to get started.</Empty>
               )}
               <h2>Bank accounts</h2>
               {banks.length > 0 ? (
-                <ProductTable products={banks} onSelect={setSelectedKey} />
+                <ProductTable products={banks} sort={sort} onSort={toggleSort} onSelect={setSelectedKey} />
               ) : (
                 <Empty>No bank or debit accounts in the ledger yet.</Empty>
               )}
@@ -69,25 +170,48 @@ export function Cards() {
 
 function ProductTable({
   products,
+  sort,
+  onSort,
   onSelect,
 }: {
   products: CardProductCoverage[];
+  sort: ColumnSort<AccountSortKey>;
+  onSort: (key: AccountSortKey) => void;
   onSelect: (key: string) => void;
 }) {
+  function rank(key: AccountSortKey): 1 | 2 | undefined {
+    if (sort.key === key) return 1;
+    if (sort.secondaryKey === key) return 2;
+    return undefined;
+  }
+  function order(key: AccountSortKey) {
+    return sort.key === key ? sort.order : sort.secondaryOrder;
+  }
   return (
     <div className="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>Product</th>
-            <th>Cardholder</th>
-            <th>Status</th>
-            <th className="num">Statements</th>
-            <th>Coverage</th>
-            <th className="num">Gross</th>
-            <th className="num">Returns</th>
-            <th className="num">Net</th>
-            <th>Last statement</th>
+            <SortHeader label="Product" rank={rank("product")} order={order("product")} onClick={() => onSort("product")} />
+            <SortHeader label="Cardholder" rank={rank("cardholder")} order={order("cardholder")} onClick={() => onSort("cardholder")} />
+            <SortHeader label="Status" rank={rank("status")} order={order("status")} onClick={() => onSort("status")} />
+            <SortHeader
+              label="Statements"
+              rank={rank("statements")}
+              order={order("statements")}
+              onClick={() => onSort("statements")}
+              numeric
+            />
+            <SortHeader label="Coverage" rank={rank("coverage")} order={order("coverage")} onClick={() => onSort("coverage")} />
+            <SortHeader label="Gross" rank={rank("gross")} order={order("gross")} onClick={() => onSort("gross")} numeric />
+            <SortHeader label="Returns" rank={rank("returns")} order={order("returns")} onClick={() => onSort("returns")} numeric />
+            <SortHeader label="Net" rank={rank("net")} order={order("net")} onClick={() => onSort("net")} numeric />
+            <SortHeader
+              label="Last statement"
+              rank={rank("last_statement")}
+              order={order("last_statement")}
+              onClick={() => onSort("last_statement")}
+            />
           </tr>
         </thead>
         <tbody>
@@ -97,7 +221,7 @@ function ProductTable({
               className="clickable-row"
               onClick={() => onSelect(productKey(row))}
             >
-              <td>{`${row.issuer} ${row.product}`.trim() || row.label}</td>
+              <td>{productLabel(row)}</td>
               <td>{row.cardholder ?? "—"}</td>
               <td>
                 <StatusPill status={row.status} />
@@ -120,9 +244,64 @@ function ProductTable({
   );
 }
 
-function ProductDetail({ product }: { product: CardProductCoverage }) {
+function ProductDetail({
+  product,
+  holders,
+  onAssigned,
+}: {
+  product: CardProductCoverage;
+  holders: string[];
+  onAssigned: (cardholder: string) => void;
+}) {
+  const [holder, setHolder] = useState("");
+  const [custom, setCustom] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const name = custom.trim() || holder;
+
+  async function assign() {
+    if (!name) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api.assignCardholder(product.issuer, product.product, name);
+      onAssigned(result.cardholder);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not assign a cardholder.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <>
+      {canWrite && product.cardholder === "Unassigned" && (
+        <div className="toolbar overview-controls">
+          <label>
+            Assign cardholder
+            <select value={holder} onChange={(event) => setHolder(event.target.value)} disabled={busy}>
+              <option value="">Select cardholder</option>
+              {holders.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </label>
+          <input
+            type="text"
+            placeholder="New cardholder (e.g. Alex Example)"
+            value={custom}
+            onChange={(event) => setCustom(event.target.value)}
+            disabled={busy}
+          />
+          <button className="btn" type="button" disabled={busy || !name} onClick={() => void assign()}>
+            {busy ? "Assigning…" : "Assign"}
+          </button>
+        </div>
+      )}
+      {error && <ErrorNote error={error} />}
+
       <div className="metrics">
         <Metric label="Statements" value={product.statement_count} />
         <Metric label="Charges" value={product.charge_count} />

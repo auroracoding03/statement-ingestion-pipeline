@@ -13,7 +13,7 @@ from rich.console import Console
 from config.parsers import resolve_parser
 from config.parsers.base import empty_frame
 from src.normalize import normalize
-from src.paths import INBOX
+from src import paths as path_config
 from src.upload_context import read_upload_context, sidecar_path
 
 console = Console()
@@ -29,18 +29,19 @@ class ExtractionResult:
     successful: list[tuple[str, Path]] = field(default_factory=list)
 
 
-def iter_statement_files(inbox: Path = INBOX) -> list[tuple[str, Path]]:
+def iter_statement_files(inbox: Path | None = None) -> list[tuple[str, Path]]:
     """Return (card/issuer, path) pairs from inbox/<card>/*.{csv,pdf}."""
     found: list[tuple[str, Path]] = []
-    if not inbox.exists():
+    root = inbox if inbox is not None else path_config.INBOX
+    if not root.exists():
         return found
-    for card_dir in sorted(p for p in inbox.iterdir() if p.is_dir()):
+    for card_dir in sorted(p for p in root.iterdir() if p.is_dir()):
         if card_dir.name.startswith("_"):
             continue
         for path in sorted(card_dir.rglob("*")):
             if path.is_file() and path.suffix.lower() in SUPPORTED:
                 found.append((card_dir.name, path))
-    for path in sorted(inbox.glob("*")):
+    for path in sorted(root.glob("*")):
         if path.is_file() and path.suffix.lower() in SUPPORTED:
             found.append(("generic", path))
     return found
@@ -89,16 +90,17 @@ def _manifest_frame(rows: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
 
 
-def extract_statements(inbox: Path = INBOX) -> ExtractionResult:
+def extract_statements(inbox: Path | None = None) -> ExtractionResult:
     """Parse every active inbox document, keeping successes even when siblings fail.
 
     Identical document bytes are ignored after their first appearance in this
     run. Different documents may still overlap; normalization reconciles those
     transaction occurrences using their immutable transaction fingerprint.
     """
-    files = iter_statement_files(inbox)
+    root = inbox if inbox is not None else path_config.INBOX
+    files = iter_statement_files(root)
     if not files:
-        console.print(f"[yellow]No statement files found under {inbox}[/yellow]")
+        console.print(f"[yellow]No statement files found under {root}[/yellow]")
         return ExtractionResult(empty_frame(), _manifest_frame([]))
 
     frames: list[pd.DataFrame] = []
@@ -109,7 +111,7 @@ def extract_statements(inbox: Path = INBOX) -> ExtractionResult:
     now = datetime.now(timezone.utc).isoformat()
 
     for card, path in files:
-        relative = str(path.relative_to(inbox))
+        relative = str(path.relative_to(root))
         doc_id: str | None = None
         parser_name = ""
         try:
@@ -177,6 +179,6 @@ def extract_statements(inbox: Path = INBOX) -> ExtractionResult:
     return ExtractionResult(combined, report, errors=errors, successful=successful)
 
 
-def extract_all(inbox: Path = INBOX) -> pd.DataFrame:
+def extract_all(inbox: Path | None = None) -> pd.DataFrame:
     """Compatibility wrapper returning only the extracted frame."""
     return extract_statements(inbox).frame

@@ -30,6 +30,34 @@ export function Empty({ children }: { children: ReactNode }) {
   return <p className="muted empty">{children}</p>;
 }
 
+export function SortHeader({
+  label,
+  order,
+  onClick,
+  numeric,
+  rank,
+}: {
+  label: string;
+  order: "asc" | "desc";
+  onClick: () => void;
+  numeric?: boolean;
+  rank?: 1 | 2;
+}) {
+  const marker = order === "asc" ? "▲" : "▼";
+  const suffix = rank === 1 ? ` ${marker}` : rank === 2 ? ` 2${marker}` : "";
+  return (
+    <th
+      className={`sortable${numeric ? " num" : ""}${rank === 1 ? " active" : ""}${rank === 2 ? " secondary" : ""}`}
+      aria-sort={rank === 1 ? (order === "asc" ? "ascending" : "descending") : "none"}
+    >
+      <button type="button" onClick={onClick}>
+        {label}
+        {suffix}
+      </button>
+    </th>
+  );
+}
+
 export function MerchantCell({
   canonical,
   normalized,

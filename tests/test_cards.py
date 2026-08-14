@@ -6,7 +6,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 
-from src.cards import GAP_DAYS, STALE_DAYS, build_cards_coverage
+from src.cards import GAP_DAYS, STALE_DAYS, assign_cardholder, build_cards_coverage
 from src.normalize import make_txn_id
 
 
@@ -276,3 +276,59 @@ def test_same_product_for_two_cardholders_stays_separate(monkeypatch):
     assert alex["status"] == "gap"
     assert sam["status"] == "ok"
     assert alex["gaps"] == [{"after": "2026-01-05", "before": "2026-03-04", "days": 58}]
+
+
+def test_assign_cardholder_stamps_only_blank_rows_for_that_product(monkeypatch):
+    monkeypatch.setattr("src.cards.list_card_products", lambda: {"American Express": ["Delta Gold"]})
+    ledger = pd.DataFrame(
+        [
+            _row(
+                card="americanexpress-delta-gold",
+                card_issuer="American Express",
+                card_product="Delta Gold",
+                cardholder=None,
+                posted_date="2026-01-05",
+                amount=40.0,
+                raw_description="FLIGHT",
+                source_document_id="jan",
+            ),
+            _row(
+                card="americanexpress-delta-gold",
+                card_issuer="American Express",
+                card_product="Delta Gold",
+                cardholder="Sam Example",
+                posted_date="2026-03-01",
+                amount=80.0,
+                raw_description="SAM FLIGHT",
+                source_document_id="sam-mar",
+            ),
+            _row(
+                card="americanexpress-platinum",
+                card_issuer="American Express",
+                card_product="Platinum",
+                cardholder=None,
+                posted_date="2026-03-04",
+                amount=55.0,
+                raw_description="PLAT DINNER",
+                source_document_id="plat",
+            ),
+        ]
+    )
+
+    updated, txn_ids = assign_cardholder(
+        ledger,
+        issuer="American Express",
+        product="Delta Gold",
+        cardholder="Alex Example",
+    )
+
+    assert len(txn_ids) == 1
+    assert updated.loc[updated["raw_description"] == "FLIGHT", "cardholder"].tolist() == ["Alex Example"]
+    assert updated.loc[updated["raw_description"] == "SAM FLIGHT", "cardholder"].tolist() == ["Sam Example"]
+    assert updated.loc[updated["raw_description"] == "PLAT DINNER", "cardholder"].isna().all()
+
+    payload = build_cards_coverage(updated, today=date(2026, 3, 10))
+    by_label = _by_label(payload)
+    assert "American Express Delta Gold · Unassigned" not in by_label
+    assert "American Express Delta Gold · Alex Example" in by_label
+    assert "American Express Delta Gold · Sam Example" in by_label

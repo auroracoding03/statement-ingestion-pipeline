@@ -376,6 +376,16 @@ export function Transactions() {
           txn={selected}
           tagLabel={tagLabel}
           onClose={() => setSelectedId("")}
+          onDeleted={(txnId) => {
+            setSelectedId("");
+            setPicked((current) => {
+              if (!current.has(txnId)) return current;
+              const next = new Set(current);
+              next.delete(txnId);
+              return next;
+            });
+            reload();
+          }}
         />
       )}
     </>
@@ -409,43 +419,118 @@ function TransactionDrawer({
   txn,
   tagLabel,
   onClose,
+  onDeleted,
 }: {
   txn: Transaction;
   tagLabel: (id: string) => string;
   onClose: () => void;
+  onDeleted: (txnId: string) => void;
 }) {
   const flow = cashflow(txn.amount);
+  const [confirming, setConfirming] = useState(false);
+  const [armed, setArmed] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState("");
+  const merchant = txn.canonical_merchant || txn.normalized_merchant || txn.raw_description;
+
+  useEffect(() => {
+    if (!confirming) {
+      setArmed(false);
+      return;
+    }
+    const id = window.setTimeout(() => setArmed(true), 0);
+    return () => window.clearTimeout(id);
+  }, [confirming]);
+
+  async function confirmDelete() {
+    setDeleting(true);
+    setError("");
+    try {
+      await api.deleteTransaction(txn.txn_id);
+      onDeleted(txn.txn_id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete this transaction.");
+      setDeleting(false);
+    }
+  }
+
   return (
-    <div className="drawer-backdrop" onClick={onClose}>
-      <aside className="drawer" onClick={(event) => event.stopPropagation()} aria-label="Transaction detail">
-        <div className="cluster-head">
-          <h2>Transaction</h2>
-          <button className="btn subtle small" onClick={onClose}>
-            Close
-          </button>
+    <>
+      <div className="drawer-backdrop" onClick={onClose}>
+        <aside className="drawer" onClick={(event) => event.stopPropagation()} aria-label="Transaction detail">
+          <div className="cluster-head">
+            <h2>Transaction</h2>
+            <button className="btn subtle small" onClick={onClose}>
+              Close
+            </button>
+          </div>
+          <p className={`review-amount amount-${flow.kind}`}>{flow.text}</p>
+          <dl className="review-fields">
+            <dt>Date</dt>
+            <dd>{shortDate(txn.posted_date)}</dd>
+            <dt>Card</dt>
+            <dd>{txn.card}</dd>
+            <dt>Raw</dt>
+            <dd>{txn.raw_description}</dd>
+            <dt>Normalized</dt>
+            <dd>{txn.normalized_merchant}</dd>
+            <dt>Canonical</dt>
+            <dd>{txn.canonical_merchant ?? <span className="unresolved">none</span>}</dd>
+            <dt>Category</dt>
+            <dd>{[txn.category, txn.subcategory].filter(Boolean).join(" / ") || "Uncategorized"}</dd>
+            <dt>Source</dt>
+            <dd>{txn.classified_by ?? "open"}</dd>
+            <dt>File</dt>
+            <dd>{txn.source_file || "—"}</dd>
+            <dt>Tags</dt>
+            <dd>{(txn.tags ?? []).map(tagLabel).join(", ") || "—"}</dd>
+          </dl>
+          {canWrite && (
+            <div className="review-actions">
+              <button className="btn danger" type="button" onClick={() => setConfirming(true)}>
+                Delete
+              </button>
+            </div>
+          )}
+        </aside>
+      </div>
+      {confirming && (
+        <div
+          className={`modal-backdrop${armed ? "" : " is-pending"}`}
+          onClick={(event) => {
+            if (!armed || deleting || event.target !== event.currentTarget) return;
+            setConfirming(false);
+          }}
+          role="presentation"
+        >
+          <div
+            className="upload-modal"
+            role="dialog"
+            aria-labelledby="txn-delete-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2 id="txn-delete-title">Delete transaction</h2>
+            <p>
+              Remove <strong>{merchant}</strong> on {shortDate(txn.posted_date)} ({flow.text}) from the
+              ledger? Re-ingesting the same statement will not restore it.
+            </p>
+            {error && <ErrorNote error={error} />}
+            <div className="review-actions">
+              <button className="btn danger" type="button" onClick={() => void confirmDelete()} disabled={deleting}>
+                {deleting ? "Deleting…" : "Delete transaction"}
+              </button>
+              <button
+                className="btn subtle"
+                type="button"
+                onClick={() => setConfirming(false)}
+                disabled={deleting}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
-        <p className={`review-amount amount-${flow.kind}`}>{flow.text}</p>
-        <dl className="review-fields">
-          <dt>Date</dt>
-          <dd>{shortDate(txn.posted_date)}</dd>
-          <dt>Card</dt>
-          <dd>{txn.card}</dd>
-          <dt>Raw</dt>
-          <dd>{txn.raw_description}</dd>
-          <dt>Normalized</dt>
-          <dd>{txn.normalized_merchant}</dd>
-          <dt>Canonical</dt>
-          <dd>{txn.canonical_merchant ?? <span className="unresolved">none</span>}</dd>
-          <dt>Category</dt>
-          <dd>{[txn.category, txn.subcategory].filter(Boolean).join(" / ") || "Uncategorized"}</dd>
-          <dt>Source</dt>
-          <dd>{txn.classified_by ?? "open"}</dd>
-          <dt>File</dt>
-          <dd>{txn.source_file || "—"}</dd>
-          <dt>Tags</dt>
-          <dd>{(txn.tags ?? []).map(tagLabel).join(", ") || "—"}</dd>
-        </dl>
-      </aside>
-    </div>
+      )}
+    </>
   );
 }

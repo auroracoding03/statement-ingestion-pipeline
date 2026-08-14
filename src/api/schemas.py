@@ -94,10 +94,17 @@ class CardProductIn(BaseModel):
     product: str = Field(min_length=1, max_length=80)
 
 
+class CardholderAssignIn(BaseModel):
+    issuer: str = Field(min_length=1, max_length=80)
+    product: str = Field(min_length=1, max_length=80)
+    cardholder: str = Field(min_length=1, max_length=80)
+
+
 class UploadCommitItem(BaseModel):
     token: str = Field(min_length=32, max_length=32, pattern="^[a-f0-9]+$")
     issuer: str | None = None
     product: str | None = Field(default=None, max_length=80)
+    cardholder: str | None = Field(default=None, max_length=80)
 
 
 class UploadCommitRequest(BaseModel):

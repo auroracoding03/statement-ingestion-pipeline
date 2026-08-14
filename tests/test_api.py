@@ -142,6 +142,8 @@ def workspace(tmp_path: Path, monkeypatch) -> Path:
         monkeypatch.setattr(module, "LEDGER_PARQUET", ledger_path, raising=False)
     monkeypatch.setattr(pipeline_mod, "LEDGER_LOCK", data / "ledger.lock", raising=False)
     monkeypatch.setattr(pipeline_mod, "PROPOSALS_PARQUET", data / "proposals.parquet", raising=False)
+    monkeypatch.setattr(pipeline_mod, "TRANSACTION_SOURCES_PARQUET", data / "transaction_sources.parquet", raising=False)
+    monkeypatch.setattr(pipeline_mod, "SUPPRESSED_TXN_PATH", data / "suppressed_txn_ids.parquet", raising=False)
     monkeypatch.setattr(api_app, "INBOX", tmp_path / "inbox", raising=False)
     monkeypatch.setattr(api_app, "PENDING_UPLOADS", tmp_path / "data" / "pending_uploads", raising=False)
     (tmp_path / "data" / "pending_uploads").mkdir()
@@ -688,12 +690,37 @@ def test_staged_amex_csv_requires_only_product_confirmation(client: TestClient, 
     item = inspected.json()["items"][0]
     assert item["issuer"] == "American Express"
     assert item["confidence"] == "product_required"
+    assert item["needs_cardholder"] is False
 
     committed = client.post("/api/uploads/commit", json={"items": [{"token": item["token"], "product": "Platinum"}]})
     assert committed.status_code == 200
     statement = workspace["root"] / "inbox" / "americanexpress-platinum" / "statement.csv"
     assert statement.exists()
     assert sidecar_path(statement).exists()
+
+
+def test_staged_amex_csv_without_names_requires_cardholder(client: TestClient, workspace: dict):
+    payload = b"Date,Description,Card Member,Account #,Amount\n2026-01-01,Coffee,,,10.00\n"
+    inspected = client.post("/api/uploads/inspect", files=[("files", ("statement.csv", payload, "text/csv"))])
+
+    item = inspected.json()["items"][0]
+    assert item["needs_cardholder"] is True
+    token = item["token"]
+
+    rejected = client.post(
+        "/api/uploads/commit",
+        json={"items": [{"token": token, "product": "Delta Gold"}]},
+    )
+    assert rejected.status_code == 422
+    assert "cardholder" in rejected.json()["detail"].lower()
+
+    committed = client.post(
+        "/api/uploads/commit",
+        json={"items": [{"token": token, "product": "Delta Gold", "cardholder": "Alex Example"}]},
+    )
+    assert committed.status_code == 200
+    statement = workspace["root"] / "inbox" / "americanexpress-delta-gold" / "statement.csv"
+    assert '"cardholder": "Alex Example"' in sidecar_path(statement).read_text()
 
 
 def test_card_products_list_and_append(client: TestClient):
@@ -723,6 +750,77 @@ def test_amex_commit_rejects_unknown_product(client: TestClient):
     )
     assert rejected.status_code == 422
     assert "Unsupported American Express product" in rejected.json()["detail"]
+
+
+def test_assign_cardholder_endpoint_updates_only_blank_rows(client: TestClient, workspace: dict):
+    ledger = pipeline_mod.load_ledger()
+    extra = pd.DataFrame(
+        [
+            {
+                "txn_id": make_txn_id("americanexpress-delta-gold", "2026-01-05", 40.0, "FLIGHT"),
+                "card": "americanexpress-delta-gold",
+                "card_issuer": "American Express",
+                "card_product": "Delta Gold",
+                "cardholder": None,
+                "posted_date": "2026-01-05",
+                "amount": 40.0,
+                "raw_description": "FLIGHT",
+                "normalized_merchant": "FLIGHT",
+                "canonical_merchant": None,
+                "merchant_source": "none",
+                "source_file": "amex/jan.csv",
+            },
+            {
+                "txn_id": make_txn_id("americanexpress-delta-gold", "2026-03-01", 80.0, "SAM FLIGHT"),
+                "card": "americanexpress-delta-gold",
+                "card_issuer": "American Express",
+                "card_product": "Delta Gold",
+                "cardholder": "Sam Example",
+                "posted_date": "2026-03-01",
+                "amount": 80.0,
+                "raw_description": "SAM FLIGHT",
+                "normalized_merchant": "SAM FLIGHT",
+                "canonical_merchant": None,
+                "merchant_source": "none",
+                "source_file": "amex/mar.csv",
+            },
+            {
+                "txn_id": make_txn_id("americanexpress-platinum", "2026-03-04", 55.0, "PLAT DINNER"),
+                "card": "americanexpress-platinum",
+                "card_issuer": "American Express",
+                "card_product": "Platinum",
+                "cardholder": None,
+                "posted_date": "2026-03-04",
+                "amount": 55.0,
+                "raw_description": "PLAT DINNER",
+                "normalized_merchant": "PLAT DINNER",
+                "canonical_merchant": None,
+                "merchant_source": "none",
+                "source_file": "amex/plat.csv",
+            },
+        ]
+    )
+    pipeline_mod.write_ledger(pipeline_mod._ensure_columns(pd.concat([ledger, extra], ignore_index=True)))
+
+    missing = client.post(
+        "/api/cards/cardholder",
+        json={"issuer": "Chase", "product": "Sapphire Preferred", "cardholder": "Alex Example"},
+    )
+    assert missing.status_code == 422
+
+    assigned = client.post(
+        "/api/cards/cardholder",
+        json={"issuer": "American Express", "product": "Delta Gold", "cardholder": "Alex Example"},
+    )
+    assert assigned.status_code == 200
+    assert assigned.json()["count"] == 1
+    assert assigned.json()["cardholder"] == "Alex Example"
+
+    cards = client.get("/api/cards").json()["products"]
+    labels = {row["label"]: row["cardholder"] for row in cards}
+    assert labels["American Express Delta Gold · Alex Example"] == "Alex Example"
+    assert labels["American Express Delta Gold · Sam Example"] == "Sam Example"
+    assert labels["American Express Platinum · Unassigned"] == "Unassigned"
 
 
 def test_budget_get_merges_categories_and_put_round_trips(client: TestClient, workspace: dict):
@@ -1052,3 +1150,19 @@ def test_merge_refusals(client: TestClient):
         json={"source": "GPC", "target": "", "apply_category": False},
     )
     assert empty.status_code == 422
+
+
+def test_delete_transaction_removes_row(client: TestClient, workspace: dict):
+    coffee_id = workspace["coffee_id"]
+    deleted = client.delete(f"/api/transactions/{coffee_id}")
+    assert deleted.status_code == 200
+    assert deleted.json() == {"deleted": True, "txn_id": coffee_id}
+
+    listing = client.get("/api/transactions").json()
+    assert listing["total"] == 1
+    assert all(row["txn_id"] != coffee_id for row in listing["items"])
+
+
+def test_delete_unknown_transaction_is_404(client: TestClient):
+    missing = client.delete("/api/transactions/not-a-real-id")
+    assert missing.status_code == 404

@@ -21,6 +21,8 @@ import pandas as pd
 from src.ai_suggest import recommended_config
 from src.cashflow import is_payment_row, summarize_spend
 from src.insights_tools import (
+    _exact_category,
+    _exact_subcategory,
     tool_budget_status,
     tool_expected_bills,
     tool_remaining_budget,
@@ -29,7 +31,7 @@ from src.insights_tools import (
 )
 from src.overview import build_month_summary
 
-PROMPT_VERSION = "insights-v5"
+PROMPT_VERSION = "insights-v6"
 MAX_MESSAGES = 8
 MAX_QUESTION_CHARS = 500
 MAX_TOOL_ROUNDS = 3
@@ -42,7 +44,7 @@ MAX_ARG_CHARS = 80
 GENERATE_TIMEOUT = 90.0
 NUM_CTX = 8192
 UNASSIGNED = "Unassigned"
-BREAKDOWN_GROUPS = frozenset({"merchant", "category", "cardholder"})
+BREAKDOWN_GROUPS = frozenset({"merchant", "category", "subcategory", "cardholder"})
 
 LEDGER_VIEW_COLUMNS = [
     "posted_date",
@@ -90,11 +92,11 @@ FORBIDDEN_ARG_KEYS = {
 TOOL_ARG_KEYS = {
     "ledger_snapshot": frozenset(),
     "merchant_spend": frozenset({"query", "since", "until", "cardholder"}),
-    "category_spend": frozenset({"category", "since", "until", "cardholder"}),
+    "category_spend": frozenset({"category", "subcategory", "since", "until", "cardholder"}),
     "month_summary": frozenset({"month", "cardholder"}),
-    "search_transactions": frozenset({"q", "since", "until", "cardholder", "category", "limit"}),
-    "spend_over_time": frozenset({"query", "category", "cardholder", "since", "until"}),
-    "spend_breakdown": frozenset({"group_by", "query", "category", "cardholder", "since", "until", "limit"}),
+    "search_transactions": frozenset({"q", "since", "until", "cardholder", "category", "subcategory", "limit"}),
+    "spend_over_time": frozenset({"query", "category", "subcategory", "cardholder", "since", "until"}),
+    "spend_breakdown": frozenset({"group_by", "query", "category", "subcategory", "cardholder", "since", "until", "limit"}),
     "remaining_budget": frozenset({"category", "subcategory", "since", "until", "months", "cardholder"}),
     "budget_status": frozenset({"month", "since", "until", "cardholder"}),
     "tagged_spend": frozenset({"tag", "since", "until", "cardholder"}),
@@ -159,10 +161,10 @@ PLANNER_ARG_PROPERTIES = {
     "from": _ARG_PROPERTY,
     "to": _ARG_PROPERTY,
     "merchant": _ARG_PROPERTY,
-    "group_by": {"type": "string", "enum": ["merchant", "category", "cardholder"]},
-    "by": {"type": "string", "enum": ["merchant", "category", "cardholder"]},
-    "groupby": {"type": "string", "enum": ["merchant", "category", "cardholder"]},
-    "group": {"type": "string", "enum": ["merchant", "category", "cardholder"]},
+    "group_by": {"type": "string", "enum": ["merchant", "category", "subcategory", "cardholder"]},
+    "by": {"type": "string", "enum": ["merchant", "category", "subcategory", "cardholder"]},
+    "groupby": {"type": "string", "enum": ["merchant", "category", "subcategory", "cardholder"]},
+    "group": {"type": "string", "enum": ["merchant", "category", "subcategory", "cardholder"]},
 }
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "0:0:0:0:0:0:0:1"})
 UNSAFE_VALUE_RE = re.compile(
@@ -174,6 +176,24 @@ BARE_NUMBER_RE = re.compile(
     r"(?<![\w.$])(\d{1,3}(?:,\d{3})+(?:\.\d{2})?|\d+\.\d{2}|\d{2,})(?![\w.])"
 )
 YEAR_RE = re.compile(r"^(19|20)\d{2}$")
+KNOWN_CATEGORY_NAMES = frozenset(
+    {
+        "Housing",
+        "Utilities",
+        "Food",
+        "Travel",
+        "Entertainment",
+        "Shopping",
+        "Health",
+        "Transport",
+        "Subscriptions",
+        "Personal",
+        "Transfers",
+        "Fees",
+        "Income",
+        "Uncategorized",
+    }
+)
 
 PLANNER_SCHEMA = {
     "type": "object",
@@ -439,7 +459,7 @@ def _validate_args(tool: str, raw_args: Any) -> dict[str, Any]:
         elif key == "group_by":
             group = str(value).strip().lower()
             if group not in BREAKDOWN_GROUPS:
-                raise InsightsSandboxError("group_by must be merchant, category, or cardholder.")
+                raise InsightsSandboxError("group_by must be merchant, category, subcategory, or cardholder.")
             cleaned[key] = group
         elif key == "limit":
             limit = int(value)
@@ -468,6 +488,48 @@ def _merchant_mask(frame: pd.DataFrame, query: str) -> pd.Series:
     return canon.str.contains(re.escape(needle), na=False) | norm.str.contains(re.escape(needle), na=False)
 
 
+def _reserved_category_names() -> set[str]:
+    names = {item.casefold() for item in KNOWN_CATEGORY_NAMES}
+    try:
+        from src.classify import load_rules
+
+        for item in load_rules().get("categories") or []:
+            text = str(item).strip()
+            if text:
+                names.add(text.casefold())
+    except Exception:  # noqa: BLE001 — planner still has the built-in category list
+        pass
+    return names
+
+
+def _reject_category_as_merchant(query: str | None) -> None:
+    if not query:
+        return
+    needle = query.strip().casefold()
+    if needle in _reserved_category_names():
+        raise InsightsSandboxError(
+            f"{query!r} is a category. Use category_spend (spend total) or remaining_budget "
+            "(leftover vs envelope), and pass subcategory only when the user named one."
+        )
+
+
+def _apply_taxonomy(frame: pd.DataFrame, args: dict) -> pd.DataFrame:
+    scoped = frame
+    if args.get("category"):
+        scoped = _exact_category(scoped, str(args["category"]))
+    if args.get("subcategory"):
+        scoped = _exact_subcategory(scoped, str(args["subcategory"]))
+    return scoped
+
+
+def _taxonomy_label(args: dict) -> str:
+    category = args.get("category")
+    subcategory = args.get("subcategory")
+    if category and subcategory:
+        return f"{category} / {subcategory}"
+    return str(category or subcategory or "")
+
+
 def _category_label(row: pd.Series) -> str:
     value = row.get("category")
     if _blank(value) or str(value).strip() == "Uncategorized":
@@ -482,16 +544,18 @@ def _holder_label(row: pd.Series) -> str:
     return str(value).strip()
 
 
+def _subcategory_label(row: pd.Series) -> str:
+    value = row.get("subcategory")
+    if _blank(value):
+        return "(none)"
+    return str(value).strip()
+
+
 def _filter_scope(frame: pd.DataFrame, args: dict) -> pd.DataFrame:
     scoped = _apply_cardholder(_apply_window(frame, args.get("since"), args.get("until")), args.get("cardholder"))
     if args.get("query") and not scoped.empty:
         scoped = scoped.loc[_merchant_mask(scoped, str(args["query"]))].copy()
-    if args.get("category") and not scoped.empty:
-        cats = scoped["category"].fillna("").astype(str)
-        needle = str(args["category"]).casefold()
-        exact = scoped.loc[cats.str.casefold() == needle]
-        scoped = exact.copy() if not exact.empty else scoped.loc[cats.str.casefold().str.contains(re.escape(needle), na=False)].copy()
-    return scoped
+    return _apply_taxonomy(scoped, args)
 
 
 def _bucket_spend(group: pd.DataFrame) -> dict[str, float | int]:
@@ -595,18 +659,13 @@ def tool_merchant_spend(frame: pd.DataFrame, args: dict) -> dict:
 
 def tool_category_spend(frame: pd.DataFrame, args: dict) -> dict:
     category = args["category"]
+    subcategory = args.get("subcategory")
     scoped = _apply_cardholder(_apply_window(frame, args.get("since"), args.get("until")), args.get("cardholder"))
-    if scoped.empty:
-        matched = scoped
-    else:
-        cats = scoped["category"].fillna("").astype(str)
-        needle = category.casefold()
-        matched = scoped.loc[cats.str.casefold() == needle].copy()
-        if matched.empty:
-            matched = scoped.loc[cats.str.casefold().str.contains(re.escape(needle), na=False)].copy()
+    matched = _apply_taxonomy(scoped, {"category": category, "subcategory": subcategory})
     stats = summarize_spend(matched)
     return {
         "category": category,
+        "subcategory": subcategory,
         "gross_charges": stats["gross_charges"],
         "credits_refunds": stats["returns_total"],
         "net_spend": stats["net_spend"],
@@ -671,6 +730,7 @@ def tool_spend_over_time(frame: pd.DataFrame, args: dict) -> dict:
         "spent_means": "net",
         "query": args.get("query"),
         "category": args.get("category"),
+        "subcategory": args.get("subcategory"),
         "cardholder": args.get("cardholder"),
         "series": series,
         "peak": {"month": peak["month"], "net_spend": peak["net_spend"]} if peak else None,
@@ -685,7 +745,12 @@ def tool_spend_breakdown(frame: pd.DataFrame, args: dict) -> dict:
     group_by = args["group_by"]
     matched = _filter_scope(frame, args)
     names, ambiguous = _matched_names(matched) if args.get("query") else ([], False)
-    labeler = {"merchant": _merchant_label, "category": _category_label, "cardholder": _holder_label}[group_by]
+    labeler = {
+        "merchant": _merchant_label,
+        "category": _category_label,
+        "subcategory": _subcategory_label,
+        "cardholder": _holder_label,
+    }[group_by]
     grouped: dict[str, dict[str, float | int]] = {}
     if not matched.empty:
         for _, row in matched.iterrows():
@@ -714,6 +779,7 @@ def tool_spend_breakdown(frame: pd.DataFrame, args: dict) -> dict:
         "spent_means": "net",
         "query": args.get("query"),
         "category": args.get("category"),
+        "subcategory": args.get("subcategory"),
         "cardholder": args.get("cardholder"),
         "rows": rows[:limit],
         "row_count": len(rows),
@@ -725,9 +791,8 @@ def tool_spend_breakdown(frame: pd.DataFrame, args: dict) -> dict:
 
 def tool_search_transactions(frame: pd.DataFrame, args: dict) -> dict:
     scoped = _apply_cardholder(_apply_window(frame, args.get("since"), args.get("until")), args.get("cardholder"))
-    if args.get("category") and not scoped.empty:
-        cats = scoped["category"].fillna("").astype(str).str.casefold()
-        scoped = scoped.loc[cats == str(args["category"]).casefold()].copy()
+    if args.get("category") or args.get("subcategory"):
+        scoped = _apply_taxonomy(scoped, args)
     if args.get("q") and not scoped.empty:
         scoped = scoped.loc[_merchant_mask(scoped, args["q"])].copy()
     charges = scoped[scoped["amount"] > 0] if not scoped.empty else scoped
@@ -787,6 +852,7 @@ def dispatch_tool(name: str, args: Any, frame: pd.DataFrame, *, today: date | No
         raise InsightsSandboxError("remaining_budget requires category.")
     if name == "tagged_spend" and "tag" not in cleaned:
         raise InsightsSandboxError("tagged_spend requires tag.")
+    _reject_category_as_merchant(cleaned.get("query") or cleaned.get("q"))
     fn = TOOLS[name]
     day = today or date.today()
     if "today" in inspect.signature(fn).parameters:
@@ -816,10 +882,14 @@ def _system_prompt(today: date) -> str:
             f"Last 3 years means since {three_years} (inclusive). This month is {this_month}. Last month is {last_month}.",
             f"Allowed tools: {tools}. You may only name those tools. Unknown tools fail.",
             "Totals: merchant_spend, category_spend, or month_summary (household Overview for one YYYY-MM, not a merchant calendar).",
+            "How much spent on a category or subcategory over a period: category_spend with category, optional subcategory, since, until. That net_spend is the spend total.",
+            "Month-by-month category or subcategory spend: spend_over_time with category and optional subcategory, never with the category name as query.",
+            "Split a category by subcategory: spend_breakdown with group_by subcategory and category set.",
             "Which month, highest/lowest month, trend, or month-by-month comparison: spend_over_time.",
-            "Top / biggest / who spent / Alex vs Sam / Amazon vs Target: spend_breakdown with group_by merchant, category, or cardholder.",
+            "Top / biggest / who spent / Alex vs Sam / Amazon vs Target: spend_breakdown with group_by merchant, category, subcategory, or cardholder.",
             "Category names (Housing, Utilities, Food, Travel, Entertainment, Shopping, Health, Transport, Subscriptions, Personal, Transfers, Fees, Income, Uncategorized) are categories, never merchant names. Use category_spend or remaining_budget. Never pass them as query to merchant_spend or spend_over_time.",
-            "Remaining / left / leftover / rest of year / stay within budget: remaining_budget with the exact category name.",
+            "Remaining / left / leftover / rest of year / stay within budget: remaining_budget with the exact category name and no subcategory unless the user named one. Its actual field is the same net spend as category_spend for that window; remaining is leftover vs the envelope, not spend.",
+            "Do not pass subcategory unless the user named a subcategory (Lodging, Groceries, Gas, Transit). Travel budget remaining means category=Travel with no subcategory.",
             "Over budget anywhere / which envelopes are over: budget_status.",
             "Trip, occasion, or named tag spend: tagged_spend.",
             "Did a bill post / expected bills this month: expected_bills. Do not invent due dates; missing this month is the grounded claim.",
@@ -827,12 +897,13 @@ def _system_prompt(today: date) -> str:
             "Amazon, Walmart, and other merchant names: merchant_spend, spend_over_time with query, or spend_breakdown.",
             "search_transactions only to show a few example rows. Never use it for rankings, peak months, or period totals.",
             "merchant_spend args: query, since (YYYY-MM-DD), until (YYYY-MM-DD), cardholder. Use since, not start_date.",
-            "category_spend args: category, since, until, cardholder. month_summary args: month (YYYY-MM), cardholder.",
-            "spend_over_time args: query, category, cardholder, since, until. Grain is month.",
-            "spend_breakdown args: group_by (merchant|category|cardholder), query, category, cardholder, since, until, limit (max 12).",
-            "search_transactions args: q, since, until, cardholder, category, limit (max 15).",
-            "remaining_budget args: category (required), subcategory, since, until, months (1-24 calendar months from this month), cardholder.",
+            "category_spend args: category (required), subcategory, since, until, cardholder. Always pass since/until for a year or last-N-months question.",
+            "spend_over_time args: query, category, subcategory, cardholder, since, until. Grain is month.",
+            "spend_breakdown args: group_by (merchant|category|subcategory|cardholder), query, category, subcategory, cardholder, since, until, limit (max 12).",
+            "search_transactions args: q, since, until, cardholder, category, subcategory, limit (max 15).",
+            "remaining_budget args: category (required), subcategory, since, until, months (1-24 calendar months from this month), cardholder. Default window is this calendar year through today.",
             "budget_status args: month, since, until, cardholder. Default is year-to-date through today.",
+            "month_summary args: month (YYYY-MM), cardholder.",
             "tagged_spend args: tag (label or id), since, until, cardholder.",
             "expected_bills args: month, since, until, name (optional bill name filter).",
             "uncategorized_spend args: month, since, until, cardholder.",
@@ -967,7 +1038,7 @@ def build_headline(facts: list[dict]) -> str:
         extra = f" Combined match across: {names}."
 
     if tool == "spend_over_time":
-        label = result.get("query") or result.get("category") or result.get("cardholder") or "ledger"
+        label = result.get("query") or _taxonomy_label(result) or result.get("cardholder") or "ledger"
         peak = result.get("peak")
         if not peak:
             return f"The ledger does not show monthly spend matching {label!r}.{extra}".strip()
@@ -1005,10 +1076,11 @@ def build_headline(facts: list[dict]) -> str:
         ).strip()
 
     if tool == "category_spend":
-        name = result.get("category") or "that category"
+        name = _taxonomy_label(result) or "that category"
+        window = _period_window(result.get("period"))
         return (
             f"Ledger net {name} spend: {_usd(result.get('net_spend') or 0)} "
-            f"({int(result.get('charge_count') or 0)} charges)."
+            f"({int(result.get('charge_count') or 0)} charges){window}."
         )
 
     if tool == "month_summary":

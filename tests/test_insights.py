@@ -704,7 +704,7 @@ def test_planner_picks_spend_over_time_for_highest_amazon_month():
         generate=generate,
         ollama_host="http://127.0.0.1:11434",
     )
-    assert out["prompt_version"] == PROMPT_VERSION == "insights-v5"
+    assert out["prompt_version"] == PROMPT_VERSION == "insights-v6"
     assert out["tools_used"] == ["spend_over_time"]
     peak = out["facts"][0]["result"]["peak"]
     assert peak["month"] == "2024-10"
@@ -846,7 +846,7 @@ def test_planner_routes_travel_leftover_year_to_remaining_budget(monkeypatch):
         generate=generate,
         ollama_host="http://127.0.0.1:11434",
     )
-    assert out["prompt_version"] == "insights-v5"
+    assert out["prompt_version"] == "insights-v6"
     assert out["tools_used"] == ["remaining_budget"]
     assert out["facts"][0]["args"]["category"] == "Travel"
     assert "query" not in out["facts"][0]["args"]
@@ -952,3 +952,52 @@ def test_uncategorized_spend_open_category_and_review(monkeypatch):
 def test_remaining_budget_requires_category():
     with pytest.raises(InsightsSandboxError, match="category"):
         dispatch_tool("remaining_budget", {}, _ledger(), today=_as_of())
+
+
+def test_category_spend_and_remaining_budget_share_net_spend(monkeypatch):
+    monkeypatch.setattr("src.insights_tools.load_budget", _travel_budget)
+    frame = _ledger(
+        [
+            _row(posted_date="2026-03-10", amount=400.0, category="Travel", subcategory="Lodging"),
+            _row(posted_date="2026-06-02", amount=2600.0, category="Travel", subcategory="Transit"),
+            _row(posted_date="2026-06-01", amount=75.0, category="Shopping", canonical_merchant="Love's Travel Stops"),
+            _row(posted_date="2026-07-01", amount=81.0, category="Travel", subcategory="Lodging"),
+        ]
+    )
+    window = {"category": "Travel", "since": "2026-01-01", "until": "2026-08-14"}
+    spend = dispatch_tool("category_spend", window, frame, today=_as_of())["result"]
+    leftover = dispatch_tool("remaining_budget", {"category": "Travel"}, frame, today=_as_of())["result"]
+    lodging = dispatch_tool(
+        "category_spend",
+        {**window, "subcategory": "Lodging"},
+        frame,
+        today=_as_of(),
+    )["result"]
+    series = dispatch_tool(
+        "spend_over_time",
+        {**window, "subcategory": "Transit"},
+        frame,
+        today=_as_of(),
+    )["result"]
+    by_sub = dispatch_tool(
+        "spend_breakdown",
+        {"group_by": "subcategory", "category": "Travel", "since": "2026-01-01", "until": "2026-08-14"},
+        frame,
+        today=_as_of(),
+    )["result"]
+
+    assert spend["net_spend"] == leftover["actual"] == 3081.0
+    assert leftover["subcategory"] is None
+    assert lodging["net_spend"] == 481.0
+    assert lodging["subcategory"] == "Lodging"
+    assert series["series"][-1]["net_spend"] == 2600.0
+    names = {row["name"]: row["net_spend"] for row in by_sub["rows"]}
+    assert names["Transit"] == 2600.0
+    assert names["Lodging"] == 481.0
+
+
+def test_category_name_is_rejected_as_merchant_query():
+    with pytest.raises(InsightsSandboxError, match="is a category"):
+        dispatch_tool("merchant_spend", {"query": "Travel"}, _ledger(), today=_as_of())
+    with pytest.raises(InsightsSandboxError, match="is a category"):
+        dispatch_tool("spend_over_time", {"query": "Travel"}, _ledger(), today=_as_of())

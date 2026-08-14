@@ -9,6 +9,7 @@ from src.upload_context import (
     append_card_product,
     is_generic_card_product,
     list_card_products,
+    normalize_cardholder,
     normalize_product,
     resolve_card_product_for_issuer,
 )
@@ -88,3 +89,11 @@ def test_resolve_card_product_for_issuer_flags_generic_and_unknown(tmp_path: Pat
     product, needs = resolve_card_product_for_issuer("Wells Fargo", "Autograph Visa Signature", path=products)
     assert product == "Autograph Visa Signature"
     assert needs is False
+
+
+def test_normalize_cardholder_rejects_blank_and_unassigned():
+    assert normalize_cardholder("  Alex Example  ") == "Alex Example"
+    with pytest.raises(ValueError, match="required"):
+        normalize_cardholder("  ")
+    with pytest.raises(ValueError, match="Unassigned"):
+        normalize_cardholder("Unassigned")

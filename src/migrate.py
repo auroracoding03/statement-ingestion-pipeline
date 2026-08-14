@@ -13,7 +13,7 @@ import pandas as pd
 
 from src.atomic import atomic_write_parquet
 from src.normalize import CLASSIFICATION_COLUMNS, LEDGER_COLUMNS, assign_transaction_ids, normalize_merchant
-from src.paths import LEDGER_PARQUET
+from src import paths as path_config
 
 
 def needs_migration(ledger: pd.DataFrame) -> bool:
@@ -63,18 +63,19 @@ def migrate_ledger(ledger: pd.DataFrame) -> pd.DataFrame:
     return out[LEDGER_COLUMNS + CLASSIFICATION_COLUMNS]
 
 
-def migrate_file(path: Path = LEDGER_PARQUET) -> tuple[int, bool]:
+def migrate_file(path: Path | None = None) -> tuple[int, bool]:
     """Migrate the on-disk ledger in place. Returns (row_count, changed)."""
-    if not path.exists():
+    target = path if path is not None else path_config.LEDGER_PARQUET
+    if not target.exists():
         return 0, False
-    ledger = pd.read_parquet(path)
+    ledger = pd.read_parquet(target)
     if ledger.empty:
         return 0, False
 
     changed = needs_migration(ledger) or not set(LEDGER_COLUMNS).issubset(ledger.columns)
     migrated = migrate_ledger(ledger)
     if changed:
-        backup = path.with_suffix(".parquet.bak")
+        backup = target.with_suffix(".parquet.bak")
         atomic_write_parquet(ledger, backup)
-        atomic_write_parquet(migrated, path)
+        atomic_write_parquet(migrated, target)
     return len(migrated), changed

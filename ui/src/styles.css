@@ -1343,6 +1343,11 @@ th.sortable button:hover {
   color: var(--ink);
 }
 
+th.sortable.secondary {
+  color: var(--ink);
+  opacity: 0.78;
+}
+
 .amount-credit {
   color: var(--ok);
 }
@@ -1358,18 +1363,8 @@ th.sortable button:hover {
   background: rgba(28, 25, 22, 0.28);
 }
 
-.drawer {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: min(28rem, 100%);
-  z-index: 41;
-  overflow: auto;
-  padding: 1.4rem;
-  background: var(--card);
-  border-left: 1px solid var(--line);
-  box-shadow: -12px 0 32px rgba(28, 25, 22, 0.12);
+.drawer .review-actions {
+  margin-top: 1.1rem;
 }
 
 .flag-row {

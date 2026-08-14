@@ -263,6 +263,7 @@ def _patch_ingest_paths(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
     monkeypatch.setattr(pipeline, "LEDGER_LOCK", data / "ledger.lock")
     monkeypatch.setattr(pipeline, "INGEST_MANIFEST", data / "ingestion_manifest.parquet")
     monkeypatch.setattr(pipeline, "TRANSACTION_SOURCES_PARQUET", data / "transaction_sources.parquet")
+    monkeypatch.setattr(pipeline, "SUPPRESSED_TXN_PATH", data / "suppressed_txn_ids.parquet")
     monkeypatch.setattr(pipeline, "ensure_dirs", lambda: None)
     return inbox, ledger
 
@@ -295,6 +296,24 @@ def test_ingest_appends_without_dropping_classified_rows(tmp_path: Path, monkeyp
     assert coffee["classified_by"] == "manual"
     assert coffee["canonical_merchant"] == "Coffee Cart"
     assert "Tea" in set(updated["raw_description"])
+
+
+def test_deleted_transaction_is_not_reingested(tmp_path: Path, monkeypatch):
+    inbox, ledger_path = _patch_ingest_paths(tmp_path, monkeypatch)
+    _write_csv(inbox / "generic" / "jan.csv", "2026-01-01,Coffee,10.00\n")
+    first = pipeline.run_ingest()
+    assert first["ingested"] == 1
+
+    ledger = pd.read_parquet(ledger_path)
+    txn_id = str(ledger.iloc[0]["txn_id"])
+    removed = pipeline.delete_transaction(txn_id)
+    assert removed == {"deleted": True, "txn_id": txn_id}
+    assert pd.read_parquet(ledger_path).empty
+
+    _write_csv(inbox / "generic" / "jan.csv", "2026-01-01,Coffee,10.00\n")
+    second = pipeline.run_ingest()
+    assert second["ingested"] == 0
+    assert pd.read_parquet(ledger_path).empty
 
 
 def test_ingest_normalizes_overlapping_pending_documents_as_one_batch(tmp_path: Path, monkeypatch):

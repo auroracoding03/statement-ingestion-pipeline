@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { CategoryFields } from "../components/CategoryFields";
-import { Empty, ErrorNote, Loading, PageHeader } from "../components/ui";
+import { Empty, ErrorNote, Loading, PageHeader, SortHeader } from "../components/ui";
 import { api, canWrite } from "../lib/dataSource";
 import { money } from "../lib/format";
-import { compareLabel } from "../lib/sort";
+import { compareLabel, compareNumber, compareText, compareWithSecondary, nextColumnSort, type ColumnSort } from "../lib/sort";
 import { useAsync } from "../lib/useAsync";
 import type { Alias, Merchant, MerchantOrphan, UnknownCluster } from "../lib/types";
 
@@ -38,6 +38,7 @@ function clusterHaystack(cluster: UnknownCluster): string {
 }
 
 type MerchantSortKey = "canonical" | "category" | "txn_count" | "total_amount";
+const MERCHANT_NUMERIC_SORT = new Set<MerchantSortKey>(["txn_count", "total_amount"]);
 
 function merchantHaystack(merchant: Merchant): string {
   const aliases = merchant.aliases.map((alias) => alias.regex ?? alias.exact ?? "").join(" ");
@@ -48,17 +49,16 @@ function categoryLabel(merchant: Merchant): string {
   return [merchant.category, merchant.subcategory].filter(Boolean).join(" / ");
 }
 
-function compareMerchants(a: Merchant, b: Merchant, key: MerchantSortKey, order: "asc" | "desc"): number {
-  const dir = order === "asc" ? 1 : -1;
+function compareMerchants(a: Merchant, b: Merchant, key: MerchantSortKey, order: ColumnSort<MerchantSortKey>["order"]): number {
   if (key === "canonical") {
-    return a.canonical.localeCompare(b.canonical, undefined, { sensitivity: "base" }) * dir;
+    return compareText(a.canonical, b.canonical, order);
   }
   if (key === "category") {
-    return categoryLabel(a).localeCompare(categoryLabel(b), undefined, { sensitivity: "base" }) * dir;
+    return compareText(categoryLabel(a), categoryLabel(b), order);
   }
   const left = key === "txn_count" ? a.txn_count : a.total_amount;
   const right = key === "txn_count" ? b.txn_count : b.total_amount;
-  return (left - right) * dir;
+  return compareNumber(left, right, order);
 }
 
 function upsertMerchant(items: Merchant[], incoming: Merchant): Merchant[] {
@@ -103,8 +103,12 @@ export function Merchants() {
   const [merging, setMerging] = useState<{ canonical: string; txn_count: number; total_amount: number } | null>(
     null,
   );
-  const [sort, setSort] = useState<MerchantSortKey>("canonical");
-  const [order, setOrder] = useState<"asc" | "desc">("asc");
+  const [sort, setSort] = useState<ColumnSort<MerchantSortKey>>({
+    key: "canonical",
+    order: "asc",
+    secondaryKey: null,
+    secondaryOrder: "asc",
+  });
   const [dismissedClusterIds, setDismissedClusterIds] = useState<Set<string>>(() => new Set());
   const [localMerchants, setLocalMerchants] = useState<Merchant[]>([]);
   const categories = rules.data?.categories ?? [];
@@ -133,8 +137,12 @@ export function Merchants() {
     const filtered = needle
       ? localMerchants.filter((merchant) => merchantHaystack(merchant).includes(needle))
       : localMerchants;
-    return [...filtered].sort((left, right) => compareMerchants(left, right, sort, order));
-  }, [localMerchants, needle, order, sort]);
+    return [...filtered].sort((left, right) => {
+      const primary = compareMerchants(left, right, sort.key, sort.order);
+      if (!sort.secondaryKey) return primary;
+      return compareWithSecondary(primary, compareMerchants(left, right, sort.secondaryKey, sort.secondaryOrder));
+    });
+  }, [localMerchants, needle, sort]);
 
   const leftover = useMemo((): MerchantOrphan[] => {
     const items = merchants.data?.orphans ?? [];
@@ -159,12 +167,18 @@ export function Merchants() {
   }
 
   function toggleSort(key: MerchantSortKey) {
-    if (sort === key) {
-      setOrder(order === "asc" ? "desc" : "asc");
-      return;
-    }
-    setSort(key);
-    setOrder(key === "txn_count" || key === "total_amount" ? "desc" : "asc");
+    setSort((current) => nextColumnSort(current, key, MERCHANT_NUMERIC_SORT));
+  }
+
+  function sortRank(key: MerchantSortKey): 1 | 2 | undefined {
+    if (sort.key === key) return 1;
+    if (sort.secondaryKey === key) return 2;
+    return undefined;
+  }
+
+  function sortOrder(key: MerchantSortKey) {
+    if (sort.key === key) return sort.order;
+    return sort.secondaryOrder;
   }
 
   return (
@@ -312,28 +326,28 @@ export function Merchants() {
               <tr>
                 <SortHeader
                   label="Canonical Name"
-                  active={sort === "canonical"}
-                  order={order}
+                  rank={sortRank("canonical")}
+                  order={sortOrder("canonical")}
                   onClick={() => toggleSort("canonical")}
                 />
                 <SortHeader
                   label="Default Category"
-                  active={sort === "category"}
-                  order={order}
+                  rank={sortRank("category")}
+                  order={sortOrder("category")}
                   onClick={() => toggleSort("category")}
                 />
                 <th className="alias-cell">Aliases</th>
                 <SortHeader
                   label="Transactions"
-                  active={sort === "txn_count"}
-                  order={order}
+                  rank={sortRank("txn_count")}
+                  order={sortOrder("txn_count")}
                   onClick={() => toggleSort("txn_count")}
                   numeric
                 />
                 <SortHeader
                   label="Total"
-                  active={sort === "total_amount"}
-                  order={order}
+                  rank={sortRank("total_amount")}
+                  order={sortOrder("total_amount")}
                   onClick={() => toggleSort("total_amount")}
                   numeric
                 />
@@ -947,29 +961,6 @@ function MergeModal({
         </div>
       </div>
     </div>
-  );
-}
-
-function SortHeader({
-  label,
-  active,
-  order,
-  onClick,
-  numeric,
-}: {
-  label: string;
-  active: boolean;
-  order: "asc" | "desc";
-  onClick: () => void;
-  numeric?: boolean;
-}) {
-  return (
-    <th className={`sortable${numeric ? " num" : ""}${active ? " active" : ""}`}>
-      <button type="button" onClick={onClick}>
-        {label}
-        {active ? (order === "asc" ? " ▲" : " ▼") : ""}
-      </button>
-    </th>
   );
 }
 

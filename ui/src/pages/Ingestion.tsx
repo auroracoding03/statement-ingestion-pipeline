@@ -7,18 +7,21 @@ import { useAsync } from "../lib/useAsync";
 
 const ISSUERS = ["American Express", "Bank of America", "Capital One", "Chase", "Wells Fargo", "Generic"];
 
-type PendingUpload = UploadInspection & { selectedIssuer: string; selectedProduct: string };
+type PendingUpload = UploadInspection & { selectedIssuer: string; selectedProduct: string; selectedCardholder: string };
 
 export function Ingestion() {
   const input = useRef<HTMLInputElement>(null);
   const productsState = useAsync(() => api.cardProducts(), []);
+  const statusState = useAsync(() => api.status(), []);
   const [uploads, setUploads] = useState<PendingUpload[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [newProductByIndex, setNewProductByIndex] = useState<Record<number, string>>({});
+  const [newCardholderByIndex, setNewCardholderByIndex] = useState<Record<number, string>>({});
 
   const products = productsState.data?.products ?? {};
+  const holders = statusState.data?.cardholders ?? [];
 
   async function inspect(files: FileList | File[]) {
     if (!files.length) return;
@@ -32,11 +35,14 @@ export function Ingestion() {
           ...item,
           selectedIssuer: item.issuer ?? "",
           selectedProduct: item.product ?? "",
+          selectedCardholder: "",
         })),
       );
       setNewProductByIndex({});
+      setNewCardholderByIndex({});
       setMessage("Review the detected statement details, then add the files to your inbox.");
       productsState.reload();
+      statusState.reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not inspect the selected files.");
     } finally {
@@ -62,9 +68,28 @@ export function Ingestion() {
     );
   }
 
+  function changeCardholder(index: number, cardholder: string) {
+    setUploads((current) =>
+      current.map((upload, i) => (i === index ? { ...upload, selectedCardholder: cardholder } : upload)),
+    );
+  }
+
   function needsProduct(upload: PendingUpload): boolean {
     const configured = (products[upload.selectedIssuer] ?? []).length > 0;
     return configured || upload.confidence === "product_required" || upload.selectedIssuer === "American Express";
+  }
+
+  function effectiveCardholder(upload: PendingUpload, index: number): string {
+    return (newCardholderByIndex[index] ?? "").trim() || upload.selectedCardholder;
+  }
+
+  function canCommit(): boolean {
+    return uploads.every((upload, index) => {
+      if (upload.needs_cardholder && !effectiveCardholder(upload, index)) return false;
+      if (needsProduct(upload) && !upload.selectedProduct) return false;
+      if (upload.needs_manual_details && upload.confidence !== "detected" && !upload.selectedIssuer) return false;
+      return true;
+    });
   }
 
   async function addProduct(index: number) {
@@ -90,20 +115,22 @@ export function Ingestion() {
   }
 
   async function commit() {
-    if (!uploads.length) return;
+    if (!uploads.length || !canCommit()) return;
     setBusy(true);
     setMessage("");
     setError("");
     try {
       const result = await api.commitUploads(
-        uploads.map((upload) => ({
+        uploads.map((upload, index) => ({
           token: upload.token,
           issuer: upload.selectedIssuer || undefined,
           product: upload.selectedProduct || undefined,
+          cardholder: effectiveCardholder(upload, index) || undefined,
         })),
       );
       setUploads([]);
       setNewProductByIndex({});
+      setNewCardholderByIndex({});
       setMessage(`Added ${result.written.length} statement${result.written.length === 1 ? "" : "s"} to your inbox.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not add the selected statements.");
@@ -151,6 +178,7 @@ export function Ingestion() {
           {uploads.map((upload, index) => {
             const issuerProducts = products[upload.selectedIssuer] ?? [];
             const showProduct = needsProduct(upload);
+            const showIdentity = upload.needs_manual_details && upload.confidence !== "detected";
             return (
               <article className="upload-review" key={upload.token}>
                 <div>
@@ -159,22 +187,24 @@ export function Ingestion() {
                 </div>
                 {upload.needs_manual_details && (
                   <div className="upload-details">
-                    <label>
-                      Issuer
-                      <select
-                        value={upload.selectedIssuer}
-                        onChange={(event) => changeIssuer(index, event.target.value)}
-                        disabled={upload.confidence === "product_required" && Boolean(upload.issuer)}
-                      >
-                        <option value="">Select issuer</option>
-                        {ISSUERS.map((issuer) => (
-                          <option key={issuer} value={issuer}>
-                            {issuer}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    {showProduct && (
+                    {showIdentity && (
+                      <label>
+                        Issuer
+                        <select
+                          value={upload.selectedIssuer}
+                          onChange={(event) => changeIssuer(index, event.target.value)}
+                          disabled={upload.confidence === "product_required" && Boolean(upload.issuer)}
+                        >
+                          <option value="">Select issuer</option>
+                          {ISSUERS.map((issuer) => (
+                            <option key={issuer} value={issuer}>
+                              {issuer}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    {showIdentity && showProduct && (
                       <>
                         <label>
                           Card product
@@ -217,12 +247,44 @@ export function Ingestion() {
                         )}
                       </>
                     )}
+                    {upload.needs_cardholder && (
+                      <>
+                        <label>
+                          Cardholder
+                          <select
+                            value={upload.selectedCardholder}
+                            onChange={(event) => changeCardholder(index, event.target.value)}
+                          >
+                            <option value="">Select cardholder</option>
+                            {holders.map((holder) => (
+                              <option key={holder} value={holder}>
+                                {holder}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <div className="toolbar" style={{ margin: 0, gap: "0.35rem" }}>
+                          <input
+                            type="text"
+                            placeholder="New cardholder (e.g. Alex Example)"
+                            value={newCardholderByIndex[index] ?? ""}
+                            onChange={(event) =>
+                              setNewCardholderByIndex((current) => ({
+                                ...current,
+                                [index]: event.target.value,
+                              }))
+                            }
+                            disabled={busy}
+                          />
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
               </article>
             );
           })}
-          <button className="btn" disabled={busy} onClick={() => void commit()}>
+          <button className="btn" disabled={busy || !canCommit()} onClick={() => void commit()}>
             Add to inbox
           </button>
         </section>

@@ -118,6 +118,7 @@ export interface UploadInspection {
   confidence: string;
   message: string;
   needs_manual_details: boolean;
+  needs_cardholder: boolean;
 }
 
 function postedDay(value: string): string {
@@ -334,6 +335,14 @@ export const api = {
     return req<CardsCoverage>(`/api/cards${suffix}`);
   },
 
+  assignCardholder(issuer: string, product: string, cardholder: string) {
+    if (!canWrite) writeGuard();
+    return req<{ updated: string[]; count: number; cardholder: string }>("/api/cards/cardholder", {
+      method: "POST",
+      body: JSON.stringify({ issuer, product, cardholder }),
+    });
+  },
+
   async recurring(): Promise<RecurringRow[]> {
     if (canWrite) return req<RecurringRow[]>("/api/recurring");
     return staticJSON<RecurringRow[]>("recurring", []);
@@ -425,7 +434,7 @@ export const api = {
     return res.json() as Promise<{ items: UploadInspection[] }>;
   },
 
-  commitUploads(items: { token: string; issuer?: string; product?: string }[]) {
+  commitUploads(items: { token: string; issuer?: string; product?: string; cardholder?: string }[]) {
     return req<{ written: string[] }>("/api/uploads/commit", { method: "POST", body: JSON.stringify({ items }) });
   },
 
@@ -470,6 +479,13 @@ export const api = {
     return req<{ updated: string[]; count: number }>("/api/transactions/bulk", {
       method: "POST",
       body: JSON.stringify(body),
+    });
+  },
+
+  deleteTransaction(txnId: string) {
+    if (!canWrite) writeGuard();
+    return req<{ deleted: boolean; txn_id: string }>(`/api/transactions/${encodeURIComponent(txnId)}`, {
+      method: "DELETE",
     });
   },
 

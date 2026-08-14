@@ -25,17 +25,21 @@ from src.paths import (
     LEDGER_LOCK,
     LEDGER_PARQUET,
     PROPOSALS_PARQUET,
+    SUPPRESSED_TXN_PATH,
     TRANSACTION_SOURCES_PARQUET,
     ensure_dirs,
 )
 from src.recurring import detect_recurring, reconcile
 from src.store import (
+    drop_transaction_sources,
     export_for_dashboard,
+    load_suppressed_txn_ids,
     rebuild_duckdb,
     write_ledger,
     write_ingest_manifest,
     write_reconciliation,
     write_recurring,
+    write_suppressed_txn_ids,
     write_transaction_sources,
 )
 
@@ -74,6 +78,10 @@ def _ensure_columns(frame: pd.DataFrame) -> pd.DataFrame:
 
         out["tags"] = out["tags"].apply(normalize_tag_ids)
     return out[ALL_COLUMNS]
+
+
+def _persist_ledger(frame: pd.DataFrame) -> Path:
+    return write_ledger(frame, path=LEDGER_PARQUET)
 
 
 def run_ingest() -> dict:
@@ -115,7 +123,10 @@ def run_ingest() -> dict:
         if not raw.empty:
             incoming = normalize(raw)
             source_links = transaction_sources(raw)
-            new_rows = incoming[~incoming["txn_id"].isin(prior_ids)].copy()
+            suppressed = load_suppressed_txn_ids(SUPPRESSED_TXN_PATH)
+            new_rows = incoming[~incoming["txn_id"].isin(prior_ids | suppressed)].copy()
+            if suppressed and not source_links.empty and "txn_id" in source_links.columns:
+                source_links = source_links[~source_links["txn_id"].isin(suppressed)].copy()
             if not new_rows.empty:
                 new_rows = canonicalize(_ensure_columns(new_rows))
                 if prior.empty:
@@ -186,7 +197,7 @@ def run_classify(with_ai: bool = False) -> dict:
         combined = pd.concat([locked_rows, classified], ignore_index=True)
         combined = combined.drop_duplicates(subset=["txn_id"], keep="first")
         combined = _ensure_columns(combined)
-        write_ledger(combined)
+        _persist_ledger(combined)
 
     return classification_counts(combined)
 
@@ -251,7 +262,7 @@ def apply_ai_decisions(decisions: list[dict]) -> dict:
             return {"error": "No ledger yet. Run ingest first."}
         return ai_review.apply_decisions(
             ledger,
-            lambda frame: write_ledger(_ensure_columns(frame)),
+            lambda frame: _persist_ledger(_ensure_columns(frame)),
             decisions,
             ledger_path=LEDGER_PARQUET,
         )
@@ -288,7 +299,7 @@ def apply_review_decision(
         ledger.loc[match, "classified_by"] = "manual"
         ledger.loc[match, "proposed_category"] = None
         ledger.loc[match, "proposed_subcategory"] = None
-        write_ledger(_ensure_columns(ledger))
+        _persist_ledger(_ensure_columns(ledger))
     result = {"txn_id": txn_id, "category": category, "subcategory": subcategory}
     if tags is not None:
         result["tags"] = normalize_tag_ids(tags)
@@ -359,7 +370,7 @@ def apply_rule_to_open_review(rule: dict) -> list[str]:
             applied.append(str(row["txn_id"]))
 
         if applied:
-            write_ledger(_ensure_columns(ledger))
+            _persist_ledger(_ensure_columns(ledger))
         return applied
 
 
@@ -400,9 +411,64 @@ def apply_bulk_transactions(
             normalized = normalize_tag_ids(tags)
             for idx in ledger.index[match]:
                 ledger.at[idx, "tags"] = list(normalized)
-        write_ledger(_ensure_columns(ledger))
+        _persist_ledger(_ensure_columns(ledger))
         updated = ledger.loc[match, "txn_id"].astype(str).tolist()
     return {"updated": updated, "count": len(updated)}
+
+
+def delete_transaction(txn_id: str) -> dict:
+    """Remove one ledger row and keep ingest from restoring it."""
+    cleaned = str(txn_id).strip()
+    if not cleaned:
+        return {"error": "Transaction id is required"}
+
+    with ledger_lock():
+        ledger = load_ledger()
+        if ledger.empty or "txn_id" not in ledger.columns:
+            return {"error": "Unknown transaction"}
+        match = ledger["txn_id"].astype(str) == cleaned
+        if not match.any():
+            return {"error": "Unknown transaction"}
+        remaining = ledger.loc[~match].copy()
+        if remaining.empty:
+            remaining = pd.DataFrame(columns=ALL_COLUMNS)
+        else:
+            remaining = _ensure_columns(remaining)
+        write_ledger(remaining, path=LEDGER_PARQUET)
+        drop_transaction_sources(cleaned, path=TRANSACTION_SOURCES_PARQUET)
+        suppressed = load_suppressed_txn_ids(SUPPRESSED_TXN_PATH)
+        suppressed.add(cleaned)
+        write_suppressed_txn_ids(suppressed, path=SUPPRESSED_TXN_PATH)
+    return {"deleted": True, "txn_id": cleaned}
+
+
+def assign_cardholder(issuer: str, product: str, cardholder: str) -> dict:
+    """Fill blank cardholder values for one issuer+product under the write lock."""
+    from src.cards import assign_cardholder as apply_assign
+    from src.upload_context import normalize_cardholder as normalize_holder
+
+    try:
+        name = normalize_holder(cardholder)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    with ledger_lock():
+        ledger = load_ledger()
+        if ledger.empty:
+            return {"error": "Ledger is empty"}
+        try:
+            updated, txn_ids = apply_assign(
+                ledger,
+                issuer=issuer,
+                product=product,
+                cardholder=name,
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        if not txn_ids:
+            return {"error": "No unassigned transactions for that product"}
+        _persist_ledger(_ensure_columns(updated))
+    return {"updated": txn_ids, "count": len(txn_ids), "cardholder": name}
 
 
 
@@ -417,7 +483,7 @@ def set_canonical_for_merchants(members: list[str], canonical: str) -> int:
         ledger.loc[match, "canonical_merchant"] = canonical
         ledger.loc[match, "merchant_source"] = "manual"
         ledger.loc[match, "proposed_canonical"] = None
-        write_ledger(_ensure_columns(ledger))
+        _persist_ledger(_ensure_columns(ledger))
     return count
 
 
@@ -428,7 +494,7 @@ def recanonicalize() -> dict:
         if ledger.empty:
             return {"updated": 0}
         updated = canonicalize(ledger)
-        write_ledger(_ensure_columns(updated))
+        _persist_ledger(_ensure_columns(updated))
         resolved = int(updated["canonical_merchant"].notna().sum())
     return {"updated": len(updated), "canonical": resolved}
 
@@ -471,7 +537,7 @@ def reassign_canonical_on_ledger(
             ledger.loc[match, "classified_by"] = "manual"
             ledger.loc[match, "proposed_category"] = None
             ledger.loc[match, "proposed_subcategory"] = None
-        write_ledger(_ensure_columns(ledger))
+        _persist_ledger(_ensure_columns(ledger))
         return count
 
 
@@ -493,7 +559,7 @@ def apply_category_to_canonical(canonical: str, category: str, subcategory: str 
             ledger.loc[match, "classified_by"] = "manual"
             ledger.loc[match, "proposed_category"] = None
             ledger.loc[match, "proposed_subcategory"] = None
-            write_ledger(_ensure_columns(ledger))
+            _persist_ledger(_ensure_columns(ledger))
         return count
 
 
@@ -529,5 +595,5 @@ def rewrite_ledger_category(
             ledger.loc[match, "classified_by"] = None
         ledger.loc[match, "proposed_category"] = None
         ledger.loc[match, "proposed_subcategory"] = None
-        write_ledger(_ensure_columns(ledger))
+        _persist_ledger(_ensure_columns(ledger))
         return count
