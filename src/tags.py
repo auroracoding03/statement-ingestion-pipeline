@@ -10,10 +10,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pandas as pd
 import yaml
 from filelock import FileLock
 
 from src.atomic import atomic_write_text
+from src.cashflow import non_payment_frame, summarize_spend
 from src import paths
 
 TAG_KINDS = ("occasion", "trip", "other")
@@ -141,3 +143,62 @@ def normalize_tag_ids(values) -> list[str]:
         return out
     text = str(values).strip()
     return [text] if text and text.lower() != "nan" else []
+
+
+def spend_by_tag(ledger: pd.DataFrame, *, kind: str | None = None) -> list[dict]:
+    """Net spend and category breakdown for each catalog tag, live from the ledger."""
+    vocab = list_tags()
+    if kind is not None and str(kind).strip():
+        cleaned = str(kind).strip().lower()
+        if cleaned not in TAG_KINDS:
+            raise ValueError(f"Unsupported tag kind: {kind!r}")
+        vocab = [item for item in vocab if item["kind"] == cleaned]
+
+    spend = (
+        non_payment_frame(ledger)
+        if ledger is not None and not ledger.empty
+        else pd.DataFrame()
+    )
+    items: list[dict] = []
+    for entry in vocab:
+        tag_id = entry["id"]
+        if spend.empty or "tags" not in spend.columns:
+            matched = spend.iloc[0:0]
+        else:
+            mask = spend["tags"].map(lambda value, wanted=tag_id: wanted in normalize_tag_ids(value))
+            matched = spend.loc[mask]
+        stats = summarize_spend(matched)
+        breakdown: list[dict] = []
+        if not matched.empty:
+            frame = matched.assign(
+                category=lambda d: d["category"].fillna("Uncategorized") if "category" in d.columns else "Uncategorized",
+                subcategory=lambda d: (
+                    d["subcategory"].fillna("").astype(str).str.strip()
+                    if "subcategory" in d.columns
+                    else ""
+                ),
+            )
+            grouped = (
+                frame.groupby(["category", "subcategory"], as_index=False)
+                .agg(total=("amount", "sum"), txn_count=("amount", "count"))
+                .sort_values("total", ascending=False)
+            )
+            breakdown = [
+                {
+                    "category": str(row.category),
+                    "subcategory": str(row.subcategory),
+                    "total": round(float(row.total), 2),
+                    "txn_count": int(row.txn_count),
+                }
+                for row in grouped.itertuples(index=False)
+            ]
+        items.append(
+            {
+                **entry,
+                "total": stats["net_spend"],
+                "txn_count": stats["charge_count"],
+                "breakdown": breakdown,
+            }
+        )
+    items.sort(key=lambda item: (-float(item["total"]), str(item["label"]).lower()))
+    return items

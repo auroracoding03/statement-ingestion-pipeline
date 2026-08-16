@@ -380,14 +380,19 @@ def apply_bulk_transactions(
     category: str | None = None,
     subcategory: str | None = None,
     tags: list[str] | None = None,
+    add_tags: list[str] | None = None,
 ) -> dict:
-    """Apply a category and/or tags to selected ledger rows. Does not write rules."""
+    """Apply a category and/or tags to selected ledger rows. Does not write rules.
+
+    ``tags`` replaces the row's tag list. ``add_tags`` unions onto existing tags
+    without changing category or classified_by.
+    """
     from src.tags import normalize_tag_ids
 
     cleaned_ids = [str(txn_id) for txn_id in txn_ids if str(txn_id).strip()]
     if not cleaned_ids:
         return {"error": "Select at least one transaction"}
-    if category is None and tags is None:
+    if category is None and tags is None and add_tags is None:
         return {"error": "Provide a category or tags"}
 
     with ledger_lock():
@@ -411,6 +416,17 @@ def apply_bulk_transactions(
             normalized = normalize_tag_ids(tags)
             for idx in ledger.index[match]:
                 ledger.at[idx, "tags"] = list(normalized)
+        if add_tags is not None:
+            extra = normalize_tag_ids(add_tags)
+            for idx in ledger.index[match]:
+                current = normalize_tag_ids(ledger.at[idx, "tags"])
+                seen = set(current)
+                merged = list(current)
+                for tag in extra:
+                    if tag not in seen:
+                        seen.add(tag)
+                        merged.append(tag)
+                ledger.at[idx, "tags"] = merged
         _persist_ledger(_ensure_columns(ledger))
         updated = ledger.loc[match, "txn_id"].astype(str).tolist()
     return {"updated": updated, "count": len(updated)}

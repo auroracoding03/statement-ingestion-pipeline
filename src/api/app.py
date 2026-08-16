@@ -77,7 +77,7 @@ from src.recurring import detect_recurring
 from src.review import cluster_open_review, needs_review, rule_from_row
 from src.statement_identity import detect_statement_identity
 from src.store import last_statement_upload_at
-from src.tags import create_tag, delete_tag, list_tags, normalize_tag_ids
+from src.tags import create_tag, delete_tag, list_tags, normalize_tag_ids, spend_by_tag
 from src.updater import UpdateError, check_for_update, install_latest_update
 from src.upload_context import (
     append_card_product,
@@ -574,6 +574,7 @@ def post_transactions_bulk(body: BulkTransactionsRequest) -> dict:
         category=body.category,
         subcategory=body.subcategory,
         tags=body.tags,
+        add_tags=body.add_tags,
     )
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
@@ -1037,6 +1038,16 @@ def _tag_in_use(tag_id: str) -> bool:
 def get_tags() -> dict:
     ensure_dirs()
     return {"total": len(list_tags()), "items": list_tags()}
+
+
+@app.get("/api/tags/spend")
+def get_tag_spend(kind: str | None = Query(default=None)) -> dict:
+    ensure_dirs()
+    try:
+        items = spend_by_tag(pipeline.load_ledger(), kind=kind)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"items": items}
 
 
 @app.post("/api/tags")

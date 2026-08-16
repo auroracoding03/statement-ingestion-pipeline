@@ -12,7 +12,7 @@ const GROUPS = [
       { to: "/", label: "Overview" },
       { to: "/transactions", label: "Transactions" },
       { to: "/accounts", label: "Accounts" },
-      { to: "/categories", label: "Categories" },
+      { to: "/categories", label: "Spend" },
       { to: "/budget", label: "Budget", writeOnly: true },
       { to: "/recurring", label: "Recurring" },
     ],

@@ -63,6 +63,8 @@ export function Transactions() {
   const [selectedId, setSelectedId] = useState(parsed.txn);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [bulkCategory, setBulkCategory] = useState("");
+  const [bulkSubcategory, setBulkSubcategory] = useState("");
+  const [bulkTags, setBulkTags] = useState<string[]>([]);
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [debouncedQuery, setDebouncedQuery] = useState(query);
@@ -169,12 +171,20 @@ export function Transactions() {
   }
 
   async function applyBulk() {
-    if (!bulkCategory || picked.size === 0) return;
+    if (picked.size === 0) return;
+    if (!bulkCategory && bulkTags.length === 0) return;
     setBulkBusy(true);
     setBulkError(null);
     try {
-      await api.bulkTransactions({ txn_ids: [...picked], category: bulkCategory });
+      await api.bulkTransactions({
+        txn_ids: [...picked],
+        ...(bulkCategory ? { category: bulkCategory, subcategory: bulkSubcategory } : {}),
+        ...(bulkTags.length ? { add_tags: bulkTags } : {}),
+      });
       setPicked(new Set());
+      setBulkCategory("");
+      setBulkSubcategory("");
+      setBulkTags([]);
       reload();
     } catch (err) {
       setBulkError(err instanceof Error ? err.message : String(err));
@@ -261,18 +271,71 @@ export function Transactions() {
       {canWrite && picked.size > 0 && (
         <div className="toolbar bulk-toolbar">
           <span className="muted">{picked.size} selected</span>
-          <select value={bulkCategory} onChange={(event) => setBulkCategory(event.target.value)}>
-            <option value="">Set category…</option>
-            {sortedLabels(categories).map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-          <button className="btn" disabled={!bulkCategory || bulkBusy} onClick={() => void applyBulk()}>
-            {bulkBusy ? "Saving…" : "Apply category"}
+          <div className="bulk-fields">
+            <CategoryFields
+              categories={categories}
+              subcategories={rulesState.data?.subcategories ?? {}}
+              category={bulkCategory}
+              subcategory={bulkSubcategory}
+              categoryLabel="Set category…"
+              subcategoryLabel="Set subcategory…"
+              onCategoryChange={(nextCategory, nextSub) => {
+                setBulkCategory(nextCategory);
+                setBulkSubcategory(nextSub);
+              }}
+              onPairChange={(nextCategory, nextSub) => {
+                setBulkCategory(nextCategory);
+                setBulkSubcategory(nextSub);
+              }}
+            />
+            <select
+              value=""
+              aria-label="Add tag"
+              onChange={(event) => {
+                const id = event.target.value;
+                if (id && !bulkTags.includes(id)) setBulkTags([...bulkTags, id]);
+              }}
+            >
+              <option value="">Add tag…</option>
+              {tagCatalog
+                .filter((entry) => !bulkTags.includes(entry.id))
+                .map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.label}
+                  </option>
+                ))}
+            </select>
+            {bulkTags.length > 0 && (
+              <div className="tag-chip-row compact">
+                {bulkTags.map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className="tag-chip active"
+                    onClick={() => setBulkTags(bulkTags.filter((tag) => tag !== id))}
+                  >
+                    {tagLabel(id)}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <button
+            className="btn"
+            disabled={(!bulkCategory && bulkTags.length === 0) || bulkBusy}
+            onClick={() => void applyBulk()}
+          >
+            {bulkBusy ? "Saving…" : "Apply Selection(s)"}
           </button>
-          <button className="btn subtle" onClick={() => setPicked(new Set())}>
+          <button
+            className="btn subtle"
+            onClick={() => {
+              setPicked(new Set());
+              setBulkCategory("");
+              setBulkSubcategory("");
+              setBulkTags([]);
+            }}
+          >
             Clear
           </button>
         </div>

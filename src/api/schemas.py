@@ -131,10 +131,11 @@ class ReviewPreviewRequest(BaseModel):
 
 
 class BulkTransactionsRequest(BaseModel):
-    txn_ids: list[str] = Field(min_length=1, max_length=200)
+    txn_ids: list[str] = Field(min_length=1, max_length=2000)
     category: str | None = None
     subcategory: str | None = None
     tags: list[str] | None = None
+    add_tags: list[str] | None = None
 
 
 class BudgetSubcategoryIn(BaseModel):

@@ -535,6 +535,11 @@ h2 {
   margin-bottom: 1rem;
 }
 
+.toolbar h2 {
+  margin: 0;
+  flex: 1;
+}
+
 .toolbar .grow {
   flex: 1;
   min-width: 12rem;
@@ -1415,4 +1420,18 @@ th.sortable.secondary {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--card);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.bulk-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+  flex: 1;
+}
+
+.bulk-fields select {
+  min-width: 9rem;
 }

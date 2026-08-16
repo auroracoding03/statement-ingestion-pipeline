@@ -8,6 +8,19 @@ export interface ContextTag {
   kind: TagKind;
 }
 
+export interface TagSpendBreakdown {
+  category: string;
+  subcategory: string;
+  total: number;
+  txn_count: number;
+}
+
+export interface TagSpendItem extends ContextTag {
+  total: number;
+  txn_count: number;
+  breakdown: TagSpendBreakdown[];
+}
+
 export interface Transaction {
   txn_id: string;
   card: string;

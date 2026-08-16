@@ -1330,3 +1330,77 @@ def test_manual_override_survives_classify(client: TestClient, workspace: dict):
     assert sibling["category"] == "Subscriptions"
     assert sibling["subcategory"] == "Streaming"
     assert sibling["classified_by"] == "rule"
+
+
+def test_bulk_add_tags_keeps_rule_classification(client: TestClient, workspace: dict):
+    row = _extra_txn("2026-04-15", 15.99, "NETFLIX")
+    _write_extra(workspace, [row])
+    classified = pipeline_mod.run_classify()
+    assert classified.get("error") is None
+
+    merged = client.post(
+        "/api/transactions/bulk",
+        json={"txn_ids": [row["txn_id"]], "add_tags": ["gift"]},
+    )
+    assert merged.status_code == 200
+    listing = {item["txn_id"]: item for item in client.get("/api/transactions").json()["items"]}
+    tagged = listing[row["txn_id"]]
+    assert tagged["category"] == "Subscriptions"
+    assert tagged["classified_by"] == "rule"
+    assert "gift" in tagged["tags"]
+
+    stamped = client.post(
+        "/api/transactions/bulk",
+        json={"txn_ids": [row["txn_id"]], "category": "Food"},
+    )
+    assert stamped.status_code == 200
+    listing = {item["txn_id"]: item for item in client.get("/api/transactions").json()["items"]}
+    food = listing[row["txn_id"]]
+    assert food["category"] == "Food"
+    assert food["classified_by"] == "manual"
+    assert "gift" in food["tags"]
+
+    empty = client.post("/api/transactions/bulk", json={"txn_ids": [row["txn_id"]]})
+    assert empty.status_code == 400
+
+
+def test_tag_spend_trip_buckets_exclude_untagged(client: TestClient, workspace: dict):
+    created = client.post("/api/tags", json={"label": "2025-LondonToParis", "kind": "trip"})
+    assert created.status_code == 200
+    tag_id = created.json()["tag"]["id"]
+    lodging = _extra_txn(
+        "2025-06-10",
+        420.0,
+        "HOTEL PARIS",
+        category="Travel",
+        subcategory="Lodging",
+        tags=[tag_id],
+    )
+    food = _extra_txn(
+        "2025-06-11",
+        85.5,
+        "BISTRO",
+        category="Food",
+        subcategory="Dining",
+        tags=[tag_id],
+    )
+    control = _extra_txn(
+        "2025-06-12",
+        50.0,
+        "LOCAL CAFE",
+        category="Food",
+        subcategory="Dining",
+    )
+    _write_extra(workspace, [lodging, food, control])
+
+    body = client.get("/api/tags/spend?kind=trip").json()
+    trip = next(item for item in body["items"] if item["id"] == tag_id)
+    assert trip["total"] == 505.5
+    assert trip["txn_count"] == 2
+    by_pair = {(row["category"], row["subcategory"]): row for row in trip["breakdown"]}
+    assert by_pair[("Travel", "Lodging")]["total"] == 420.0
+    assert by_pair[("Travel", "Lodging")]["txn_count"] == 1
+    assert by_pair[("Food", "Dining")]["total"] == 85.5
+    assert by_pair[("Food", "Dining")]["txn_count"] == 1
+    assert all(item["kind"] == "trip" for item in body["items"])
+    assert {item["id"] for item in body["items"]} == {tag_id}

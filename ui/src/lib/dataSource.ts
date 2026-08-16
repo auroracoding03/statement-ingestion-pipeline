@@ -29,6 +29,7 @@ import type {
   Rule,
   RulePreview,
   Status,
+  TagSpendItem,
   Transaction,
   UnknownCluster,
 } from "./types";
@@ -416,6 +417,14 @@ export const api = {
     return req<{ total: number; items: ContextTag[] }>("/api/tags");
   },
 
+  async tagSpend(params: { kind?: string } = {}): Promise<{ items: TagSpendItem[] }> {
+    if (!canWrite) return { items: [] };
+    const qs = new URLSearchParams();
+    if (params.kind) qs.set("kind", params.kind);
+    const suffix = qs.toString() ? `?${qs}` : "";
+    return req<{ items: TagSpendItem[] }>(`/api/tags/spend${suffix}`);
+  },
+
   async updates(): Promise<UpdateStatus> {
     if (!canWrite) {
       return {
@@ -479,7 +488,13 @@ export const api = {
     }>(`/api/review/${txnId}`, { method: "POST", body: JSON.stringify(body) });
   },
 
-  bulkTransactions(body: { txn_ids: string[]; category?: string; subcategory?: string; tags?: string[] }) {
+  bulkTransactions(body: {
+    txn_ids: string[];
+    category?: string;
+    subcategory?: string;
+    tags?: string[];
+    add_tags?: string[];
+  }) {
     if (!canWrite) writeGuard();
     return req<{ updated: string[]; count: number }>("/api/transactions/bulk", {
       method: "POST",
