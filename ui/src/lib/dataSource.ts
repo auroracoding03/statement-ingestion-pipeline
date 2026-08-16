@@ -126,10 +126,15 @@ function postedDay(value: string): string {
   return String(value).slice(0, 10);
 }
 
+function staticAccountKind(row: Transaction): "card" | "bank" {
+  const blob = `${row.card_issuer ?? ""} ${row.card_product ?? ""} ${row.card ?? ""}`;
+  return /\b(checking|savings|debit|banking|money market)\b/i.test(blob) ? "bank" : "card";
+}
+
 function filterStaticTransactions(
   items: Transaction[],
   params: Record<string, string | number | boolean>,
-): { total: number; items: Transaction[] } {
+): { total: number; items: Transaction[]; spend_total: number; income_total: number } {
   let rows = items;
   const query = String(params.q ?? "").toLowerCase();
   if (query) {
@@ -158,6 +163,9 @@ function filterStaticTransactions(
   }
   if (params.unclassified) {
     rows = rows.filter((row) => !row.classified_by || row.classified_by === "ai" || !row.category);
+  }
+  if (params.account_kind === "card" || params.account_kind === "bank") {
+    rows = rows.filter((row) => staticAccountKind(row) === params.account_kind);
   }
   if (params.since) {
     rows = rows.filter((row) => postedDay(row.posted_date) >= String(params.since));
@@ -192,7 +200,18 @@ function filterStaticTransactions(
   });
   const limit = Number(params.limit ?? 500);
   const offset = Number(params.offset ?? 0);
-  return { total: rows.length, items: rows.slice(offset, offset + limit) };
+  const spend = rows
+    .filter((row) => row.category !== "Transfers" && row.category !== "Income")
+    .reduce((sum, row) => sum + (row.amount > 0 ? row.amount : 0), 0);
+  const income = rows
+    .filter((row) => row.category === "Income")
+    .reduce((sum, row) => sum + Math.abs(row.amount), 0);
+  return {
+    total: rows.length,
+    items: rows.slice(offset, offset + limit),
+    spend_total: Math.round(spend * 100) / 100,
+    income_total: Math.round(income * 100) / 100,
+  };
 }
 
 export const api = {
@@ -246,7 +265,9 @@ export const api = {
           .filter(([, v]) => v !== "" && v !== undefined && v !== false)
           .map(([k, v]) => [k, String(v)]),
       );
-      return req<{ total: number; items: Transaction[] }>(`/api/transactions?${qs}`);
+      return req<{ total: number; items: Transaction[]; spend_total?: number; income_total?: number }>(
+        `/api/transactions?${qs}`,
+      );
     }
     const items = await staticJSON<Transaction[]>("ledger", []);
     return filterStaticTransactions(items, params);

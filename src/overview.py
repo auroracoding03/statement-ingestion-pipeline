@@ -8,7 +8,7 @@ import pandas as pd
 
 from src import paths
 from src.budget import budget_rows_for_period
-from src.cashflow import charge_mask, non_payment_frame, summarize_spend
+from src.cashflow import charge_mask, household_spend_frame, summarize_household
 from src.periods import filter_posted, has_prior_history, month_keys, resolve_period
 from src.recurring import load_expected
 from src.review import needs_review
@@ -44,6 +44,12 @@ def _empty_summary(
         "prior_spend_total": None,
         "spend_delta": None,
         "spend_delta_pct": None,
+        "income_total": 0.0,
+        "prior_income_total": None,
+        "surplus": 0.0,
+        "prior_surplus": None,
+        "surplus_delta": None,
+        "surplus_delta_pct": None,
         "charge_count": 0,
         "gross_charges": 0.0,
         "returns_total": 0.0,
@@ -156,22 +162,34 @@ def build_period_summary(
     )
     include_prior = has_prior_history(period, months)
 
-    stats = summarize_spend(current)
-    prior_stats = summarize_spend(prior)
+    stats = summarize_household(current)
+    prior_stats = summarize_household(prior)
     spend_total = stats["net_spend"]
     prior_total = prior_stats["net_spend"]
-    charges = current.loc[charge_mask(current)] if not current.empty else current
-    spend = non_payment_frame(current)
-    prior_spend_rows = non_payment_frame(prior) if include_prior else prior.iloc[0:0].copy()
+    spend = household_spend_frame(current)
+    charges = spend.loc[charge_mask(spend)] if not spend.empty else spend
+    prior_spend_rows = household_spend_frame(prior) if include_prior else prior.iloc[0:0].copy()
 
+    income_total = stats["income_total"]
+    surplus = stats["surplus"]
     if not include_prior:
         prior_spend = None
         delta = None
         delta_pct = None
+        prior_income = None
+        prior_surplus = None
+        surplus_delta = None
+        surplus_delta_pct = None
     else:
         prior_spend = prior_total
         delta = _money(spend_total - prior_total)
         delta_pct = None if prior_total == 0 else round((spend_total - prior_total) / prior_total * 100, 1)
+        prior_income = prior_stats["income_total"]
+        prior_surplus = prior_stats["surplus"]
+        surplus_delta = _money(surplus - prior_surplus)
+        surplus_delta_pct = (
+            None if prior_surplus == 0 else round((surplus - prior_surplus) / abs(prior_surplus) * 100, 1)
+        )
 
     current_cats = _category_totals(spend)
     prior_cats = _category_totals(prior_spend_rows) if include_prior else {}
@@ -240,7 +258,7 @@ def build_period_summary(
 
     bills: list[dict] = []
     if period.preset in MONTH_PRESETS:
-        household = filter_posted(ledger, period.since, period.until)
+        household = household_spend_frame(filter_posted(ledger, period.since, period.until))
         household_charges = household.loc[charge_mask(household)] if not household.empty else household
         bills = _bills_for_month(household_charges)
 
@@ -259,6 +277,12 @@ def build_period_summary(
         "prior_spend_total": prior_spend,
         "spend_delta": delta,
         "spend_delta_pct": delta_pct,
+        "income_total": income_total,
+        "prior_income_total": prior_income,
+        "surplus": surplus,
+        "prior_surplus": prior_surplus,
+        "surplus_delta": surplus_delta,
+        "surplus_delta_pct": surplus_delta_pct,
         "charge_count": stats["charge_count"],
         "returns_total": stats["returns_total"],
         "payments_total": stats["payments_total"],

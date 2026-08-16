@@ -80,6 +80,8 @@ def test_month_summary_excludes_payments_from_spend_and_reports_them(monkeypatch
     assert summary["gross_charges"] == 40.0
     assert summary["prior_spend_total"] == 25.0
     assert summary["spend_delta"] == 15.0
+    assert summary["income_total"] == 0.0
+    assert summary["surplus"] == -40.0
 
 
 def test_month_summary_nets_merchant_returns_not_payments(monkeypatch):
@@ -110,6 +112,8 @@ def test_month_summary_nets_merchant_returns_not_payments(monkeypatch):
     assert summary["payments_total"] == 200.0
     assert summary["spend_total"] == 30.0
     assert summary["charge_count"] == 1
+    assert summary["income_total"] == 0.0
+    assert summary["surplus"] == -30.0
 
 
 def test_cardholder_filter_and_unassigned_split(monkeypatch):
@@ -288,3 +292,59 @@ def test_period_summary_includes_shown_budget_rows(monkeypatch):
     assert by_label["Food"]["variance"] == 10.0
     assert by_label["Food / Groceries"]["actual"] == 40.0
     assert by_label["Food / Groceries"]["variance"] == 10.0
+
+
+def test_month_summary_reports_income_and_surplus(monkeypatch):
+    _stub_overview_deps(monkeypatch)
+    ledger = pd.DataFrame(
+        [
+            _row(posted_date="2026-07-02", amount=40.0, raw_description="GROCERIES", category="Food"),
+            _row(
+                posted_date="2026-07-04",
+                amount=388.0,
+                raw_description="EXAMPLE HOA",
+                card="wellsfargo-everyday-checking",
+                card_issuer="Wells Fargo",
+                card_product="Everyday Checking",
+                category="Housing",
+                subcategory="HOA",
+            ),
+            _row(
+                posted_date="2026-07-14",
+                amount=-4692.05,
+                raw_description="ACME PAYROLL",
+                card="wellsfargo-way2save-savings",
+                card_issuer="Wells Fargo",
+                card_product="Way2Save Savings",
+                category="Income",
+                subcategory="Payroll",
+            ),
+            _row(
+                posted_date="2026-07-05",
+                amount=2631.60,
+                raw_description="AMERICAN EXPRESS ACH PMT",
+                card="wellsfargo-way2save-savings",
+                card_issuer="Wells Fargo",
+                card_product="Way2Save Savings",
+                category="Transfers",
+                subcategory="CardPayment",
+            ),
+            _row(
+                posted_date="2026-07-03",
+                amount=-200.0,
+                raw_description="PAYMENT THANK YOU",
+                category="Transfers",
+                subcategory="Monthly Payment",
+            ),
+        ]
+    )
+    summary = build_month_summary(ledger, month="2026-07")
+    assert summary["spend_total"] == 428.0
+    assert summary["income_total"] == 4692.05
+    assert summary["surplus"] == 4264.05
+    assert summary["payments_total"] == 200.0
+    categories = {row["category"]: row["total"] for row in summary["categories"]}
+    assert "Transfers" not in categories
+    assert "Income" not in categories
+    assert categories["Housing"] == 388.0
+    assert categories["Food"] == 40.0

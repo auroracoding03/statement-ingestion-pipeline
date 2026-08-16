@@ -214,6 +214,60 @@ def test_checking_product_is_bank_kind(monkeypatch):
     payload = build_cards_coverage(ledger, today=date(2026, 8, 1))
     row = _by_label(payload)["Bank of America Advantage Checking · Alex Example"]
     assert row["account_kind"] == "bank"
+    assert row["income_total"] == 0.0
+    assert row["bank_expenses"] == 12.0
+    assert row["spend_total"] == 12.0
+
+
+def test_bank_income_and_card_funding_are_not_expenses(monkeypatch):
+    monkeypatch.setattr("src.cards.list_card_products", lambda: {"Wells Fargo": ["Way2Save Savings"]})
+    ledger = pd.DataFrame(
+        [
+            _row(
+                card="wellsfargo-way2save-savings",
+                card_issuer="Wells Fargo",
+                card_product="Way2Save Savings",
+                posted_date="2026-07-14",
+                amount=-4692.05,
+                raw_description="ACME PAYROLL",
+                category="Income",
+                subcategory="Payroll",
+                source_document_id="wf-jul",
+                source_file="wf/jul.csv",
+            ),
+            _row(
+                card="wellsfargo-way2save-savings",
+                card_issuer="Wells Fargo",
+                card_product="Way2Save Savings",
+                posted_date="2026-07-05",
+                amount=2631.60,
+                raw_description="AMERICAN EXPRESS ACH PMT",
+                category="Transfers",
+                subcategory="CardPayment",
+                source_document_id="wf-jul",
+                source_file="wf/jul.csv",
+            ),
+            _row(
+                card="wellsfargo-way2save-savings",
+                card_issuer="Wells Fargo",
+                card_product="Way2Save Savings",
+                posted_date="2026-07-04",
+                amount=1834.56,
+                raw_description="ROUNDPOINT MTG",
+                category="Housing",
+                subcategory="Mortgage",
+                source_document_id="wf-jul",
+                source_file="wf/jul.csv",
+            ),
+        ]
+    )
+    payload = build_cards_coverage(ledger, today=date(2026, 8, 1))
+    row = _by_label(payload)["Wells Fargo Way2Save Savings · Alex Example"]
+    assert row["account_kind"] == "bank"
+    assert row["income_total"] == 4692.05
+    assert row["bank_expenses"] == 1834.56
+    assert row["spend_total"] == 1834.56
+    assert row["payments_total"] == 0.0
 
 
 def test_same_product_for_two_cardholders_stays_separate(monkeypatch):

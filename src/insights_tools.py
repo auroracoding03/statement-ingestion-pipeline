@@ -8,7 +8,7 @@ from datetime import date
 import pandas as pd
 
 from src.budget import load_budget
-from src.cashflow import charge_mask, non_payment_frame, summarize_spend
+from src.cashflow import charge_mask, household_spend_frame, summarize_spend
 from src.periods import filter_posted, month_end, shift_month
 from src.recurring import load_expected
 from src.review import needs_review
@@ -122,7 +122,7 @@ def _category_net(frame: pd.DataFrame, *, category: str, subcategory: str | None
     matched = _exact_category(window, category)
     if subcategory:
         matched = _exact_subcategory(matched, subcategory)
-    spend = non_payment_frame(matched)
+    spend = household_spend_frame(matched)
     stats = summarize_spend(spend)
     return {
         "actual": stats["net_spend"],
@@ -222,7 +222,7 @@ def tool_budget_status(frame: pd.DataFrame, args: dict, today: date | None = Non
     factor = float(max(_months_inclusive(since, until), 1))
     scoped = _cardholder(frame, args.get("cardholder"))
     window = filter_posted(scoped, since.isoformat(), until.isoformat())
-    spend = non_payment_frame(window)
+    spend = household_spend_frame(window)
     rows: list[dict] = []
     for env in load_budget().get("envelopes") or []:
         category = str(env.get("category") or "").strip()
@@ -301,7 +301,7 @@ def tool_tagged_spend(frame: pd.DataFrame, args: dict, today: date | None = None
     else:
         mask = window["tags"].map(lambda value: bool(ids.intersection(normalize_tag_ids(value))))
         matched = window.loc[mask].copy()
-    spend = non_payment_frame(matched)
+    spend = household_spend_frame(matched)
     stats = summarize_spend(spend)
     return {
         "tag": needle,
@@ -376,7 +376,7 @@ def tool_uncategorized_spend(frame: pd.DataFrame, args: dict, today: date | None
         cats = window["category"] if "category" in window.columns else pd.Series([None] * len(window), index=window.index)
         uncat = window.loc[cats.map(_is_uncategorized)].copy()
         review_count = int(window.apply(needs_review, axis=1).sum())
-    spend = non_payment_frame(uncat)
+    spend = household_spend_frame(uncat)
     stats = summarize_spend(spend)
     return {
         "net_spend": stats["net_spend"],

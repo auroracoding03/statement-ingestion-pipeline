@@ -19,7 +19,7 @@ import httpx
 import pandas as pd
 
 from src.ai_suggest import recommended_config
-from src.cashflow import is_payment_row, summarize_spend
+from src.cashflow import household_spend_frame, is_payment_row, summarize_spend
 from src.insights_tools import (
     _exact_category,
     _exact_subcategory,
@@ -31,7 +31,7 @@ from src.insights_tools import (
 )
 from src.overview import build_month_summary
 
-PROMPT_VERSION = "insights-v6"
+PROMPT_VERSION = "insights-v7"
 MAX_MESSAGES = 8
 MAX_QUESTION_CHARS = 500
 MAX_TOOL_ROUNDS = 3
@@ -188,6 +188,7 @@ KNOWN_CATEGORY_NAMES = frozenset(
         "Transport",
         "Subscriptions",
         "Personal",
+        "Taxes",
         "Transfers",
         "Fees",
         "Income",
@@ -555,7 +556,7 @@ def _filter_scope(frame: pd.DataFrame, args: dict) -> pd.DataFrame:
     scoped = _apply_cardholder(_apply_window(frame, args.get("since"), args.get("until")), args.get("cardholder"))
     if args.get("query") and not scoped.empty:
         scoped = scoped.loc[_merchant_mask(scoped, str(args["query"]))].copy()
-    return _apply_taxonomy(scoped, args)
+    return household_spend_frame(_apply_taxonomy(scoped, args))
 
 
 def _bucket_spend(group: pd.DataFrame) -> dict[str, float | int]:
@@ -874,7 +875,7 @@ def _system_prompt(today: date) -> str:
             "You are not a general-purpose agent. You cannot change the ledger, rules, merchants, files, configuration, or application state.",
             "You have no PC, filesystem, SQL, shell, browser, or web access.",
             "Never invent amounts, dates, or counts. If facts are missing, call a tool. If a tool returns empty, say the ledger does not show it.",
-            "Spend is net of merchant returns (gross charges minus returns). Monthly card payments are not spend.",
+            "Spend is net of merchant returns (gross charges minus returns). Monthly card payments, internal transfers, and bank-side card funding are not spend.",
             'When the user says they "spent" money, report net spend (gross charges minus matched credits/refunds, excluding monthly payments) and label that choice.',
             "Merchant questions match canonical or normalized name (contains, case-insensitive). Report which names actually matched.",
             "If several unrelated merchant names match, say the match is combined/ambiguous and list the names. Do not hide the breakdown.",
@@ -887,7 +888,7 @@ def _system_prompt(today: date) -> str:
             "Split a category by subcategory: spend_breakdown with group_by subcategory and category set.",
             "Which month, highest/lowest month, trend, or month-by-month comparison: spend_over_time.",
             "Top / biggest / who spent / Alex vs Sam / Amazon vs Target: spend_breakdown with group_by merchant, category, subcategory, or cardholder.",
-            "Category names (Housing, Utilities, Food, Travel, Entertainment, Shopping, Health, Transport, Subscriptions, Personal, Transfers, Fees, Income, Uncategorized) are categories, never merchant names. Use category_spend or remaining_budget. Never pass them as query to merchant_spend or spend_over_time.",
+            "Category names (Housing, Utilities, Food, Travel, Entertainment, Shopping, Health, Transport, Subscriptions, Personal, Transfers, Fees, Income, Taxes, Uncategorized) are categories, never merchant names. Use category_spend or remaining_budget. Never pass them as query to merchant_spend or spend_over_time.",
             "Remaining / left / leftover / rest of year / stay within budget: remaining_budget with the exact category name and no subcategory unless the user named one. Its actual field is the same net spend as category_spend for that window; remaining is leftover vs the envelope, not spend.",
             "Do not pass subcategory unless the user named a subcategory (Lodging, Groceries, Gas, Transit). Travel budget remaining means category=Travel with no subcategory.",
             "Over budget anywhere / which envelopes are over: budget_status.",

@@ -24,6 +24,9 @@ export interface TagSpendItem extends ContextTag {
 export interface Transaction {
   txn_id: string;
   card: string;
+  card_issuer?: string | null;
+  card_product?: string | null;
+  cardholder?: string | null;
   posted_date: string;
   amount: number;
   raw_description: string;
@@ -116,6 +119,12 @@ export interface OverviewMonth {
   prior_spend_total: number | null;
   spend_delta: number | null;
   spend_delta_pct: number | null;
+  income_total?: number;
+  prior_income_total?: number | null;
+  surplus?: number;
+  prior_surplus?: number | null;
+  surplus_delta?: number | null;
+  surplus_delta_pct?: number | null;
   charge_count: number;
   returns_total: number;
   payments_total: number;
@@ -167,6 +176,8 @@ export interface CardStatement {
   gross_charges?: number;
   returns_total?: number;
   payments_total?: number;
+  income_total?: number;
+  bank_expenses?: number;
   coverage_start: string | null;
   coverage_end: string | null;
 }
@@ -190,6 +201,8 @@ export interface CardProductCoverage {
   gross_charges?: number;
   returns_total?: number;
   payments_total?: number;
+  income_total?: number;
+  bank_expenses?: number;
   uncategorized_count: number;
   uncategorized_total: number;
   first_posted: string | null;

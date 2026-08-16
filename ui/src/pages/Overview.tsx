@@ -77,7 +77,7 @@ export function Overview() {
     <>
       <PageHeader
         title="Monthly finance overview"
-        lede="Pick a window for a household spend conversation: what changed, what was a one-off, and which bills posted."
+        lede="Pick a window for household surplus: income minus card spend and bank bills. Transfers between your own accounts are ignored."
       />
 
       {status.error && <ErrorNote error={status.error} />}
@@ -133,6 +133,8 @@ export function Overview() {
           <div className="metrics">
             <Metric label={data.label ? `Spend · ${data.label}` : "Spend"} value={money(data.spend_total)} />
             <Metric label={deltaCaption(data)} value={deltaLabel(data)} />
+            <Metric label="Income" value={money(data.income_total ?? 0)} />
+            <Metric label="Surplus" value={signedMoney(data.surplus ?? 0)} />
             <Metric label="Returns" value={money(data.returns_total)} />
             <Metric label="Monthly payments" value={money(data.payments_total)} />
             <Metric label="Charges" value={data.charge_count} />
@@ -169,7 +171,7 @@ export function Overview() {
           <div className="overview-charts">
             <section>
               <h2>Spend by category</h2>
-              <p className="chart-caption">This window’s charges. Click a bar to open those transactions.</p>
+              <p className="chart-caption">This window’s household expenses (cards plus bank bills; transfers ignored). Click a bar to open those transactions.</p>
               {chartRows.length > 0 ? (
                 <div className="chart-wrap">
                   <ResponsiveContainer width="100%" height={Math.max(220, chartRows.length * 28)}>

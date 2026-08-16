@@ -704,7 +704,7 @@ def test_planner_picks_spend_over_time_for_highest_amazon_month():
         generate=generate,
         ollama_host="http://127.0.0.1:11434",
     )
-    assert out["prompt_version"] == PROMPT_VERSION == "insights-v6"
+    assert out["prompt_version"] == PROMPT_VERSION == "insights-v7"
     assert out["tools_used"] == ["spend_over_time"]
     peak = out["facts"][0]["result"]["peak"]
     assert peak["month"] == "2024-10"
@@ -846,7 +846,7 @@ def test_planner_routes_travel_leftover_year_to_remaining_budget(monkeypatch):
         generate=generate,
         ollama_host="http://127.0.0.1:11434",
     )
-    assert out["prompt_version"] == "insights-v6"
+    assert out["prompt_version"] == "insights-v7"
     assert out["tools_used"] == ["remaining_budget"]
     assert out["facts"][0]["args"]["category"] == "Travel"
     assert "query" not in out["facts"][0]["args"]

@@ -15,12 +15,14 @@ categories:
   - Transfers
   - Fees
   - Income
+  - Taxes
   - Uncategorized
 
 # Managed vocabulary of subcategories per primary. Keep strings consistent.
 subcategories:
   Housing:
     - Mortgage
+    - HOA
   Utilities:
     - Electric
     - InternetPhone
@@ -48,9 +50,13 @@ subcategories:
   Transfers:
     - CardPayment
     - Monthly Payment
+    - InternalTransfer
   Fees:
     - CardFee
-  Income: []
+  Income:
+    - Payroll
+    - Interest
+  Taxes: []
   Uncategorized: []
 
 rules:
@@ -103,3 +109,28 @@ rules:
       merchant_regex: "(?i)interest charge|late fee|annual fee|foreign transaction fee"
     category: Fees
     subcategory: CardFee
+
+  - match:
+      merchant_regex: "(?i)american express ach|\\bach pmt\\b|ach payment"
+    category: Transfers
+    subcategory: CardPayment
+
+  - match:
+      merchant_regex: "(?i)online transfer to .*(checking|savings)|internal transfer"
+    category: Transfers
+    subcategory: InternalTransfer
+
+  - match:
+      merchant_regex: "(?i)\\bpayroll\\b"
+    category: Income
+    subcategory: Payroll
+
+  - match:
+      merchant_regex: "(?i)\\bhoa\\b"
+    category: Housing
+    subcategory: HOA
+
+  - match:
+      merchant_regex: "(?i)^interest payment$|\\binterest payment\\b"
+    category: Income
+    subcategory: Interest

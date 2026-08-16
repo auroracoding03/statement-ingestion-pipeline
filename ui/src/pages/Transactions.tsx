@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CategoryFields } from "../components/CategoryFields";
 import { Empty, ErrorNote, Loading, MerchantCell, PageHeader } from "../components/ui";
 import { api, canWrite } from "../lib/dataSource";
-import { cashflow, shortDate } from "../lib/format";
+import { cashflow, money, shortDate } from "../lib/format";
 import { sortedLabels } from "../lib/sort";
 import { replaceHash, useHashLocation } from "../lib/router";
 import type { ContextTag, Transaction } from "../lib/types";
@@ -110,7 +110,8 @@ export function Transactions() {
   const tagsState = useAsync(() => api.tags(), []);
   const rulesState = useAsync(() => (canWrite ? api.rules() : Promise.resolve({ categories: [] as string[], subcategories: {}, rules: [] })), []);
 
-  const { data, loading, error, reload } = useAsync(
+  const filterKey = [debouncedQuery, card, category, subcategory, tag, merchant, unclassified, since, until, sort, order];
+  const cardsState = useAsync(
     () =>
       api.transactions({
         q: debouncedQuery,
@@ -125,11 +126,39 @@ export function Transactions() {
         sort,
         order,
         limit: 500,
+        account_kind: "card",
       }),
-    [debouncedQuery, card, category, subcategory, tag, merchant, unclassified, since, until, sort, order],
+    filterKey,
+  );
+  const banksState = useAsync(
+    () =>
+      api.transactions({
+        q: debouncedQuery,
+        card,
+        category,
+        subcategory,
+        tag,
+        merchant,
+        unclassified,
+        since,
+        until,
+        sort,
+        order,
+        limit: 500,
+        account_kind: "bank",
+      }),
+    filterKey,
   );
 
-  const items = data?.items ?? [];
+  const [expanded, setExpanded] = useState<"card" | "bank" | null>(null);
+  const cardItems = cardsState.data?.items ?? [];
+  const bankItems = banksState.data?.items ?? [];
+  const loading = cardsState.loading || banksState.loading;
+  const error = cardsState.error || banksState.error;
+  function reload(options?: { silent?: boolean }) {
+    cardsState.reload(options);
+    banksState.reload(options);
+  }
   const tagCatalog = tagsState.data?.items ?? [];
   const categories = rulesState.data?.categories ?? [];
   const subcategoryOptions = useMemo(() => {
@@ -137,16 +166,25 @@ export function Transactions() {
     const options = subcategory && !fromRules.includes(subcategory) ? [...fromRules, subcategory] : fromRules;
     return sortedLabels(options);
   }, [category, rulesState.data?.subcategories, subcategory]);
-  const selected = items.find((row) => row.txn_id === selectedId) ?? null;
+  const selected =
+    cardItems.find((row) => row.txn_id === selectedId) ??
+    bankItems.find((row) => row.txn_id === selectedId) ??
+    null;
   const facets = useMemo(() => {
     const cards = new Set<string>();
     const cats = new Set<string>();
-    for (const txn of items) {
+    for (const txn of [...cardItems, ...bankItems]) {
       cards.add(txn.card);
       cats.add(txn.category ?? "Uncategorized");
     }
     return { cards: sortedLabels(cards), categories: sortedLabels(cats) };
-  }, [items]);
+  }, [cardItems, bankItems]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    if (cardItems.some((row) => row.txn_id === selectedId)) setExpanded("card");
+    else if (bankItems.some((row) => row.txn_id === selectedId)) setExpanded("bank");
+  }, [selectedId, cardItems, bankItems]);
 
   const tagLabel = useMemo(() => {
     const map = new Map(tagCatalog.map((entry) => [entry.id, entry.label]));
@@ -217,7 +255,7 @@ export function Transactions() {
           onChange={(event) => setQuery(event.target.value)}
         />
         <select value={card} onChange={(event) => setCard(event.target.value)}>
-          <option value="">All cards</option>
+          <option value="">All accounts</option>
           {facets.cards.map((value) => (
             <option key={value} value={value}>
               {value}
@@ -345,94 +383,68 @@ export function Transactions() {
       {error && <ErrorNote error={error} />}
       {loading && <Loading what="transactions" />}
 
-      {!loading && items.length === 0 && <Empty>No transactions match these filters.</Empty>}
+      {!loading && cardItems.length === 0 && bankItems.length === 0 && (
+        <Empty>No transactions match these filters.</Empty>
+      )}
 
-      {items.length > 0 && (
-        <>
-          <p className="muted">
-            Showing {items.length} of {data?.total ?? items.length}
-          </p>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  {canWrite && (
-                    <th>
-                      <input
-                        type="checkbox"
-                        checked={picked.size > 0 && items.every((row) => picked.has(row.txn_id))}
-                        onChange={(event) => {
-                          setPicked(event.target.checked ? new Set(items.map((row) => row.txn_id)) : new Set());
-                        }}
-                        aria-label="Select all"
-                      />
-                    </th>
-                  )}
-                  <SortHeader label="Date" active={sort === "posted_date"} order={order} onClick={() => toggleSort("posted_date")} />
-                  <SortHeader label="Card" active={sort === "card"} order={order} onClick={() => toggleSort("card")} />
-                  <SortHeader label="Merchant" active={sort === "merchant"} order={order} onClick={() => toggleSort("merchant")} />
-                  <th>Raw description</th>
-                  <SortHeader label="Amount" active={sort === "amount"} order={order} onClick={() => toggleSort("amount")} numeric />
-                  <SortHeader label="Category" active={sort === "category"} order={order} onClick={() => toggleSort("category")} />
-                  <th>Tags</th>
-                  <th>Source</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((txn) => {
-                  const flow = cashflow(txn.amount);
-                  return (
-                    <tr
-                      key={txn.txn_id}
-                      className={`clickable-row${selectedId === txn.txn_id ? " selected-row" : ""}`}
-                      onClick={() => setSelectedId(txn.txn_id)}
-                    >
-                      {canWrite && (
-                        <td onClick={(event) => event.stopPropagation()}>
-                          <input
-                            type="checkbox"
-                            checked={picked.has(txn.txn_id)}
-                            onChange={() => togglePicked(txn.txn_id)}
-                            aria-label={`Select ${txn.canonical_merchant || txn.normalized_merchant}`}
-                          />
-                        </td>
-                      )}
-                      <td>{shortDate(txn.posted_date)}</td>
-                      <td>{txn.card}</td>
-                      <td>
-                        <MerchantCell
-                          canonical={txn.canonical_merchant}
-                          normalized={txn.normalized_merchant}
-                        />
-                      </td>
-                      <td className="muted">{txn.raw_description}</td>
-                      <td className={`num amount-${flow.kind}`}>{flow.text}</td>
-                      <td>
-                        {txn.category ?? <span className="unresolved">Uncategorized</span>}
-                        {txn.subcategory ? <span className="merchant-raw"> {txn.subcategory}</span> : null}
-                        {txn.category === "Transfer" ? <span className="tag">Transfer</span> : null}
-                      </td>
-                      <td>
-                        <div className="tag-chip-row compact">
-                          {(txn.tags ?? []).map((id) => (
-                            <span key={id} className="tag-chip readonly">
-                              {tagLabel(id)}
-                            </span>
-                          ))}
-                        </div>
-                      </td>
-                      <td>
-                        <span className={`status status-${txn.classified_by ?? "missing"}`}>
-                          {txn.classified_by ?? "open"}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </>
+      {!loading && (cardItems.length > 0 || bankItems.length > 0) && (
+        <div className="txn-groups">
+          {cardItems.length > 0 && (
+            <>
+              <TxnGroup
+                title="Cards"
+                total={cardsState.data?.total ?? cardItems.length}
+                shown={cardItems.length}
+                spend={cardsState.data?.spend_total ?? 0}
+                expanded={expanded === "card"}
+                onToggle={() => setExpanded(expanded === "card" ? null : "card")}
+              />
+              {expanded === "card" && (
+                <TxnTable
+                  items={cardItems}
+                  total={cardsState.data?.total ?? cardItems.length}
+                  selectedId={selectedId}
+                  picked={picked}
+                  sort={sort}
+                  order={order}
+                  tagLabel={tagLabel}
+                  onSelect={setSelectedId}
+                  onToggleSort={toggleSort}
+                  onTogglePicked={togglePicked}
+                  onToggleAll={(checked) => setPicked(checked ? new Set(cardItems.map((row) => row.txn_id)) : new Set())}
+                />
+              )}
+            </>
+          )}
+          {bankItems.length > 0 && (
+            <>
+              <TxnGroup
+                title="Bank accounts"
+                total={banksState.data?.total ?? bankItems.length}
+                shown={bankItems.length}
+                spend={banksState.data?.spend_total ?? 0}
+                income={banksState.data?.income_total}
+                expanded={expanded === "bank"}
+                onToggle={() => setExpanded(expanded === "bank" ? null : "bank")}
+              />
+              {expanded === "bank" && (
+                <TxnTable
+                  items={bankItems}
+                  total={banksState.data?.total ?? bankItems.length}
+                  selectedId={selectedId}
+                  picked={picked}
+                  sort={sort}
+                  order={order}
+                  tagLabel={tagLabel}
+                  onSelect={setSelectedId}
+                  onToggleSort={toggleSort}
+                  onTogglePicked={togglePicked}
+                  onToggleAll={(checked) => setPicked(checked ? new Set(bankItems.map((row) => row.txn_id)) : new Set())}
+                />
+              )}
+            </>
+          )}
+        </div>
       )}
 
       {selected && (
@@ -456,6 +468,145 @@ export function Transactions() {
           }}
         />
       )}
+    </>
+  );
+}
+
+function TxnGroup({
+  title,
+  total,
+  shown,
+  spend,
+  income,
+  expanded,
+  onToggle,
+}: {
+  title: string;
+  total: number;
+  shown: number;
+  spend: number;
+  income?: number;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const extra = income != null && income !== 0 ? ` · income ${money(income)}` : "";
+  return (
+    <button type="button" className={`txn-group${expanded ? " is-open" : ""}`} onClick={onToggle}>
+      <strong>{title}</strong>
+      <span className="muted">
+        {shown === total ? `${total} rows` : `${shown} of ${total}`} · spend {money(spend)}
+        {extra}
+      </span>
+      <span className="txn-group-toggle">{expanded ? "Collapse" : "Expand"}</span>
+    </button>
+  );
+}
+
+function TxnTable({
+  items,
+  total,
+  selectedId,
+  picked,
+  sort,
+  order,
+  tagLabel,
+  onSelect,
+  onToggleSort,
+  onTogglePicked,
+  onToggleAll,
+}: {
+  items: Transaction[];
+  total: number;
+  selectedId: string;
+  picked: Set<string>;
+  sort: SortKey;
+  order: "asc" | "desc";
+  tagLabel: (id: string) => string;
+  onSelect: (id: string) => void;
+  onToggleSort: (key: SortKey) => void;
+  onTogglePicked: (id: string) => void;
+  onToggleAll: (checked: boolean) => void;
+}) {
+  return (
+    <>
+      <p className="muted">
+        Showing {items.length} of {total}
+      </p>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              {canWrite && (
+                <th>
+                  <input
+                    type="checkbox"
+                    checked={picked.size > 0 && items.every((row) => picked.has(row.txn_id))}
+                    onChange={(event) => onToggleAll(event.target.checked)}
+                    aria-label="Select all"
+                  />
+                </th>
+              )}
+              <SortHeader label="Date" active={sort === "posted_date"} order={order} onClick={() => onToggleSort("posted_date")} />
+              <SortHeader label="Card" active={sort === "card"} order={order} onClick={() => onToggleSort("card")} />
+              <SortHeader label="Merchant" active={sort === "merchant"} order={order} onClick={() => onToggleSort("merchant")} />
+              <th>Raw description</th>
+              <SortHeader label="Amount" active={sort === "amount"} order={order} onClick={() => onToggleSort("amount")} numeric />
+              <SortHeader label="Category" active={sort === "category"} order={order} onClick={() => onToggleSort("category")} />
+              <th>Tags</th>
+              <th>Source</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((txn) => {
+              const flow = cashflow(txn.amount);
+              return (
+                <tr
+                  key={txn.txn_id}
+                  className={`clickable-row${selectedId === txn.txn_id ? " selected-row" : ""}`}
+                  onClick={() => onSelect(txn.txn_id)}
+                >
+                  {canWrite && (
+                    <td onClick={(event) => event.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={picked.has(txn.txn_id)}
+                        onChange={() => onTogglePicked(txn.txn_id)}
+                        aria-label={`Select ${txn.canonical_merchant || txn.normalized_merchant}`}
+                      />
+                    </td>
+                  )}
+                  <td>{shortDate(txn.posted_date)}</td>
+                  <td>{txn.card}</td>
+                  <td>
+                    <MerchantCell canonical={txn.canonical_merchant} normalized={txn.normalized_merchant} />
+                  </td>
+                  <td className="muted">{txn.raw_description}</td>
+                  <td className={`num amount-${flow.kind}`}>{flow.text}</td>
+                  <td>
+                    {txn.category ?? <span className="unresolved">Uncategorized</span>}
+                    {txn.subcategory ? <span className="merchant-raw"> {txn.subcategory}</span> : null}
+                    {txn.category === "Transfers" ? <span className="tag">Transfer</span> : null}
+                  </td>
+                  <td>
+                    <div className="tag-chip-row compact">
+                      {(txn.tags ?? []).map((id) => (
+                        <span key={id} className="tag-chip readonly">
+                          {tagLabel(id)}
+                        </span>
+                      ))}
+                    </div>
+                  </td>
+                  <td>
+                    <span className={`status status-${txn.classified_by ?? "missing"}`}>
+                      {txn.classified_by ?? "open"}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }

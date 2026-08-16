@@ -17,7 +17,7 @@ from src.atomic import (
     atomic_write_parquet,
     atomic_write_text,
 )
-from src.cashflow import non_payment_frame
+from src.cashflow import household_spend_frame
 from src import paths as path_config
 from src.paths import ensure_dirs
 
@@ -137,7 +137,7 @@ def rebuild_duckdb(
             con.register("ledger_df", ledger)
             con.register("recurring_df", recurring)
             con.register("reconciliation_df", reconciliation)
-            con.register("spend_df", non_payment_frame(ledger))
+            con.register("spend_df", household_spend_frame(ledger))
             con.execute("CREATE TABLE ledger AS SELECT * FROM ledger_df")
             con.execute("CREATE TABLE recurring AS SELECT * FROM recurring_df")
             con.execute("CREATE TABLE reconciliation AS SELECT * FROM reconciliation_df")
@@ -196,7 +196,7 @@ def export_for_dashboard(
     if mode not in {"aggregates_only", "full"}:
         raise ValueError(f"Unsupported publish mode: {mode}")
 
-    spend = non_payment_frame(ledger)
+    spend = household_spend_frame(ledger)
     category_monthly = (
         spend.assign(
             month=lambda d: pd.to_datetime(d["posted_date"]).dt.strftime("%Y-%m"),

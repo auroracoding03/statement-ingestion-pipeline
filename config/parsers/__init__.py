@@ -14,6 +14,7 @@ from .chase_csv import parse_chase_csv
 from .chase_pdf import parse_chase_pdf
 from .generic_csv import parse_generic_csv
 from .generic_pdf import parse_generic_pdf
+from .wells_fargo_csv import parse_wells_fargo_csv
 from .wells_fargo_pdf import parse_wells_fargo_pdf
 
 # Keys are lowercase folder / issuer names under inbox/
@@ -44,9 +45,11 @@ PARSER_REGISTRY = {
         ".pdf": parse_capital_one_pdf,
     },
     "wellsfargo": {
+        ".csv": parse_wells_fargo_csv,
         ".pdf": parse_wells_fargo_pdf,
     },
     "wf": {
+        ".csv": parse_wells_fargo_csv,
         ".pdf": parse_wells_fargo_pdf,
     },
     "bankofamerica": {

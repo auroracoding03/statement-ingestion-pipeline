@@ -142,6 +142,17 @@ def _csv_identity(path: Path) -> StatementIdentity:
                 "select the cardholder because this export has no Card Member names"
             )
         return identity
+    if {"date", "description", "amount"}.issubset(headers) and (
+        "status" in headers or "check #" in headers or "check number" in headers
+    ):
+        identity = _product_required(
+            "Wells Fargo",
+            None,
+            "Detected Wells Fargo account history CSV. Select the account product because this export omits it.",
+        )
+        return identity.requiring_cardholder(
+            "select the cardholder because this export has no account nickname"
+        )
     return _manual("This CSV format is not recognized. Select an issuer to continue.")
 
 

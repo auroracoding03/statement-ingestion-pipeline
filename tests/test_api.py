@@ -198,6 +198,8 @@ def test_overview_month_summarizes_latest_month(client: TestClient):
     assert body["gross_charges"] == 90.94
     assert body["returns_total"] == 0.0
     assert body["payments_total"] == 0.0
+    assert body["income_total"] == 0.0
+    assert body["surplus"] == -90.94
     assert body["spend_delta"] is None
     assert body["uncategorized_count"] == 2
     assert body["review_count"] == 2
@@ -320,6 +322,14 @@ def test_transactions_search_and_filter(client: TestClient):
     r = client.get("/api/transactions?q=coffee")
     assert r.status_code == 200
     assert r.json()["total"] == 1
+
+    cards = client.get("/api/transactions?account_kind=card")
+    banks = client.get("/api/transactions?account_kind=bank")
+    assert cards.status_code == 200
+    assert cards.json()["total"] > 0
+    assert banks.json()["total"] == 0
+    assert "spend_total" in cards.json()
+    assert "income_total" in cards.json()
 
     r = client.get("/api/transactions?card=nope")
     assert r.json()["total"] == 0

@@ -15,7 +15,7 @@ import yaml
 from filelock import FileLock
 
 from src.atomic import atomic_write_text
-from src.cashflow import non_payment_frame, summarize_spend
+from src.cashflow import household_spend_frame, summarize_spend
 from src import paths
 
 TAG_KINDS = ("occasion", "trip", "other")
@@ -155,7 +155,7 @@ def spend_by_tag(ledger: pd.DataFrame, *, kind: str | None = None) -> list[dict]
         vocab = [item for item in vocab if item["kind"] == cleaned]
 
     spend = (
-        non_payment_frame(ledger)
+        household_spend_frame(ledger)
         if ledger is not None and not ledger.empty
         else pd.DataFrame()
     )

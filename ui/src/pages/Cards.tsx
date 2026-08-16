@@ -22,6 +22,8 @@ type AccountSortKey =
   | "gross"
   | "returns"
   | "net"
+  | "income"
+  | "expenses"
   | "last_statement";
 
 const ACCOUNT_NUMERIC_SORT = new Set<AccountSortKey>([
@@ -30,6 +32,8 @@ const ACCOUNT_NUMERIC_SORT = new Set<AccountSortKey>([
   "gross",
   "returns",
   "net",
+  "income",
+  "expenses",
   "last_statement",
 ]);
 
@@ -66,6 +70,8 @@ function compareAccounts(
   if (key === "gross") return compareNumber(left.gross_charges ?? left.spend_total, right.gross_charges ?? right.spend_total, order);
   if (key === "returns") return compareNumber(left.returns_total ?? 0, right.returns_total ?? 0, order);
   if (key === "net") return compareNumber(left.spend_total, right.spend_total, order);
+  if (key === "income") return compareNumber(left.income_total ?? 0, right.income_total ?? 0, order);
+  if (key === "expenses") return compareNumber(left.bank_expenses ?? 0, right.bank_expenses ?? 0, order);
   return compareNumber(dateValue(left.coverage_end), dateValue(right.coverage_end), order);
 }
 
@@ -113,7 +119,7 @@ export function Cards() {
     <>
       <PageHeader
         title="Accounts"
-        lede="See which statements you have for each credit product and bank account, where coverage looks thin, and net spend after merchant returns."
+        lede="See which statements you have for each credit product and bank account. Cards show net spend after merchant returns; bank rows show income and true expenses, not transfers."
       />
 
       {coverage.error && <ErrorNote error={coverage.error} />}
@@ -150,13 +156,13 @@ export function Cards() {
             <>
               <h2>Cards</h2>
               {cards.length > 0 ? (
-                <ProductTable products={cards} sort={sort} onSort={toggleSort} onSelect={setSelectedKey} />
+                <ProductTable products={cards} sort={sort} onSort={toggleSort} onSelect={setSelectedKey} variant="card" />
               ) : (
                 <Empty>No card products on the ledger yet. Ingest a statement to get started.</Empty>
               )}
               <h2>Bank accounts</h2>
               {banks.length > 0 ? (
-                <ProductTable products={banks} sort={sort} onSort={toggleSort} onSelect={setSelectedKey} />
+                <ProductTable products={banks} sort={sort} onSort={toggleSort} onSelect={setSelectedKey} variant="bank" />
               ) : (
                 <Empty>No bank or debit accounts in the ledger yet.</Empty>
               )}
@@ -173,11 +179,13 @@ function ProductTable({
   sort,
   onSort,
   onSelect,
+  variant = "card",
 }: {
   products: CardProductCoverage[];
   sort: ColumnSort<AccountSortKey>;
   onSort: (key: AccountSortKey) => void;
   onSelect: (key: string) => void;
+  variant?: "card" | "bank";
 }) {
   function rank(key: AccountSortKey): 1 | 2 | undefined {
     if (sort.key === key) return 1;
@@ -203,9 +211,18 @@ function ProductTable({
               numeric
             />
             <SortHeader label="Coverage" rank={rank("coverage")} order={order("coverage")} onClick={() => onSort("coverage")} />
-            <SortHeader label="Gross" rank={rank("gross")} order={order("gross")} onClick={() => onSort("gross")} numeric />
-            <SortHeader label="Returns" rank={rank("returns")} order={order("returns")} onClick={() => onSort("returns")} numeric />
-            <SortHeader label="Net" rank={rank("net")} order={order("net")} onClick={() => onSort("net")} numeric />
+            {variant === "bank" ? (
+              <>
+                <SortHeader label="Income" rank={rank("income")} order={order("income")} onClick={() => onSort("income")} numeric />
+                <SortHeader label="Bank expenses" rank={rank("expenses")} order={order("expenses")} onClick={() => onSort("expenses")} numeric />
+              </>
+            ) : (
+              <>
+                <SortHeader label="Gross" rank={rank("gross")} order={order("gross")} onClick={() => onSort("gross")} numeric />
+                <SortHeader label="Returns" rank={rank("returns")} order={order("returns")} onClick={() => onSort("returns")} numeric />
+                <SortHeader label="Net" rank={rank("net")} order={order("net")} onClick={() => onSort("net")} numeric />
+              </>
+            )}
             <SortHeader
               label="Last statement"
               rank={rank("last_statement")}
@@ -232,9 +249,18 @@ function ProductTable({
                   ? `${shortDate(row.coverage_start)} – ${shortDate(row.coverage_end)}`
                   : "—"}
               </td>
-              <td className="num">{money(row.gross_charges ?? row.spend_total)}</td>
-              <td className="num">{money(row.returns_total ?? 0)}</td>
-              <td className="num">{money(row.spend_total)}</td>
+              {variant === "bank" ? (
+                <>
+                  <td className="num">{money(row.income_total ?? 0)}</td>
+                  <td className="num">{money(row.bank_expenses ?? 0)}</td>
+                </>
+              ) : (
+                <>
+                  <td className="num">{money(row.gross_charges ?? row.spend_total)}</td>
+                  <td className="num">{money(row.returns_total ?? 0)}</td>
+                  <td className="num">{money(row.spend_total)}</td>
+                </>
+              )}
               <td>{shortDate(row.coverage_end)}</td>
             </tr>
           ))}
@@ -304,11 +330,20 @@ function ProductDetail({
 
       <div className="metrics">
         <Metric label="Statements" value={product.statement_count} />
-        <Metric label="Charges" value={product.charge_count} />
-        <Metric label="Gross" value={money(product.gross_charges ?? product.spend_total)} />
-        <Metric label="Returns" value={money(product.returns_total ?? 0)} />
-        <Metric label="Monthly payments" value={money(product.payments_total ?? 0)} />
-        <Metric label="Net" value={money(product.spend_total)} />
+        {product.account_kind === "bank" ? (
+          <>
+            <Metric label="Income" value={money(product.income_total ?? 0)} />
+            <Metric label="Bank expenses" value={money(product.bank_expenses ?? 0)} />
+          </>
+        ) : (
+          <>
+            <Metric label="Charges" value={product.charge_count} />
+            <Metric label="Gross" value={money(product.gross_charges ?? product.spend_total)} />
+            <Metric label="Returns" value={money(product.returns_total ?? 0)} />
+            <Metric label="Monthly payments" value={money(product.payments_total ?? 0)} />
+            <Metric label="Net" value={money(product.spend_total)} />
+          </>
+        )}
         <Metric
           label="Uncategorized"
           value={`${money(product.uncategorized_total)} · ${product.uncategorized_count}`}
@@ -364,9 +399,18 @@ function ProductDetail({
                 <th>File</th>
                 <th>Coverage</th>
                 <th className="num">Transactions</th>
-                <th className="num">Gross</th>
-                <th className="num">Returns</th>
-                <th className="num">Net</th>
+                {product.account_kind === "bank" ? (
+                  <>
+                    <th className="num">Income</th>
+                    <th className="num">Bank expenses</th>
+                  </>
+                ) : (
+                  <>
+                    <th className="num">Gross</th>
+                    <th className="num">Returns</th>
+                    <th className="num">Net</th>
+                  </>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -379,9 +423,18 @@ function ProductDetail({
                       : "—"}
                   </td>
                   <td className="num">{row.txn_count}</td>
-                  <td className="num">{money(row.gross_charges ?? row.spend_total)}</td>
-                  <td className="num">{money(row.returns_total ?? 0)}</td>
-                  <td className="num">{money(row.spend_total)}</td>
+                  {product.account_kind === "bank" ? (
+                    <>
+                      <td className="num">{money(row.income_total ?? 0)}</td>
+                      <td className="num">{money(row.bank_expenses ?? 0)}</td>
+                    </>
+                  ) : (
+                    <>
+                      <td className="num">{money(row.gross_charges ?? row.spend_total)}</td>
+                      <td className="num">{money(row.returns_total ?? 0)}</td>
+                      <td className="num">{money(row.spend_total)}</td>
+                    </>
+                  )}
                 </tr>
               ))}
             </tbody>

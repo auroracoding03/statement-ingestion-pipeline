@@ -8,13 +8,12 @@ import re
 
 import pandas as pd
 
-from src.cashflow import summarize_spend
+from src.cashflow import household_spend_frame, summarize_household
 from src.upload_context import list_card_products, normalize_cardholder
 
 UNASSIGNED = "Unassigned"
 GAP_DAYS = 14
 STALE_DAYS = 40
-BANK_NAME_RE = re.compile(r"(?i)\b(checking|savings|debit|banking|money market)\b")
 BANK_NAME_RE = re.compile(r"(?i)\b(checking|savings|debit|banking|money market)\b")
 
 
@@ -136,10 +135,11 @@ def account_kind(issuer: str, product: str) -> str:
 def _statement_summary(frame: pd.DataFrame) -> dict:
     posted = [_as_date(value) for value in frame["posted_date"]]
     posted = [value for value in posted if value]
-    stats = summarize_spend(frame)
+    stats = summarize_household(frame)
+    spend = household_spend_frame(frame)
     uncategorized = (
-        frame[(frame["amount"] > 0) & frame["category"].map(_is_uncategorized)]
-        if not frame.empty and "category" in frame.columns
+        spend[(spend["amount"] > 0) & spend["category"].map(_is_uncategorized)]
+        if not spend.empty and "category" in spend.columns
         else frame.iloc[0:0]
     )
     start = min(posted) if posted else None
@@ -151,6 +151,8 @@ def _statement_summary(frame: pd.DataFrame) -> dict:
         "gross_charges": stats["gross_charges"],
         "returns_total": stats["returns_total"],
         "payments_total": stats["payments_total"],
+        "income_total": stats["income_total"],
+        "bank_expenses": stats["bank_expenses"],
         "uncategorized_count": int(len(uncategorized)),
         "uncategorized_total": _money(uncategorized["amount"].sum()) if not uncategorized.empty else 0.0,
         "first_posted": _iso(start),
@@ -199,6 +201,8 @@ def _empty_product(issuer: str, product: str, cardholder: str = "") -> dict:
         "gross_charges": 0.0,
         "returns_total": 0.0,
         "payments_total": 0.0,
+        "income_total": 0.0,
+        "bank_expenses": 0.0,
         "uncategorized_count": 0,
         "uncategorized_total": 0.0,
         "first_posted": None,
@@ -227,6 +231,8 @@ def _serialize_product(issuer: str, product: str, cardholder: str, frame: pd.Dat
                     "gross_charges": stats["gross_charges"],
                     "returns_total": stats["returns_total"],
                     "payments_total": stats["payments_total"],
+                    "income_total": stats["income_total"],
+                    "bank_expenses": stats["bank_expenses"],
                     "coverage_start": _iso(stats["coverage_start"]),
                     "coverage_end": _iso(stats["coverage_end"]),
                 }
@@ -255,6 +261,8 @@ def _serialize_product(issuer: str, product: str, cardholder: str, frame: pd.Dat
         "gross_charges": summary["gross_charges"],
         "returns_total": summary["returns_total"],
         "payments_total": summary["payments_total"],
+        "income_total": summary["income_total"],
+        "bank_expenses": summary["bank_expenses"],
         "uncategorized_count": summary["uncategorized_count"],
         "uncategorized_total": summary["uncategorized_total"],
         "first_posted": summary["first_posted"],

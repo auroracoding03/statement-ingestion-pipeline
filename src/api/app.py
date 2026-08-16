@@ -55,7 +55,7 @@ from src.insights import (
     run_insights_turn,
 )
 from src.budget import list_budget, save_envelopes
-from src.cashflow import non_payment_frame
+from src.cashflow import household_spend_frame, summarize_household
 from src.classify import (
     append_category,
     append_rule,
@@ -68,7 +68,7 @@ from src.classify import (
 )
 from src.extract import iter_statement_files
 from src.merchants import append_merchant, delete_merchant, load_merchants, merge_merchants, update_merchant
-from src.cards import build_cards_coverage
+from src.cards import account_kind as product_account_kind, build_cards_coverage
 from src.overview import _filter_cardholder, build_period_summary, cardholders
 from src.taxonomy import category_impact, delete_category
 from src.paths import DASHBOARD, EXPORT_DIR, FINANCE_DB, INBOX, PENDING_UPLOADS, UI, ensure_dirs
@@ -499,6 +499,7 @@ def get_transactions(
     unclassified: bool = False,
     since: str | None = None,
     until: str | None = None,
+    account_kind: str | None = None,
     sort: str = Query(default="posted_date"),
     order: str = Query(default="desc"),
     limit: int = Query(200, le=5000),
@@ -506,7 +507,7 @@ def get_transactions(
 ) -> dict:
     ledger = pipeline.load_ledger()
     if ledger.empty:
-        return {"total": 0, "items": []}
+        return {"total": 0, "items": [], "spend_total": 0.0, "income_total": 0.0}
 
     frame = ledger
     if "tags" not in frame.columns:
@@ -540,6 +541,19 @@ def get_transactions(
         ]
     if unclassified:
         frame = frame[frame.apply(needs_review, axis=1)]
+    if account_kind in {"card", "bank"} and not frame.empty:
+        issuers = (
+            frame["card_issuer"].fillna("").astype(str)
+            if "card_issuer" in frame.columns
+            else pd.Series("", index=frame.index)
+        )
+        products = (
+            frame["card_product"].fillna("").astype(str)
+            if "card_product" in frame.columns
+            else pd.Series("", index=frame.index)
+        )
+        kinds = [product_account_kind(issuer, product) for issuer, product in zip(issuers, products, strict=True)]
+        frame = frame.loc[[kind == account_kind for kind in kinds]].copy()
     if since or until:
         try:
             frame = filter_posted(frame, since, until)
@@ -564,7 +578,14 @@ def get_transactions(
 
     total = len(frame)
     page = frame.iloc[offset : offset + limit]
-    return {"total": total, "items": _records(page)}
+    household = summarize_household(frame)
+    return {
+        "total": total,
+        "items": _records(page),
+        "spend_total": household["net_spend"],
+        "income_total": household["income_total"],
+        "account_kind": account_kind,
+    }
 
 
 @app.post("/api/transactions/bulk")
@@ -691,7 +712,7 @@ def get_categories_monthly(cardholder: str | None = Query(default=None)) -> list
     if ledger.empty:
         return []
     scoped = _filter_cardholder(ledger, cardholder.strip() if cardholder and cardholder.strip() else None)
-    spend = non_payment_frame(scoped)
+    spend = household_spend_frame(scoped)
     if spend.empty:
         return []
     if "subcategory" not in spend.columns:
@@ -761,7 +782,7 @@ def get_merchants() -> dict:
 
     usage: dict[str, dict] = {}
     if not ledger.empty and "canonical_merchant" in ledger.columns:
-        spend = non_payment_frame(ledger)
+        spend = household_spend_frame(ledger)
         grouped = (
             spend[spend["canonical_merchant"].notna()]
             .groupby("canonical_merchant")
