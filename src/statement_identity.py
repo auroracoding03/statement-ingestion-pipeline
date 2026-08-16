@@ -46,6 +46,7 @@ class StatementIdentity:
     confidence: str
     message: str
     needs_cardholder: bool = False
+    account_kind: str = "card"
 
     @property
     def needs_manual_details(self) -> bool:
@@ -65,19 +66,32 @@ class StatementIdentity:
             confidence=self.confidence,
             message=message,
             needs_cardholder=True,
+            account_kind=self.account_kind,
         )
 
 
-def _detected(issuer: str, product: str | None, message: str) -> StatementIdentity:
-    return StatementIdentity(issuer=issuer, product=product, confidence="detected", message=message)
+def _detected(issuer: str, product: str | None, message: str, *, account_kind: str = "card") -> StatementIdentity:
+    return StatementIdentity(
+        issuer=issuer, product=product, confidence="detected", message=message, account_kind=account_kind
+    )
 
 
-def _manual(message: str) -> StatementIdentity:
-    return StatementIdentity(issuer=None, product=None, confidence="manual", message=message)
+def _manual(message: str, *, account_kind: str = "card") -> StatementIdentity:
+    return StatementIdentity(
+        issuer=None, product=None, confidence="manual", message=message, account_kind=account_kind
+    )
 
 
-def _product_required(issuer: str, product: str | None, message: str) -> StatementIdentity:
-    return StatementIdentity(issuer=issuer, product=product, confidence="product_required", message=message)
+def _product_required(
+    issuer: str, product: str | None, message: str, *, account_kind: str = "card"
+) -> StatementIdentity:
+    return StatementIdentity(
+        issuer=issuer,
+        product=product,
+        confidence="product_required",
+        message=message,
+        account_kind=account_kind,
+    )
 
 
 def _finalize(issuer: str, product: str | None, message: str) -> StatementIdentity:
@@ -149,9 +163,10 @@ def _csv_identity(path: Path) -> StatementIdentity:
             "Wells Fargo",
             None,
             "Detected Wells Fargo account history CSV. Select the account product because this export omits it.",
+            account_kind="bank",
         )
         return identity.requiring_cardholder(
-            "select the cardholder because this export has no account nickname"
+            "select the account holder because this export has no account nickname"
         )
     return _manual("This CSV format is not recognized. Select an issuer to continue.")
 

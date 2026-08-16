@@ -686,6 +686,7 @@ def test_staged_upload_detects_chase_csv_and_commits_without_manual_details(clie
     item = inspected.json()["items"][0]
     assert item["issuer"] == "Chase"
     assert item["needs_manual_details"] is False
+    assert item["account_kind"] == "card"
 
     committed = client.post("/api/uploads/commit", json={"items": [{"token": item["token"]}]})
     assert committed.status_code == 200
@@ -701,6 +702,7 @@ def test_staged_amex_csv_requires_only_product_confirmation(client: TestClient, 
     assert item["issuer"] == "American Express"
     assert item["confidence"] == "product_required"
     assert item["needs_cardholder"] is False
+    assert item["account_kind"] == "card"
 
     committed = client.post("/api/uploads/commit", json={"items": [{"token": item["token"], "product": "Platinum"}]})
     assert committed.status_code == 200
@@ -760,6 +762,93 @@ def test_amex_commit_rejects_unknown_product(client: TestClient):
     )
     assert rejected.status_code == 422
     assert "Unsupported American Express product" in rejected.json()["detail"]
+
+
+def test_wells_account_history_csv_inspects_as_bank(client: TestClient):
+    payload = (
+        b'"DATE","DESCRIPTION","AMOUNT","CHECK #","STATUS"\n'
+        b'"08/04/2026","HOA DUES","-388.00","","Posted"\n'
+    )
+    inspected = client.post("/api/uploads/inspect", files=[("files", ("Checking.csv", payload, "text/csv"))])
+    assert inspected.status_code == 200
+    item = inspected.json()["items"][0]
+    assert item["issuer"] == "Wells Fargo"
+    assert item["confidence"] == "product_required"
+    assert item["needs_cardholder"] is True
+    assert item["account_kind"] == "bank"
+    assert "account product" in item["message"].lower()
+    assert "account holder" in item["message"].lower()
+
+
+def test_wells_account_history_rejects_card_product_and_accepts_checking(client: TestClient, workspace: dict):
+    payload = (
+        b'"DATE","DESCRIPTION","AMOUNT","CHECK #","STATUS"\n'
+        b'"08/04/2026","HOA DUES","-388.00","","Posted"\n'
+    )
+    inspected = client.post("/api/uploads/inspect", files=[("files", ("Checking.csv", payload, "text/csv"))])
+    token = inspected.json()["items"][0]["token"]
+
+    as_card = client.post(
+        "/api/uploads/commit",
+        json={
+            "items": [
+                {
+                    "token": token,
+                    "product": "Autograph Visa Signature",
+                    "cardholder": "Alex Example",
+                }
+            ]
+        },
+    )
+    assert as_card.status_code == 422
+    assert "account product" in as_card.json()["detail"].lower()
+
+    created = client.post(
+        "/api/card-products",
+        json={"issuer": "Wells Fargo", "product": "Everyday Checking"},
+    )
+    assert created.status_code == 200
+
+    missing_holder = client.post(
+        "/api/uploads/commit",
+        json={"items": [{"token": token, "product": "Everyday Checking"}]},
+    )
+    assert missing_holder.status_code == 422
+    assert "account holder" in missing_holder.json()["detail"].lower()
+
+    committed = client.post(
+        "/api/uploads/commit",
+        json={
+            "items": [
+                {
+                    "token": token,
+                    "product": "Everyday Checking",
+                    "cardholder": "Alex Example",
+                }
+            ]
+        },
+    )
+    assert committed.status_code == 200
+    statement = workspace["root"] / "inbox" / "wellsfargo-everyday-checking" / "Checking.csv"
+    assert statement.exists()
+    assert '"cardholder": "Alex Example"' in sidecar_path(statement).read_text()
+
+
+def test_card_csv_rejects_bank_product(client: TestClient):
+    created = client.post(
+        "/api/card-products",
+        json={"issuer": "American Express", "product": "Advantage Checking"},
+    )
+    assert created.status_code == 200
+    payload = b"Date,Description,Card Member,Account #,Amount\n2026-01-01,Coffee,ALEX EXAMPLE,,10.00\n"
+    inspected = client.post("/api/uploads/inspect", files=[("files", ("statement.csv", payload, "text/csv"))])
+    token = inspected.json()["items"][0]["token"]
+    rejected = client.post(
+        "/api/uploads/commit",
+        json={"items": [{"token": token, "product": "Advantage Checking"}]},
+    )
+    assert rejected.status_code == 422
+    assert "card product" in rejected.json()["detail"].lower()
 
 
 def test_assign_cardholder_endpoint_updates_only_blank_rows(client: TestClient, workspace: dict):

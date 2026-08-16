@@ -54,7 +54,9 @@ def test_wells_fargo_csv_identity_needs_product_and_cardholder(tmp_path: Path) -
     assert result.confidence == "product_required"
     assert result.needs_cardholder is True
     assert result.needs_manual_details is True
+    assert result.account_kind == "bank"
     assert "account product" in result.message.lower()
+    assert "account holder" in result.message.lower()
 
 
 def test_wells_product_folder_resolves_csv_parser() -> None:

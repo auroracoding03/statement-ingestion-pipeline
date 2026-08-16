@@ -387,6 +387,7 @@ async def inspect_uploads(files: list[UploadFile] = ()) -> dict:
                 "message": identity.message,
                 "needs_manual_details": identity.needs_manual_details,
                 "needs_cardholder": identity.needs_cardholder,
+                "account_kind": identity.account_kind,
             }
         )
     return {"items": staged}
@@ -412,11 +413,15 @@ def commit_uploads(body: UploadCommitRequest) -> dict:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if not issuer:
             raise HTTPException(status_code=422, detail=f"Select an issuer for {staged.name[34:]}")
+        file_kind = identity.account_kind if identity.account_kind in {"card", "bank"} else "card"
+        product_kind = product_account_kind(issuer, product or "")
+        product_noun = "an account product" if file_kind == "bank" else "a card product"
+        holder_noun = "an account holder" if file_kind == "bank" else "a cardholder"
         _, needs_product = resolve_card_product_for_issuer(issuer, product)
         if needs_product:
             raise HTTPException(
                 status_code=422,
-                detail=f"Select a card product for {staged.name[34:]} before adding it to the inbox.",
+                detail=f"Select {product_noun} for {staged.name[34:]} before adding it to the inbox.",
             )
         if issuer == "American Express" and staged.suffix.lower() == ".csv" and not product:
             raise HTTPException(
@@ -426,7 +431,17 @@ def commit_uploads(body: UploadCommitRequest) -> dict:
         if identity.needs_cardholder and not holder:
             raise HTTPException(
                 status_code=422,
-                detail=f"Select a cardholder for {staged.name[34:]} before adding it to the inbox.",
+                detail=f"Select {holder_noun} for {staged.name[34:]} before adding it to the inbox.",
+            )
+        if product and file_kind == "bank" and product_kind != "bank":
+            raise HTTPException(
+                status_code=422,
+                detail=f"Select an account product for {staged.name[34:]} before adding it to the inbox.",
+            )
+        if product and file_kind == "card" and product_kind == "bank":
+            raise HTTPException(
+                status_code=422,
+                detail=f"Select a card product for {staged.name[34:]} before adding it to the inbox.",
             )
         card = card_key(issuer, product) if issuer != "Generic" else "generic"
         prepared.append((staged, issuer, card, product, holder, staged.name[34:]))

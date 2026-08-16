@@ -41,6 +41,7 @@ def test_wells_header_wins_over_chase_merchant_in_body(monkeypatch, tmp_path: Pa
     assert result.confidence == "detected"
     assert result.needs_manual_details is False
     assert result.needs_cardholder is False
+    assert result.account_kind == "card"
     assert "header" in result.message.lower()
 
 
@@ -122,6 +123,7 @@ def test_amex_csv_without_card_member_names_needs_cardholder(tmp_path: Path) -> 
     assert result.confidence == "product_required"
     assert result.needs_cardholder is True
     assert result.needs_manual_details is True
+    assert result.account_kind == "card"
     assert "cardholder" in result.message.lower()
 
 

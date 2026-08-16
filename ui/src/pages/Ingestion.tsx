@@ -2,12 +2,16 @@ import { useRef, useState } from "react";
 
 import { PipelineBar } from "../components/PipelineBar";
 import { ErrorNote, PageHeader } from "../components/ui";
-import { api, type UploadInspection } from "../lib/dataSource";
+import { api, productAccountKind, type UploadInspection } from "../lib/dataSource";
 import { useAsync } from "../lib/useAsync";
 
 const ISSUERS = ["American Express", "Bank of America", "Capital One", "Chase", "Wells Fargo", "Generic"];
 
 type PendingUpload = UploadInspection & { selectedIssuer: string; selectedProduct: string; selectedCardholder: string };
+
+function isBankUpload(upload: Pick<UploadInspection, "account_kind">): boolean {
+  return upload.account_kind === "bank";
+}
 
 export function Ingestion() {
   const input = useRef<HTMLInputElement>(null);
@@ -108,7 +112,7 @@ export function Ingestion() {
       }
       setNewProductByIndex((current) => ({ ...current, [index]: "" }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not add card product.");
+      setError(err instanceof Error ? err.message : `Could not add ${isBankUpload(upload) ? "account" : "card"} product.`);
     } finally {
       setBusy(false);
     }
@@ -154,7 +158,7 @@ export function Ingestion() {
         }}
       >
         <h2>Add statements</h2>
-        <p>Drop PDF or CSV files here. PDFs are identified automatically from statement text.</p>
+        <p>Drop PDF or CSV files here. PDFs are identified from statement text; bank account CSVs from their export headers.</p>
         <input
           ref={input}
           type="file"
@@ -176,7 +180,12 @@ export function Ingestion() {
         <section className="ingestion-queue" aria-labelledby="statement-queue-title">
           <h2 id="statement-queue-title">Ready to add</h2>
           {uploads.map((upload, index) => {
-            const issuerProducts = products[upload.selectedIssuer] ?? [];
+            const bank = isBankUpload(upload);
+            const issuerProducts = (products[upload.selectedIssuer] ?? []).filter((product) =>
+              bank
+                ? productAccountKind(upload.selectedIssuer, product) === "bank"
+                : productAccountKind(upload.selectedIssuer, product) !== "bank",
+            );
             const showProduct = needsProduct(upload);
             const showIdentity = upload.needs_manual_details && upload.confidence !== "detected";
             return (
@@ -207,7 +216,7 @@ export function Ingestion() {
                     {showIdentity && showProduct && (
                       <>
                         <label>
-                          Card product
+                          {bank ? "Account product" : "Card product"}
                           <select
                             value={upload.selectedProduct}
                             onChange={(event) => changeProduct(index, event.target.value)}
@@ -225,7 +234,7 @@ export function Ingestion() {
                           <div className="toolbar" style={{ margin: 0, gap: "0.35rem" }}>
                             <input
                               type="text"
-                              placeholder="New product (e.g. Delta Gold)"
+                              placeholder={bank ? "New product (e.g. Everyday Checking)" : "New product (e.g. Delta Gold)"}
                               value={newProductByIndex[index] ?? ""}
                               onChange={(event) =>
                                 setNewProductByIndex((current) => ({
@@ -250,12 +259,12 @@ export function Ingestion() {
                     {upload.needs_cardholder && (
                       <>
                         <label>
-                          Cardholder
+                          {bank ? "Account holder" : "Cardholder"}
                           <select
                             value={upload.selectedCardholder}
                             onChange={(event) => changeCardholder(index, event.target.value)}
                           >
-                            <option value="">Select cardholder</option>
+                            <option value="">{bank ? "Select account holder" : "Select cardholder"}</option>
                             {holders.map((holder) => (
                               <option key={holder} value={holder}>
                                 {holder}
@@ -266,7 +275,7 @@ export function Ingestion() {
                         <div className="toolbar" style={{ margin: 0, gap: "0.35rem" }}>
                           <input
                             type="text"
-                            placeholder="New cardholder (e.g. Alex Example)"
+                            placeholder={bank ? "New account holder (e.g. Alex Example)" : "New cardholder (e.g. Alex Example)"}
                             value={newCardholderByIndex[index] ?? ""}
                             onChange={(event) =>
                               setNewCardholderByIndex((current) => ({

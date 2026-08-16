@@ -120,6 +120,7 @@ export interface UploadInspection {
   message: string;
   needs_manual_details: boolean;
   needs_cardholder: boolean;
+  account_kind?: "card" | "bank";
 }
 
 function postedDay(value: string): string {
@@ -127,8 +128,11 @@ function postedDay(value: string): string {
 }
 
 function staticAccountKind(row: Transaction): "card" | "bank" {
-  const blob = `${row.card_issuer ?? ""} ${row.card_product ?? ""} ${row.card ?? ""}`;
-  return /\b(checking|savings|debit|banking|money market)\b/i.test(blob) ? "bank" : "card";
+  return productAccountKind(row.card_issuer ?? "", `${row.card_product ?? ""} ${row.card ?? ""}`);
+}
+
+export function productAccountKind(issuer: string, product: string): "card" | "bank" {
+  return /\b(checking|savings|debit|banking|money market)\b/i.test(`${issuer} ${product}`) ? "bank" : "card";
 }
 
 function filterStaticTransactions(
