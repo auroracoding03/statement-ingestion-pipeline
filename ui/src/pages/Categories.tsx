@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import {
   CartesianGrid,
   Line,
@@ -11,11 +11,11 @@ import {
 
 import { PeriodPicker, type PeriodValue } from "../components/PeriodPicker";
 import { Empty, ErrorNote, Loading, Metric, PageHeader } from "../components/ui";
-import { api } from "../lib/dataSource";
+import { categoryLabels, subcategoryLabels } from "../lib/categoryOptions";
+import { api, canWrite } from "../lib/dataSource";
 import { compactMoney, money } from "../lib/format";
-import { monthsInRange, resolveClientPeriod } from "../lib/period";
+import { enumerateMonths, monthsInRange, resolveClientPeriod } from "../lib/period";
 import { hashHref } from "../lib/router";
-import { sortedLabels } from "../lib/sort";
 import type { TagSpendBreakdown, TagSpendItem } from "../lib/types";
 import { useAsync } from "../lib/useAsync";
 
@@ -49,12 +49,23 @@ function tripBuckets(breakdown: TagSpendBreakdown[]) {
   };
 }
 
+type SpendAgg = { total: number; txn_count: number };
+
 export function Categories() {
   const [view, setView] = useState<SpendView>("category");
   const { data, loading, error } = useAsync(() => api.categoriesMonthly(), []);
+  const rules = useAsync(
+    () =>
+      canWrite
+        ? api.rules()
+        : Promise.resolve({ categories: [] as string[], subcategories: {} as Record<string, string[]>, rules: [] }),
+    [],
+  );
   const tripsState = useAsync(() => api.tagSpend({ kind: "trip" }), []);
   const rows = data ?? [];
   const [selected, setSelected] = useState<string>("");
+  const [selectedSubcategory, setSelectedSubcategory] = useState("");
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [selectedTrip, setSelectedTrip] = useState<string>("");
   const [period, setPeriod] = useState<PeriodValue>({ preset: "t12m", month: "", since: "", until: "" });
 
@@ -73,12 +84,12 @@ export function Categories() {
   );
 
   const categories = useMemo(
-    () => sortedLabels(new Set(scoped.map((row) => row.category))),
-    [scoped],
+    () => categoryLabels(scoped.map((row) => row.category), rules.data),
+    [scoped, rules.data],
   );
 
   const totals = useMemo(() => {
-    const map = new Map<string, { total: number; txn_count: number }>();
+    const map = new Map<string, SpendAgg>();
     for (const row of scoped) {
       const prev = map.get(row.category) ?? { total: 0, txn_count: 0 };
       map.set(row.category, {
@@ -89,20 +100,58 @@ export function Categories() {
     return [...map.entries()].sort((a, b) => b[1].total - a[1].total);
   }, [scoped]);
 
+  const subcategoryTotals = useMemo(() => {
+    const byCategory = new Map<string, Map<string, SpendAgg>>();
+    for (const row of scoped) {
+      const sub = (row.subcategory ?? "").trim();
+      if (!sub) continue;
+      if (!byCategory.has(row.category)) byCategory.set(row.category, new Map());
+      const map = byCategory.get(row.category)!;
+      const prev = map.get(sub) ?? { total: 0, txn_count: 0 };
+      map.set(sub, { total: prev.total + row.total, txn_count: prev.txn_count + row.txn_count });
+    }
+    const result = new Map<string, [string, SpendAgg][]>();
+    for (const [category, map] of byCategory) {
+      result.set(
+        category,
+        [...map.entries()].sort((a, b) => b[1].total - a[1].total),
+      );
+    }
+    return result;
+  }, [scoped]);
+
+  const active = selected || totals[0]?.[0] || categories[0] || "";
+
+  const subcategoryOptions = useMemo(
+    () =>
+      subcategoryLabels(
+        active,
+        rows.filter((row) => row.category === active).map((row) => row.subcategory ?? ""),
+        rules.data,
+      ),
+    [rows, active, rules.data],
+  );
+
+  const timeline = useMemo(
+    () => enumerateMonths(resolved.since, resolved.until),
+    [resolved.since, resolved.until],
+  );
+
   const trend = useMemo(() => {
-    const active = selected || totals[0]?.[0];
-    if (!active) return { active: "", data: [] };
+    if (!active || timeline.length === 0) return { active: "", data: [] as { month: string; total: number }[] };
     const byMonth = new Map<string, number>();
-    for (const row of scoped.filter((item) => item.category === active)) {
+    for (const month of timeline) byMonth.set(month, 0);
+    for (const row of rows) {
+      if (row.category !== active) continue;
+      if (selectedSubcategory && (row.subcategory ?? "") !== selectedSubcategory) continue;
+      if (!byMonth.has(row.month)) continue;
       byMonth.set(row.month, (byMonth.get(row.month) ?? 0) + row.total);
     }
     return {
       active,
-      data: [...byMonth.entries()]
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([month, total]) => ({ month, total })),
+      data: timeline.map((month) => ({ month, total: byMonth.get(month) ?? 0 })),
     };
-  }, [scoped, selected, totals]);
+  }, [rows, active, selectedSubcategory, timeline]);
 
   const trips = tripsState.data?.items ?? [];
   const tripTotal = trips.reduce((sum, item) => sum + item.total, 0);
@@ -140,8 +189,24 @@ export function Categories() {
           onPeriodChange={setPeriod}
           trend={trend}
           categories={categories}
-          onSelect={setSelected}
+          subcategory={selectedSubcategory}
+          subcategoryOptions={subcategoryOptions}
+          onSelect={(category) => {
+            setSelected(category);
+            setSelectedSubcategory("");
+          }}
+          onSelectSubcategory={setSelectedSubcategory}
           totals={totals}
+          subcategoryTotals={subcategoryTotals}
+          expanded={expanded}
+          onToggleExpanded={(category) => {
+            setExpanded((prev) => {
+              const next = new Set(prev);
+              if (next.has(category)) next.delete(category);
+              else next.add(category);
+              return next;
+            });
+          }}
           resolved={resolved}
         />
       )}
@@ -169,8 +234,14 @@ function CategorySpend({
   onPeriodChange,
   trend,
   categories,
+  subcategory,
+  subcategoryOptions,
   onSelect,
+  onSelectSubcategory,
   totals,
+  subcategoryTotals,
+  expanded,
+  onToggleExpanded,
   resolved,
 }: {
   error: string | null;
@@ -181,8 +252,14 @@ function CategorySpend({
   onPeriodChange: (value: PeriodValue) => void;
   trend: { active: string; data: { month: string; total: number }[] };
   categories: string[];
+  subcategory: string;
+  subcategoryOptions: string[];
   onSelect: (category: string) => void;
-  totals: [string, { total: number; txn_count: number }][];
+  onSelectSubcategory: (subcategory: string) => void;
+  totals: [string, SpendAgg][];
+  subcategoryTotals: Map<string, [string, SpendAgg][]>;
+  expanded: Set<string>;
+  onToggleExpanded: (category: string) => void;
   resolved: { since: string; until: string };
 }) {
   return (
@@ -197,7 +274,7 @@ function CategorySpend({
         </div>
       )}
 
-      {trend.data.length > 0 && (
+      {trend.active && trend.data.length > 0 && (
         <>
           <div className="toolbar">
             <label className="muted" htmlFor="cat-select">
@@ -214,6 +291,23 @@ function CategorySpend({
                 </option>
               ))}
             </select>
+            {trend.active && (
+              <label className="muted" htmlFor="cat-sub-select">
+                Subcategory
+                <select
+                  id="cat-sub-select"
+                  value={subcategory}
+                  onChange={(event) => onSelectSubcategory(event.target.value)}
+                >
+                  <option value="">All subcategories</option>
+                  {subcategoryOptions.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
           <div className="chart-wrap">
             <ResponsiveContainer width="100%" height={260}>
@@ -242,7 +336,7 @@ function CategorySpend({
         <>
           <h2>Category totals</h2>
           <div className="table-wrap">
-            <table>
+            <table className="spend-totals">
               <thead>
                 <tr>
                   <th>Category</th>
@@ -252,24 +346,67 @@ function CategorySpend({
                 </tr>
               </thead>
               <tbody>
-                {totals.map(([category, agg]) => (
-                  <tr
-                    key={category}
-                    className="clickable-row"
-                    onClick={() => {
-                      window.location.hash = hashHref("/transactions", {
-                        category,
-                        since: resolved.since,
-                        until: resolved.until,
-                      });
-                    }}
-                  >
-                    <td>{category}</td>
-                    <td className="num">{money(agg.total)}</td>
-                    <td className="num">{agg.txn_count}</td>
-                    <td className="num">{money(agg.total / agg.txn_count)}</td>
-                  </tr>
-                ))}
+                {totals.map(([category, agg]) => {
+                  const subs = subcategoryTotals.get(category) ?? [];
+                  const open = expanded.has(category);
+                  return (
+                    <Fragment key={category}>
+                      <tr
+                        className="clickable-row"
+                        onClick={() => {
+                          window.location.hash = hashHref("/transactions", {
+                            category,
+                            since: resolved.since,
+                            until: resolved.until,
+                          });
+                        }}
+                      >
+                        <td>
+                          {subs.length > 0 ? (
+                            <button
+                              type="button"
+                              className="row-expand"
+                              aria-expanded={open}
+                              aria-label={`${open ? "Collapse" : "Expand"} ${category} subcategories`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                onToggleExpanded(category);
+                              }}
+                            >
+                              {open ? "▾" : "▸"}
+                            </button>
+                          ) : (
+                            <span className="row-expand-spacer" />
+                          )}
+                          {category}
+                        </td>
+                        <td className="num">{money(agg.total)}</td>
+                        <td className="num">{agg.txn_count}</td>
+                        <td className="num">{money(agg.total / agg.txn_count)}</td>
+                      </tr>
+                      {open &&
+                        subs.map(([sub, subAgg]) => (
+                          <tr
+                            key={`${category}::${sub}`}
+                            className="clickable-row budget-sub"
+                            onClick={() => {
+                              window.location.hash = hashHref("/transactions", {
+                                category,
+                                subcategory: sub,
+                                since: resolved.since,
+                                until: resolved.until,
+                              });
+                            }}
+                          >
+                            <td>{sub}</td>
+                            <td className="num">{money(subAgg.total)}</td>
+                            <td className="num">{subAgg.txn_count}</td>
+                            <td className="num">{money(subAgg.total / subAgg.txn_count)}</td>
+                          </tr>
+                        ))}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>

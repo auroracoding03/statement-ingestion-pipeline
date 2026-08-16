@@ -628,6 +628,29 @@ th.num {
   background: #f4eee4;
 }
 
+.row-expand,
+.row-expand-spacer {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  margin-right: 0.15rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  line-height: 1;
+}
+
+.row-expand {
+  cursor: pointer;
+}
+
+.spend-totals .budget-sub td:first-child {
+  padding-left: 2.25rem;
+}
+
 .txn-groups {
   display: flex;
   flex-direction: column;

@@ -14,11 +14,11 @@ import {
 
 import { PeriodPicker, type PeriodValue } from "../components/PeriodPicker";
 import { Empty, ErrorNote, Loading, Metric, PageHeader, StatusPill } from "../components/ui";
+import { categoryLabels, subcategoryLabels } from "../lib/categoryOptions";
 import { api, canWrite } from "../lib/dataSource";
 import { compactMoney, money, shortDate } from "../lib/format";
 import { enumerateMonths, resolveClientPeriod } from "../lib/period";
 import { hashHref } from "../lib/router";
-import { sortedLabels } from "../lib/sort";
 import type { CategoryMonthly, OverviewMonth } from "../lib/types";
 import { useAsync } from "../lib/useAsync";
 
@@ -447,23 +447,27 @@ function CategorySpendTrend({
     [ready, resolved.since, resolved.until],
   );
 
-  const categories = useMemo(() => {
-    const labels = new Set(rows.map((row) => row.category));
-    if (defaultCategory) labels.add(defaultCategory);
-    return sortedLabels(labels);
-  }, [rows, defaultCategory]);
+  const categories = useMemo(
+    () =>
+      categoryLabels(
+        rows.map((row) => row.category),
+        rules.data,
+        defaultCategory ? [defaultCategory] : [],
+      ),
+    [rows, rules.data, defaultCategory],
+  );
 
   const activeCategory = category || defaultCategory || topCategoryBySpend(rows);
 
-  const subcategoryOptions = useMemo(() => {
-    if (!activeCategory) return [];
-    const fromData = rows
-      .filter((row) => row.category === activeCategory)
-      .map((row) => (row.subcategory ?? "").trim())
-      .filter(Boolean);
-    const fromRules = rules.data?.subcategories?.[activeCategory] ?? [];
-    return sortedLabels(new Set([...fromData, ...fromRules]));
-  }, [rows, activeCategory, rules.data]);
+  const subcategoryOptions = useMemo(
+    () =>
+      subcategoryLabels(
+        activeCategory,
+        rows.filter((row) => row.category === activeCategory).map((row) => row.subcategory ?? ""),
+        rules.data,
+      ),
+    [rows, activeCategory, rules.data],
+  );
 
   const series = useMemo(() => {
     if (!activeCategory || timeline.length === 0) return [];
