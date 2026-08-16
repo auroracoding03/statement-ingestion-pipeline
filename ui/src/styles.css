@@ -1385,6 +1385,15 @@ th.sortable.secondary {
   margin-top: 1.1rem;
 }
 
+.drawer-edit {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.drawer-edit select {
+  width: 100%;
+}
+
 .flag-row {
   display: flex;
   flex-wrap: wrap;

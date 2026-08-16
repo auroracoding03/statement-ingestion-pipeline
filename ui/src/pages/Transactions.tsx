@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { CategoryFields } from "../components/CategoryFields";
 import { Empty, ErrorNote, Loading, MerchantCell, PageHeader } from "../components/ui";
 import { api, canWrite } from "../lib/dataSource";
 import { cashflow, shortDate } from "../lib/format";
 import { sortedLabels } from "../lib/sort";
 import { replaceHash, useHashLocation } from "../lib/router";
-import type { Transaction } from "../lib/types";
+import type { ContextTag, Transaction } from "../lib/types";
 import { useAsync } from "../lib/useAsync";
 
 type SortKey = "posted_date" | "amount" | "card" | "merchant" | "category";
@@ -375,7 +376,11 @@ export function Transactions() {
         <TransactionDrawer
           txn={selected}
           tagLabel={tagLabel}
+          tagCatalog={tagCatalog}
+          categories={categories}
+          subcategories={rulesState.data?.subcategories ?? {}}
           onClose={() => setSelectedId("")}
+          onUpdated={() => reload()}
           onDeleted={(txnId) => {
             setSelectedId("");
             setPicked((current) => {
@@ -418,20 +423,39 @@ function SortHeader({
 function TransactionDrawer({
   txn,
   tagLabel,
+  tagCatalog,
+  categories,
+  subcategories,
   onClose,
+  onUpdated,
   onDeleted,
 }: {
   txn: Transaction;
   tagLabel: (id: string) => string;
+  tagCatalog: ContextTag[];
+  categories: string[];
+  subcategories: Record<string, string[]>;
   onClose: () => void;
+  onUpdated: () => void;
   onDeleted: (txnId: string) => void;
 }) {
   const flow = cashflow(txn.amount);
   const [confirming, setConfirming] = useState(false);
   const [armed, setArmed] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [category, setCategory] = useState(txn.category ?? "");
+  const [subcategory, setSubcategory] = useState(txn.subcategory ?? "");
+  const [tags, setTags] = useState<string[]>(txn.tags ?? []);
   const merchant = txn.canonical_merchant || txn.normalized_merchant || txn.raw_description;
+
+  useEffect(() => {
+    setCategory(txn.category ?? "");
+    setSubcategory(txn.subcategory ?? "");
+    setTags(txn.tags ?? []);
+    setError("");
+  }, [txn.txn_id, txn.category, txn.subcategory, txn.tags]);
 
   useEffect(() => {
     if (!confirming) {
@@ -441,6 +465,42 @@ function TransactionDrawer({
     const id = window.setTimeout(() => setArmed(true), 0);
     return () => window.clearTimeout(id);
   }, [confirming]);
+
+  async function saveCategory(nextCategory: string, nextSub: string) {
+    setCategory(nextCategory);
+    setSubcategory(nextSub);
+    if (!canWrite || !nextCategory) return;
+    if (nextCategory === (txn.category ?? "") && nextSub === (txn.subcategory ?? "")) return;
+    setSaving(true);
+    setError("");
+    try {
+      await api.bulkTransactions({
+        txn_ids: [txn.txn_id],
+        category: nextCategory,
+        subcategory: nextSub,
+      });
+      onUpdated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save category.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveTags(nextTags: string[]) {
+    setTags(nextTags);
+    if (!canWrite) return;
+    setSaving(true);
+    setError("");
+    try {
+      await api.bulkTransactions({ txn_ids: [txn.txn_id], tags: nextTags });
+      onUpdated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save tags.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function confirmDelete() {
     setDeleting(true);
@@ -454,6 +514,8 @@ function TransactionDrawer({
     }
   }
 
+  const unusedTags = tagCatalog.filter((entry) => !tags.includes(entry.id));
+
   return (
     <>
       <div className="drawer-backdrop" onClick={onClose}>
@@ -465,6 +527,7 @@ function TransactionDrawer({
             </button>
           </div>
           <p className={`review-amount amount-${flow.kind}`}>{flow.text}</p>
+          {error && !confirming && <ErrorNote error={error} />}
           <dl className="review-fields">
             <dt>Date</dt>
             <dd>{shortDate(txn.posted_date)}</dd>
@@ -477,13 +540,75 @@ function TransactionDrawer({
             <dt>Canonical</dt>
             <dd>{txn.canonical_merchant ?? <span className="unresolved">none</span>}</dd>
             <dt>Category</dt>
-            <dd>{[txn.category, txn.subcategory].filter(Boolean).join(" / ") || "Uncategorized"}</dd>
+            <dd>
+              {canWrite ? (
+                <div className="drawer-edit">
+                  <CategoryFields
+                    categories={categories}
+                    subcategories={subcategories}
+                    category={category}
+                    subcategory={subcategory}
+                    requiredCategory
+                    categoryLabel="Category"
+                    subcategoryLabel="Subcategory"
+                    onCategoryChange={(nextCategory, nextSub) => {
+                      void saveCategory(nextCategory, nextSub);
+                    }}
+                    onPairChange={(nextCategory, nextSub) => {
+                      void saveCategory(nextCategory, nextSub);
+                    }}
+                  />
+                </div>
+              ) : (
+                [txn.category, txn.subcategory].filter(Boolean).join(" / ") || "Uncategorized"
+              )}
+            </dd>
             <dt>Source</dt>
             <dd>{txn.classified_by ?? "open"}</dd>
             <dt>File</dt>
             <dd>{txn.source_file || "—"}</dd>
             <dt>Tags</dt>
-            <dd>{(txn.tags ?? []).map(tagLabel).join(", ") || "—"}</dd>
+            <dd>
+              {canWrite ? (
+                <div className="drawer-edit">
+                  <select
+                    value=""
+                    disabled={saving || unusedTags.length === 0}
+                    aria-label="Add tag"
+                    onChange={(event) => {
+                      const id = event.target.value;
+                      if (id) void saveTags([...tags, id]);
+                    }}
+                  >
+                    <option value="">Add tag…</option>
+                    {unusedTags.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {entry.label}
+                      </option>
+                    ))}
+                  </select>
+                  {tags.length > 0 ? (
+                    <div className="tag-chip-row compact">
+                      {tags.map((id) => (
+                        <button
+                          key={id}
+                          type="button"
+                          className="tag-chip active"
+                          disabled={saving}
+                          onClick={() => void saveTags(tags.filter((tag) => tag !== id))}
+                        >
+                          {tagLabel(id)}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="muted">None</span>
+                  )}
+                </div>
+              ) : (
+                (txn.tags ?? []).map(tagLabel).join(", ") || "—"
+              )}
+            </dd>
           </dl>
           {canWrite && (
             <div className="review-actions">

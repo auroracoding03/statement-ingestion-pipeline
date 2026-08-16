@@ -1,5 +1,5 @@
 """Application identity shared by the API, updater, and desktop launcher."""
 
-APP_VERSION = "0.7.3"
+APP_VERSION = "0.7.4"
 RELEASE_REPOSITORY = "auroracoding03/statement-ingestion-pipeline"
 INSTALLER_NAME = "StatementPipelineSetup.exe"

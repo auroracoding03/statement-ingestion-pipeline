@@ -148,7 +148,7 @@ export function Recurring() {
                     <FlagPills row={row} />
                   </td>
                   <td className="num">{money(row.avg_amount)}</td>
-                  <td className="num">{row.months ?? 1}</td>
+                  <td className="num">{row.months == null ? "—" : row.months}</td>
                   <td className="num">{money(row.last_amount)}</td>
                   <td>{shortDate(row.last_seen ?? null)}</td>
                   <td>{[row.category, row.subcategory].filter(Boolean).join(" / ") || "—"}</td>

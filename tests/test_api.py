@@ -1248,3 +1248,85 @@ def test_categories_monthly_splits_subcategory_and_cardholder(client: TestClient
         ("2026-05", "Lodging", 400.0),
         ("2026-06", "Transit", 200.0),
     }
+
+
+def _extra_txn(posted: str, amount: float, raw: str, **overrides) -> dict:
+    card = overrides.get("card", "amex")
+    row = {
+        "txn_id": make_txn_id(card, posted, amount, raw),
+        "card": card,
+        "posted_date": posted,
+        "amount": amount,
+        "raw_description": raw,
+        "normalized_merchant": overrides.get("normalized_merchant", raw),
+        "canonical_merchant": overrides.get("canonical_merchant"),
+        "merchant_source": "none",
+        "proposed_canonical": None,
+        "source_file": f"{card}/{posted[:7]}.csv",
+        "category": overrides.get("category"),
+        "subcategory": overrides.get("subcategory"),
+        "tags": overrides.get("tags", []),
+        "classified_by": overrides.get("classified_by"),
+        "proposed_category": None,
+        "proposed_subcategory": None,
+    }
+    row.update(overrides)
+    row["txn_id"] = make_txn_id(row["card"], row["posted_date"], row["amount"], row["raw_description"])
+    return row
+
+
+def _write_extra(workspace: dict, rows: list[dict]) -> None:
+    ledger_path = workspace["root"] / "data" / "ledger.parquet"
+    ledger = pd.read_parquet(ledger_path)
+    pd.concat([ledger, pd.DataFrame(rows)], ignore_index=True).to_parquet(ledger_path, index=False)
+
+
+def test_recurring_uses_live_ledger_without_build(client: TestClient, workspace: dict):
+    _write_extra(
+        workspace,
+        [
+            _extra_txn("2026-04-15", 15.99, "NETFLIX", category="Subscriptions", subcategory="Streaming"),
+            _extra_txn("2026-07-15", 16.99, "NETFLIX", category="Subscriptions", subcategory="Streaming"),
+            _extra_txn("2026-07-02", 9.99, "SPOTIFY", category="Subscriptions"),
+            _extra_txn("2026-07-20", 9.99, "SPOTIFY", category="Subscriptions"),
+        ],
+    )
+    assert not (workspace["root"] / "data" / "recurring.parquet").exists()
+
+    body = client.get("/api/recurring").json()
+    netflix = next(row for row in body if row["normalized_merchant"] == "NETFLIX")
+    assert netflix["months"] == 4
+    assert netflix["last_seen"] == "2026-07-15"
+    assert netflix["last_amount"] == 16.99
+    assert "price_hike" in str(netflix["flags"]).split(",")
+
+    spotify = next(row for row in body if row["normalized_merchant"] == "SPOTIFY")
+    assert spotify["months"] == 1
+    assert spotify["last_seen"] == "2026-07-20"
+    assert spotify["last_amount"] == 9.99
+
+
+def test_manual_override_survives_classify(client: TestClient, workspace: dict):
+    april = _extra_txn("2026-04-15", 15.99, "NETFLIX")
+    july = _extra_txn("2026-07-15", 15.99, "NETFLIX")
+    _write_extra(workspace, [april, july])
+
+    classified = pipeline_mod.run_classify()
+    assert classified.get("error") is None
+
+    locked = client.post(
+        "/api/transactions/bulk",
+        json={"txn_ids": [april["txn_id"]], "category": "Food", "tags": ["gift"]},
+    )
+    assert locked.status_code == 200
+
+    pipeline_mod.run_classify()
+    listing = {row["txn_id"]: row for row in client.get("/api/transactions").json()["items"]}
+    override = listing[april["txn_id"]]
+    sibling = listing[july["txn_id"]]
+    assert override["category"] == "Food"
+    assert override["tags"] == ["gift"]
+    assert override["classified_by"] == "manual"
+    assert sibling["category"] == "Subscriptions"
+    assert sibling["subcategory"] == "Streaming"
+    assert sibling["classified_by"] == "rule"

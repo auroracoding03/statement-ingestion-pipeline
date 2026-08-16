@@ -73,6 +73,7 @@ from src.overview import _filter_cardholder, build_period_summary, cardholders
 from src.taxonomy import category_impact, delete_category
 from src.paths import DASHBOARD, EXPORT_DIR, FINANCE_DB, INBOX, PENDING_UPLOADS, UI, ensure_dirs
 from src.periods import PRESETS, filter_posted
+from src.recurring import detect_recurring
 from src.review import cluster_open_review, needs_review, rule_from_row
 from src.statement_identity import detect_statement_identity
 from src.store import last_statement_upload_at
@@ -668,11 +669,10 @@ def post_review(txn_id: str, body: ReviewDecision) -> dict:
 
 @app.get("/api/recurring")
 def get_recurring() -> list[dict]:
-    from src.paths import RECURRING_PARQUET
-
-    if not RECURRING_PARQUET.exists():
+    ledger = pipeline.load_ledger()
+    if ledger.empty:
         return []
-    return _records(pd.read_parquet(RECURRING_PARQUET))
+    return _records(detect_recurring(ledger))
 
 
 @app.get("/api/reconciliation")
