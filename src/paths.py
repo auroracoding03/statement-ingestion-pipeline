@@ -13,6 +13,9 @@ import sys
 from pathlib import Path
 
 
+# Keep this folder name stable so installed ledgers stay under
+# ``%LOCALAPPDATA%\Statement Pipeline``. The window title and Start menu name
+# live on ``APP_DISPLAY_NAME`` in ``src.version``.
 APP_NAME = "Statement Pipeline"
 CONFIG_FILES = (
     "rules.yaml",

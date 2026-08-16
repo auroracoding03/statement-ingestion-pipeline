@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from src.paths import USER_DATA_ROOT
-from src.version import APP_VERSION, INSTALLER_NAME, RELEASE_REPOSITORY
+from src.version import APP_DISPLAY_NAME, APP_VERSION, INSTALLER_NAME, RELEASE_REPOSITORY
 
 
 GITHUB_API = f"https://api.github.com/repos/{RELEASE_REPOSITORY}/releases/latest"
@@ -134,7 +134,7 @@ def _show_update_error(message: str) -> None:
     try:
         import ctypes
 
-        ctypes.windll.user32.MessageBoxW(0, message, "Statement Pipeline Update", 0x10)
+        ctypes.windll.user32.MessageBoxW(0, message, f"{APP_DISPLAY_NAME} Update", 0x10)
     except Exception:  # noqa: BLE001 — desktop UI may be unavailable
         pass
 
@@ -439,7 +439,7 @@ def _install_worker(release: dict[str, Any]) -> None:
         _show_update_error(
             "The update could not start the installer handoff.\n\n"
             f"{type(exc).__name__}: {exc}\n\n"
-            "Your current version is still running. Close Statement Pipeline, then run "
+            f"Your current version is still running. Close {APP_DISPLAY_NAME}, then run "
             "the downloaded Setup from:\n"
             f"{USER_DATA_ROOT / 'updates'}"
         )
@@ -466,4 +466,4 @@ def install_latest_update() -> dict[str, str]:
 
     _write_update_progress(f"install-accepted current={APP_VERSION} latest={release['latest_version']}")
     _start_install_worker(release)
-    return {"message": "Update started. Statement Pipeline will restart shortly."}
+    return {"message": f"Update started. {APP_DISPLAY_NAME} will restart shortly."}

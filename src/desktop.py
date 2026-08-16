@@ -16,6 +16,7 @@ from filelock import FileLock, Timeout
 
 from src.api.app import app
 from src.paths import ASSET_ROOT, USER_DATA_ROOT, ensure_dirs
+from src.version import APP_DISPLAY_NAME
 
 
 HOST = "127.0.0.1"
@@ -108,7 +109,7 @@ def main() -> None:
     try:
         instance_lock.acquire(timeout=0)
     except Timeout:
-        _show_error("Statement Pipeline", "Statement Pipeline is already running.")
+        _show_error(APP_DISPLAY_NAME, f"{APP_DISPLAY_NAME} is already running.")
         return
     _instance_lock = instance_lock
 
@@ -120,16 +121,16 @@ def main() -> None:
         thread = threading.Thread(target=server.run, name="statement-pipeline-api", daemon=True)
         thread.start()
         if not _wait_for_server(url):
-            _show_error("Statement Pipeline", "The local application service did not start.")
+            _show_error(APP_DISPLAY_NAME, "The local application service did not start.")
             return
 
         # Imported only for packaged desktop runs; developer commands keep using
         # `fin serve` and a regular browser.
         import webview
 
-        icon = ASSET_ROOT / "packaging" / "assets" / "statement-pipeline.ico"
+        icon = ASSET_ROOT / "packaging" / "assets" / "family-finance.ico"
         window = webview.create_window(
-            "Statement Pipeline",
+            APP_DISPLAY_NAME,
             url,
             width=1440,
             height=960,
@@ -138,7 +139,7 @@ def main() -> None:
         window.events.closed += lambda: setattr(server, "should_exit", True)
         webview.start(icon=str(icon) if icon.exists() else None)
     except Exception as exc:  # noqa: BLE001 — surface startup failures in a native dialog
-        _show_error("Statement Pipeline", f"The application could not start.\n\n{exc}")
+        _show_error(APP_DISPLAY_NAME, f"The application could not start.\n\n{exc}")
     finally:
         if server is not None:
             server.should_exit = True

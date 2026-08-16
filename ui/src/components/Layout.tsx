@@ -55,9 +55,23 @@ export function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="app">
       <header className="site-header">
-        <div className="brand">
-          Finance Ledger
-          {!canWrite && <span className="badge">read-only</span>}
+        <div className="site-header-top">
+          <div className="brand">
+            Family Finance
+            {!canWrite && <span className="badge">read-only</span>}
+          </div>
+          {canWrite && (
+            <div className="update-control">
+              <button
+                className="btn icon-button"
+                type="button"
+                aria-label="Settings"
+                onClick={() => setSettingsOpen(true)}
+              >
+                <Settings size={22} strokeWidth={2} absoluteStrokeWidth aria-hidden="true" />
+              </button>
+            </div>
+          )}
         </div>
         <nav>
           {groups.map((group) => (
@@ -78,18 +92,6 @@ export function Layout({ children }: { children: ReactNode }) {
             </div>
           ))}
         </nav>
-        {canWrite && (
-          <div className="update-control">
-            <button
-              className="btn icon-button"
-              type="button"
-              aria-label="Settings"
-              onClick={() => setSettingsOpen(true)}
-            >
-              <Settings size={22} strokeWidth={2} absoluteStrokeWidth aria-hidden="true" />
-            </button>
-          </div>
-        )}
       </header>
       <main>{children}</main>
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}

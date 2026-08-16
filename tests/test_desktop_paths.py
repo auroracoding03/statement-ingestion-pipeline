@@ -3,6 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.paths import APP_NAME, _runtime_roots, seed_default_config
+from src.version import APP_DISPLAY_NAME
+
+
+def test_display_name_and_data_folder_stay_distinct() -> None:
+    assert APP_DISPLAY_NAME == "Family Finance"
+    assert APP_NAME == "Statement Pipeline"
 
 
 def test_frozen_windows_uses_local_app_data(tmp_path: Path) -> None:

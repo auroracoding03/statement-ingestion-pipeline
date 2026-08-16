@@ -89,9 +89,9 @@ from src.upload_context import (
     resolve_card_product_for_issuer,
     write_upload_context,
 )
-from src.version import APP_VERSION
+from src.version import APP_DISPLAY_NAME, APP_VERSION
 
-app = FastAPI(title="Statement Ingestion Pipeline", version=APP_VERSION)
+app = FastAPI(title=APP_DISPLAY_NAME, version=APP_VERSION)
 
 # Vite dev server talks to this API cross-origin during development.
 app.add_middleware(

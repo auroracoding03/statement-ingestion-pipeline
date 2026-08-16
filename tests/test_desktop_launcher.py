@@ -37,6 +37,7 @@ def test_desktop_launcher_uses_native_webview(monkeypatch) -> None:
 
     ensure_dirs.assert_called_once_with()
     create_window.assert_called_once()
+    assert create_window.call_args.args[0] == "Family Finance"
     assert create_window.call_args.args[1] == "http://127.0.0.1:8787"
     start.assert_called_once()
     assert server.should_exit is True
@@ -88,7 +89,7 @@ def test_second_desktop_instance_shows_native_message(monkeypatch) -> None:
 
     desktop.main()
 
-    show_error.assert_called_once()
+    show_error.assert_called_once_with("Family Finance", "Family Finance is already running.")
     lock.release.assert_not_called()
 
 

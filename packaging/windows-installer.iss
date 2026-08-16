@@ -3,8 +3,8 @@
   #define MyAppVersion "0.0.0-dev"
 #endif
 
-#define MyAppName "Statement Pipeline"
-#define MyAppPublisher "Statement Pipeline"
+#define MyAppName "Family Finance"
+#define MyAppPublisher "Family Finance"
 #define MyAppExeName "StatementPipeline.exe"
 
 [Setup]
@@ -12,7 +12,7 @@ AppId={{8A60CB52-8D5D-46B7-8B49-347C392129A0}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-SetupIconFile=assets\statement-pipeline.ico
+SetupIconFile=assets\family-finance.ico
 DefaultDirName={localappdata}\Programs\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
@@ -60,7 +60,7 @@ end;
 function InitializeUninstall(): Boolean;
 begin
   MsgBox(
-    'Your financial data is kept in %LOCALAPPDATA%\Statement Pipeline and will not be removed by uninstalling. Delete that folder manually only if you want to permanently remove your data.',
+    'Family Finance keeps your financial data in %LOCALAPPDATA%\Statement Pipeline. Uninstalling does not remove it. Delete that folder manually only if you want to permanently remove your data.',
     mbInformation,
     MB_OK
   );

@@ -50,10 +50,10 @@ a {
 
 .site-header {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 1rem;
-  padding: 0.85rem 2rem 0.9rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.7rem;
+  padding: 0.75rem 2rem 0.85rem;
   border-top: 3px solid var(--accent);
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--card) 88%, transparent);
@@ -61,7 +61,13 @@ a {
   position: sticky;
   top: 0;
   z-index: 20;
-  flex-wrap: wrap;
+}
+
+.site-header-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
 }
 
 .brand {
@@ -89,7 +95,6 @@ a {
   gap: 0.5rem;
   flex-wrap: wrap;
   align-items: stretch;
-  flex: 1;
 }
 
 .nav-group {

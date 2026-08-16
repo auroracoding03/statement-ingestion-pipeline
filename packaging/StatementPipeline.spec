@@ -12,7 +12,7 @@ from PyInstaller.utils.hooks import collect_submodules
 
 
 PROJECT = Path(SPECPATH).parent
-WINDOWS_ICON = PROJECT / "packaging" / "assets" / "statement-pipeline.ico"
+WINDOWS_ICON = PROJECT / "packaging" / "assets" / "family-finance.ico"
 datas = [
     (str(PROJECT / "ui" / "dist"), "ui/dist"),
     (str(PROJECT / "dashboard" / "public"), "dashboard/public"),
