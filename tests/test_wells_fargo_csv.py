@@ -109,7 +109,7 @@ def test_two_savings_products_keep_identical_interest_rows(tmp_path: Path) -> No
     right = tmp_path / "sam.csv"
     left.write_text(row, encoding="utf-8")
     right.write_text(row, encoding="utf-8")
-    aaron = parse_wells_fargo_csv(
+    alex = parse_wells_fargo_csv(
         left,
         "wellsfargo-way2save-savings",
         {"card_issuer": "Wells Fargo", "card_product": "Way2Save Savings"},
