@@ -428,6 +428,11 @@ def commit_uploads(body: UploadCommitRequest) -> dict:
                 status_code=422,
                 detail="American Express CSV files need a card product because the export does not include it.",
             )
+        if issuer == "Bank of America" and staged.suffix.lower() == ".pdf" and not product:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Select {product_noun} for {staged.name[34:]} because this statement omits it.",
+            )
         if identity.needs_cardholder and not holder:
             raise HTTPException(
                 status_code=422,

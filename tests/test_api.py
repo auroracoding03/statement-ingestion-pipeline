@@ -751,6 +751,38 @@ def test_card_products_list_and_append(client: TestClient):
     assert "Blue Cash Preferred" in again.json()["products"]["American Express"]
 
 
+def test_staged_boa_pdf_requires_product_before_commit(client: TestClient):
+    inspected = client.post(
+        "/api/uploads/inspect",
+        files=[("files", ("eStmt.pdf", b"%PDF-1.4\n%\n", "application/pdf"))],
+    )
+    assert inspected.status_code == 200
+    token = inspected.json()["items"][0]["token"]
+
+    rejected = client.post(
+        "/api/uploads/commit",
+        json={"items": [{"token": token, "issuer": "Bank of America"}]},
+    )
+    assert rejected.status_code == 422
+    assert "card product" in rejected.json()["detail"].lower()
+
+    committed = client.post(
+        "/api/uploads/commit",
+        json={
+            "items": [
+                {
+                    "token": token,
+                    "issuer": "Bank of America",
+                    "product": "Customized Cash Rewards",
+                    "cardholder": "Alex Example",
+                }
+            ]
+        },
+    )
+    assert committed.status_code == 200
+    assert committed.json()["written"] == ["bankofamerica-customized-cash-rewards/eStmt.pdf"]
+
+
 def test_amex_commit_rejects_unknown_product(client: TestClient):
     payload = b"Date,Description,Card Member,Account #,Amount\n2026-01-01,Coffee,ALEX EXAMPLE,,10.00\n"
     inspected = client.post("/api/uploads/inspect", files=[("files", ("statement.csv", payload, "text/csv"))])

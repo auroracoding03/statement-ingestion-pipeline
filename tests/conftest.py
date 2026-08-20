@@ -38,6 +38,7 @@ _DATA_PATH_NAMES = (
     "RECONCILE_PARQUET",
     "EXPORT_DIR",
     "PENDING_UPLOADS",
+    "LOGS_DIR",
 )
 
 _WRITE_ATTRS = (
@@ -113,6 +114,7 @@ def _data_path_values(inbox: Path, data: Path) -> dict[str, Path]:
         "RECONCILE_PARQUET": data / "reconciliation.parquet",
         "EXPORT_DIR": data / "export",
         "PENDING_UPLOADS": data / "pending_uploads",
+        "LOGS_DIR": data / "logs",
     }
 
 

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import pandas as pd
 import pytest
 
+import src.paths as paths
 from config.parsers import resolve_parser
 from config.parsers.bank_of_america import (
     _parse_pages,
@@ -133,6 +135,11 @@ def test_bank_of_america_parser_extracts_activity_and_metadata():
     assert not parsed["raw_description"].str.contains("TOTAL|Year-to-Date|Interest Charge Calculation", regex=True).any()
     assert "Interest Charge on Purchases" not in set(parsed["raw_description"])
     assert not parsed["raw_description"].str.contains("5365|4794", regex=True).any()
+    log_path = paths.LOGS_DIR / "boa-parser.ndjson"
+    assert log_path.exists()
+    events = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert {event["message"] for event in events} >= {"parse start sidecar", "identity scan", "header candidates", "table scan result"}
+    assert any(event["data"].get("file") == "jan.pdf" and event["data"].get("found_table") is True for event in events)
 
 
 def test_bank_of_america_parser_uses_upload_product_when_statement_omits_it():

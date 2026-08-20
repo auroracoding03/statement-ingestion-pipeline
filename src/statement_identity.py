@@ -275,6 +275,18 @@ def _with_pdf_cardholder(identity: StatementIdentity, text: str) -> StatementIde
     )
 
 
+def _with_boa_product_selection(identity: StatementIdentity) -> StatementIdentity:
+    """Bank of America eStatements often omit a parseable product line."""
+    if identity.issuer != "Bank of America" or identity.product or identity.confidence == "manual":
+        return identity
+    return _product_required(
+        "Bank of America",
+        None,
+        f"{identity.message.rstrip('.')} — select the card product because this statement omits it.",
+        account_kind=identity.account_kind,
+    )
+
+
 def _pdf_identity(path: Path) -> StatementIdentity:
     try:
         with pdfplumber.open(path) as pdf:
@@ -291,10 +303,12 @@ def _pdf_identity(path: Path) -> StatementIdentity:
         filename_issuer = _filename_issuer(path)
         if filename_issuer:
             return _with_pdf_cardholder(
-                _finalize(
-                    filename_issuer,
-                    None,
-                    f"Detected {filename_issuer} from the filename because the PDF had no extractable text.",
+                _with_boa_product_selection(
+                    _finalize(
+                        filename_issuer,
+                        None,
+                        f"Detected {filename_issuer} from the filename because the PDF had no extractable text.",
+                    )
                 ),
                 body,
             )
@@ -314,10 +328,12 @@ def _pdf_identity(path: Path) -> StatementIdentity:
         filename_issuer = _filename_issuer(path)
         if filename_issuer:
             return _with_pdf_cardholder(
-                _finalize(
-                    filename_issuer,
-                    _product(body, filename_issuer),
-                    f"Detected {filename_issuer} from the filename because the statement text was ambiguous.",
+                _with_boa_product_selection(
+                    _finalize(
+                        filename_issuer,
+                        _product(body, filename_issuer),
+                        f"Detected {filename_issuer} from the filename because the statement text was ambiguous.",
+                    )
                 ),
                 body,
             )
@@ -327,7 +343,9 @@ def _pdf_identity(path: Path) -> StatementIdentity:
         )
 
     return _with_pdf_cardholder(
-        _finalize(issuer, _product(body, issuer), f"Detected {issuer} from {source}."),
+        _with_boa_product_selection(
+            _finalize(issuer, _product(body, issuer), f"Detected {issuer} from {source}.")
+        ),
         body,
     )
 

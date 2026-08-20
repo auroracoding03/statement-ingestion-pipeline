@@ -312,6 +312,30 @@ def _parse_row(
     }
 
 
+def _dbg(message: str, data: dict[str, Any]) -> None:
+    import json
+    import time
+
+    from src.paths import LOGS_DIR
+
+    try:
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        with (LOGS_DIR / "boa-parser.ndjson").open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "location": "config/parsers/bank_of_america.py:_parse_pages",
+                        "message": message,
+                        "data": data,
+                        "timestamp": int(time.time() * 1000),
+                    }
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+
+
 def _parse_pages(
     pages: Iterable[Any],
     card: str,
@@ -329,6 +353,15 @@ def _parse_pages(
         "card_issuer": upload_metadata.get("card_issuer") or None,
         "card_product": upload_metadata.get("card_product") or None,
     }
+    _dbg(
+        "parse start sidecar",
+        {
+            "file": Path(source_file).name,
+            "sidecar_product": upload_metadata.get("card_product"),
+            "sidecar_issuer": upload_metadata.get("card_issuer"),
+            "line_count": len(all_lines),
+        },
+    )
     start: date | None = None
     end: date | None = None
     holders: list[str] = []
@@ -347,6 +380,30 @@ def _parse_pages(
             holders.append(holder)
     if upload_metadata.get("card_product"):
         metadata["card_product"] = str(upload_metadata["card_product"])
+    joined = " ".join(line.text for line in all_lines)
+    joined_lower = joined.lower()
+    header_candidates = []
+    for line in all_lines:
+        keys = {word.text.lower().rstrip(":") for word in line.words}
+        interesting = [key for key in ("transaction", "posting", "description", "amount", "trans", "post") if key in keys]
+        if len(interesting) >= 2:
+            header_candidates.append({"keys": interesting, "text": _clean(line.text)[:80]})
+    _dbg(
+        "identity scan",
+        {
+            "file": Path(source_file).name,
+            "product_from_lines": metadata.get("card_product"),
+            "product_from_joined": _product(joined),
+            "marker_hits": [marker for marker, _name in PRODUCT_MARKERS if marker in joined_lower],
+            "cash_rewards": "cash rewards" in joined_lower,
+            "period_found": start is not None and end is not None,
+            "issuer_found": metadata.get("card_issuer") == ISSUER,
+        },
+    )
+    _dbg(
+        "header candidates",
+        {"file": Path(source_file).name, "candidates": header_candidates[:12]},
+    )
     if metadata["card_issuer"] != ISSUER:
         raise ValueError("Bank of America statement identity was not found")
     if not metadata["card_product"]:
@@ -360,6 +417,7 @@ def _parse_pages(
     rows: list[dict[str, Any]] = []
     section = "none"
     found_table = False
+    sections_seen: list[str] = []
     for line in all_lines:
         text = _clean(line.text)
         if _is_stop_heading(text):
@@ -373,6 +431,7 @@ def _parse_pages(
         heading = _section_heading(text)
         if heading:
             section = heading
+            sections_seen.append(heading)
             continue
         header = _column_bounds(line)
         if header:
@@ -385,6 +444,15 @@ def _parse_pages(
         if row:
             rows.append(row)
 
+    _dbg(
+        "table scan result",
+        {
+            "file": Path(source_file).name,
+            "found_table": found_table,
+            "row_count": len(rows),
+            "sections_seen": sections_seen[:8],
+        },
+    )
     if not found_table:
         raise ValueError("Bank of America transaction table was not found")
     if not rows:

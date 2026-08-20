@@ -103,6 +103,7 @@ RECURRING_PARQUET = DATA / "recurring.parquet"
 RECONCILE_PARQUET = DATA / "reconciliation.parquet"
 EXPORT_DIR = DATA / "export"
 PENDING_UPLOADS = DATA / "pending_uploads"
+LOGS_DIR = USER_DATA_ROOT / "logs"
 
 
 def seed_default_config(
@@ -124,4 +125,5 @@ def ensure_dirs() -> None:
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     PENDING_UPLOADS.mkdir(parents=True, exist_ok=True)
     AI_SNAPSHOTS.mkdir(parents=True, exist_ok=True)
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
     seed_default_config()

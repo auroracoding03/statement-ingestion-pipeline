@@ -98,6 +98,24 @@ def test_wells_generic_credit_label_requires_product_selection(monkeypatch, tmp_
     assert "select the card product" in result.message.lower()
 
 
+def test_bank_of_america_without_product_requires_selection(monkeypatch, tmp_path: Path) -> None:
+    path = tmp_path / "boa.pdf"
+    path.write_bytes(b"%PDF-fake")
+    pages = [
+        "ALEX EXAMPLE\nBank of America\nDecember 21 - January 20, 2026",
+        "Transaction Date Posting Date Description Amount\n01/17 01/17 PAYMENT THANK YOU -100.00",
+    ]
+    monkeypatch.setattr(identity.pdfplumber, "open", lambda _path: _FakePdf(pages))
+
+    result = identity.detect_statement_identity(path)
+
+    assert result.issuer == "Bank of America"
+    assert result.product is None
+    assert result.confidence == "product_required"
+    assert result.needs_manual_details is True
+    assert "card product" in result.message.lower()
+
+
 def test_bank_of_america_header_detects_customized_cash_rewards(monkeypatch, tmp_path: Path) -> None:
     path = tmp_path / "boa.pdf"
     path.write_bytes(b"%PDF-fake")
