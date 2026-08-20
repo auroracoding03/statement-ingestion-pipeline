@@ -8,7 +8,7 @@ Layout convention for inbox/:
 from __future__ import annotations
 
 from .amex_csv import parse_amex_csv
-from .bank_of_america import parse_bank_of_america_placeholder
+from .bank_of_america import parse_bank_of_america_csv, parse_bank_of_america_pdf
 from .capital_one_pdf import parse_capital_one_pdf
 from .chase_csv import parse_chase_csv
 from .chase_pdf import parse_chase_pdf
@@ -53,12 +53,12 @@ PARSER_REGISTRY = {
         ".pdf": parse_wells_fargo_pdf,
     },
     "bankofamerica": {
-        ".csv": parse_bank_of_america_placeholder,
-        ".pdf": parse_bank_of_america_placeholder,
+        ".csv": parse_bank_of_america_csv,
+        ".pdf": parse_bank_of_america_pdf,
     },
     "boa": {
-        ".csv": parse_bank_of_america_placeholder,
-        ".pdf": parse_bank_of_america_placeholder,
+        ".csv": parse_bank_of_america_csv,
+        ".pdf": parse_bank_of_america_pdf,
     },
 }
 

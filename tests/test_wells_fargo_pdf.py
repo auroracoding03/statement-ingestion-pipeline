@@ -1,11 +1,10 @@
-"""Native-text Wells Fargo parsing and Bank of America placeholders."""
+"""Native-text Wells Fargo parsing."""
 
 from __future__ import annotations
 
 import pytest
 
 from config.parsers import resolve_parser
-from config.parsers.bank_of_america import parse_bank_of_america_placeholder
 from config.parsers.wells_fargo_pdf import _parse_pages, parse_wells_fargo_pdf
 
 
@@ -175,11 +174,3 @@ def test_wells_fargo_parser_rejects_image_only_statement():
 def test_wells_fargo_registry_aliases_route_to_dedicated_parser():
     for key in ("wellsfargo", "wellsfargo-autograph", "wf"):
         assert resolve_parser(key, ".pdf") is parse_wells_fargo_pdf
-
-
-def test_bank_of_america_regular_and_air_france_route_to_safe_placeholder(tmp_path):
-    for key in ("bankofamerica-regular", "bankofamerica-air-france", "boa-air-france"):
-        parser = resolve_parser(key, ".pdf")
-        assert parser is parse_bank_of_america_placeholder
-        with pytest.raises(ValueError, match="placeholder"):
-            parser(tmp_path / "statement.pdf", key, {"card_product": "Air France"})

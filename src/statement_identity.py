@@ -198,6 +198,17 @@ def _product(text: str, issuer: str) -> str | None:
         ):
             if marker in lower:
                 return product
+    if issuer == "Bank of America":
+        for marker, product in (
+            ("customized cash rewards", "Customized Cash Rewards"),
+            ("unlimited cash rewards", "Unlimited Cash Rewards"),
+            ("premium rewards", "Premium Rewards"),
+            ("travel rewards", "Travel Rewards"),
+            ("air france", "Air France"),
+            ("bankamericard", "BankAmericard"),
+        ):
+            if marker in lower:
+                return product
     return None
 
 
