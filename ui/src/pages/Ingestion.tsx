@@ -1,8 +1,8 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { PipelineBar } from "../components/PipelineBar";
-import { ErrorNote, PageHeader } from "../components/ui";
-import { api, productAccountKind, type UploadInspection } from "../lib/dataSource";
+import { Empty, ErrorNote, PageHeader } from "../components/ui";
+import { api, canWrite, productAccountKind, type UploadInspection } from "../lib/dataSource";
 import { useAsync } from "../lib/useAsync";
 
 const ISSUERS = ["American Express", "Bank of America", "Capital One", "Chase", "Wells Fargo", "Generic"];
@@ -26,6 +26,13 @@ export function Ingestion() {
 
   const products = productsState.data?.products ?? {};
   const holders = statusState.data?.cardholders ?? [];
+  const inboxFiles = statusState.data?.inbox_files ?? [];
+
+  useEffect(() => {
+    const reload = () => statusState.reload({ silent: true });
+    window.addEventListener("ledger-changed", reload);
+    return () => window.removeEventListener("ledger-changed", reload);
+  }, [statusState.reload]);
 
   async function inspect(files: FileList | File[]) {
     if (!files.length) return;
@@ -118,6 +125,25 @@ export function Ingestion() {
     }
   }
 
+  async function removeInboxFile(path: string) {
+    if (
+      !window.confirm(
+        `Remove ${path} from the inbox? This does not change the ledger.`,
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await api.removeInboxFile(path);
+      statusState.reload({ silent: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove that inbox file.");
+    } finally {
+      setBusy(false);
+    }
+  }
   async function commit() {
     if (!uploads.length || !canCommit()) return;
     setBusy(true);
@@ -136,6 +162,7 @@ export function Ingestion() {
       setNewProductByIndex({});
       setNewCardholderByIndex({});
       setMessage(`Added ${result.written.length} statement${result.written.length === 1 ? "" : "s"} to your inbox.`);
+      statusState.reload({ silent: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not add the selected statements.");
     } finally {
@@ -296,6 +323,48 @@ export function Ingestion() {
           <button className="btn" disabled={busy || !canCommit()} onClick={() => void commit()}>
             Add to inbox
           </button>
+        </section>
+      )}
+
+      {canWrite && (
+        <section className="ingestion-queue" aria-labelledby="inbox-queue-title">
+          <h2 id="inbox-queue-title">Inbox</h2>
+          <p className="muted">These files will be ingested. Remove a leftover copy by its exact path; the ledger is not changed.</p>
+          {statusState.error && <ErrorNote error={statusState.error} />}
+          {inboxFiles.length > 0 ? (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Folder</th>
+                    <th>File</th>
+                    <th className="actions-cell">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {inboxFiles.map((row) => (
+                    <tr key={row.path}>
+                      <td>{row.card}</td>
+                      <td>{row.name}</td>
+                      <td className="actions-cell">
+                        <button
+                          className="btn danger small"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void removeInboxFile(row.path)}
+                          aria-label={`Remove ${row.path}`}
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <Empty>No statement files are waiting in the inbox.</Empty>
+          )}
         </section>
       )}
 

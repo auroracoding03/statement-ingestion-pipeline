@@ -36,6 +36,7 @@ from src.api.schemas import (
     ClassifyRequest,
     BulkTransactionsRequest,
     InsightsChatRequest,
+    InboxDeleteIn,
     MerchantIn,
     MerchantMerge,
     MerchantUpdate,
@@ -66,7 +67,7 @@ from src.classify import (
     rewrite_merchant_canonical,
     update_rule,
 )
-from src.extract import iter_statement_files
+from src.extract import delete_inbox_statement, iter_statement_files
 from src.merchants import append_merchant, delete_merchant, load_merchants, merge_merchants, update_merchant
 from src.cards import account_kind as product_account_kind, build_cards_coverage, product_in_use
 from src.overview import _filter_cardholder, build_period_summary, cardholders
@@ -172,7 +173,10 @@ def get_status() -> dict:
         "unknown_merchants": unknown,
         "review_pending": int(ledger.apply(needs_review, axis=1).sum()) if not ledger.empty else 0,
         "cardholders": cardholders(ledger),
-        "inbox_files": [{"card": card, "name": path.name} for card, path in files],
+        "inbox_files": [
+            {"card": card, "name": path.name, "path": path.relative_to(INBOX).as_posix()}
+            for card, path in files
+        ],
         "duckdb": FINANCE_DB.exists(),
         "exports": EXPORT_DIR.exists(),
         "ollama_available": ollama_available(),
@@ -316,6 +320,18 @@ def _start(kind: str, fn, background: BackgroundTasks, *, progress: bool = False
 @app.post("/api/ingest")
 def post_ingest(background: BackgroundTasks) -> dict:
     return _start("ingest", pipeline.run_ingest, background)
+
+
+@app.delete("/api/inbox")
+def delete_inbox_file(body: InboxDeleteIn) -> dict:
+    ensure_dirs()
+    try:
+        deleted = delete_inbox_statement(body.path, inbox=INBOX)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"deleted": deleted}
 
 
 @app.post("/api/classify")

@@ -187,6 +187,52 @@ def test_status_reports_counts(client: TestClient):
     assert "last_statement_upload_at" in body
 
 
+def test_inbox_delete_uses_relative_path_not_filename_or_index(client: TestClient, workspace: dict):
+    inbox = workspace["root"] / "inbox"
+    leftover = inbox / "bankofamerica"
+    tagged = inbox / "bankofamerica-named"
+    leftover.mkdir(parents=True)
+    tagged.mkdir(parents=True)
+    leftover_file = leftover / "eStmt.pdf"
+    tagged_file = tagged / "eStmt.pdf"
+    leftover_file.write_bytes(b"%PDF-1.4 leftover\n")
+    tagged_file.write_bytes(b"%PDF-1.4 tagged\n")
+    (leftover / ".eStmt.pdf.upload.json").write_text(
+        '{"card_issuer": "Bank of America", "card_product": null}\n',
+        encoding="utf-8",
+    )
+    (tagged / ".eStmt.pdf.upload.json").write_text(
+        '{"card_issuer": "Bank of America", "card_product": "Named Card"}\n',
+        encoding="utf-8",
+    )
+
+    listed = client.get("/api/status").json()["inbox_files"]
+    paths = {row["path"] for row in listed}
+    assert "bankofamerica/eStmt.pdf" in paths
+    assert "bankofamerica-named/eStmt.pdf" in paths
+    leftover_row = next(row for row in listed if row["path"] == "bankofamerica/eStmt.pdf")
+    assert leftover_row["card"] == "bankofamerica"
+    assert leftover_row["name"] == "eStmt.pdf"
+
+    def delete_inbox(path: str):
+        return client.request("DELETE", "/api/inbox", json={"path": path})
+
+    removed = delete_inbox(leftover_row["path"])
+    assert removed.status_code == 200
+    assert removed.json()["deleted"] == "bankofamerica/eStmt.pdf"
+    assert not leftover_file.exists()
+    assert not (leftover / ".eStmt.pdf.upload.json").exists()
+    assert tagged_file.exists()
+    assert (tagged / ".eStmt.pdf.upload.json").exists()
+
+    blocked = delete_inbox("../outside.pdf")
+    assert blocked.status_code == 422
+    archived = delete_inbox("_ingested/bankofamerica/eStmt.pdf")
+    assert archived.status_code == 422
+    missing = delete_inbox("bankofamerica/eStmt.pdf")
+    assert missing.status_code == 404
+
+
 def test_overview_month_summarizes_latest_month(client: TestClient):
     r = client.get("/api/overview/month")
     assert r.status_code == 200

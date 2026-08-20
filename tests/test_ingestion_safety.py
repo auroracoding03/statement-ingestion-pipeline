@@ -11,7 +11,7 @@ import yaml
 import src.pipeline as pipeline
 import src.store as store
 from config.parsers.generic_csv import parse_generic_csv
-from src.extract import extract_statements
+from src.extract import delete_inbox_statement, extract_statements, resolve_inbox_statement
 from src.normalize import normalize, transaction_sources
 from src.recurring import detect_recurring
 from src.store import export_for_dashboard
@@ -155,6 +155,57 @@ def test_underscore_inbox_dirs_are_ignored(tmp_path: Path):
     assert len(result.frame) == 1
     assert result.manifest["status"].tolist() == ["parsed"]
     assert Path(result.manifest.iloc[0]["source_file"]).as_posix() == "generic/ok.csv"
+
+
+def test_delete_inbox_statement_removes_only_the_named_path(tmp_path: Path):
+    inbox = tmp_path / "inbox"
+    leftover = inbox / "bankofamerica"
+    tagged = inbox / "bankofamerica-named"
+    leftover.mkdir(parents=True)
+    tagged.mkdir(parents=True)
+    leftover_file = leftover / "eStmt.pdf"
+    tagged_file = tagged / "eStmt.pdf"
+    leftover_file.write_bytes(b"%PDF-1.4 leftover\n")
+    tagged_file.write_bytes(b"%PDF-1.4 tagged\n")
+    write_upload_context(leftover_file, issuer="Bank of America", product=None)
+    write_upload_context(tagged_file, issuer="Bank of America", product="Named Card")
+    sibling = leftover / "eStmt_2026-02-20.pdf"
+    sibling.write_bytes(b"%PDF-1.4 sibling\n")
+
+    deleted = delete_inbox_statement("bankofamerica/eStmt.pdf", inbox=inbox)
+
+    assert deleted == "bankofamerica/eStmt.pdf"
+    assert not leftover_file.exists()
+    assert not sidecar_path(leftover_file).exists()
+    assert tagged_file.exists()
+    assert sidecar_path(tagged_file).exists()
+    assert sibling.exists()
+
+
+def test_delete_inbox_statement_rejects_traversal_and_archived_paths(tmp_path: Path):
+    inbox = tmp_path / "inbox"
+    card = inbox / "generic"
+    archived = inbox / "_ingested" / "generic"
+    card.mkdir(parents=True)
+    archived.mkdir(parents=True)
+    keep = card / "keep.csv"
+    keep.write_text("Date,Description,Amount\n2026-01-01,Coffee,10.00\n")
+    archived_file = archived / "old.csv"
+    archived_file.write_text("Date,Description,Amount\n2026-01-02,Tea,4.00\n")
+    outside = tmp_path / "outside.csv"
+    outside.write_text("Date,Description,Amount\n2026-01-03,Bagel,3.00\n")
+
+    with pytest.raises(ValueError, match="invalid|relative|Archived"):
+        resolve_inbox_statement("../outside.csv", inbox=inbox)
+    with pytest.raises(ValueError, match="Archived"):
+        resolve_inbox_statement("_ingested/generic/old.csv", inbox=inbox)
+    with pytest.raises(ValueError, match="relative"):
+        resolve_inbox_statement(str(outside), inbox=inbox)
+    with pytest.raises(FileNotFoundError):
+        resolve_inbox_statement("generic/missing.csv", inbox=inbox)
+    assert keep.exists()
+    assert archived_file.exists()
+    assert outside.exists()
 
 
 def test_parser_failure_does_not_block_sibling_documents(tmp_path: Path, monkeypatch):

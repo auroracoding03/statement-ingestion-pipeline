@@ -94,6 +94,10 @@ class CardProductIn(BaseModel):
     product: str = Field(min_length=1, max_length=80)
 
 
+class InboxDeleteIn(BaseModel):
+    path: str = Field(min_length=1, max_length=240)
+
+
 class CardholderAssignIn(BaseModel):
     issuer: str = Field(min_length=1, max_length=80)
     product: str = Field(min_length=1, max_length=80)

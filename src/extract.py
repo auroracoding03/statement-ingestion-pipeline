@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pandas as pd
 from rich.console import Console
@@ -45,6 +45,61 @@ def iter_statement_files(inbox: Path | None = None) -> list[tuple[str, Path]]:
         if path.is_file() and path.suffix.lower() in SUPPORTED:
             found.append(("generic", path))
     return found
+
+
+def _inbox_relative(relative: str) -> str:
+    if relative is None or "\x00" in str(relative):
+        raise ValueError("Inbox path is invalid")
+    normalized = str(relative).replace("\\", "/")
+    posix = PurePosixPath(normalized)
+    if posix.is_absolute() or posix.anchor:
+        raise ValueError("Inbox path must be relative")
+    cleaned = normalized.strip("/")
+    if not cleaned:
+        raise ValueError("Inbox path is required")
+    parts = PurePosixPath(cleaned).parts
+    if not parts or any(part in {".", ".."} for part in parts):
+        raise ValueError("Inbox path is invalid")
+    if any(":" in part for part in parts):
+        raise ValueError("Inbox path must be relative")
+    if parts[0].startswith("_"):
+        raise ValueError("Archived inbox files cannot be removed this way")
+    return PurePosixPath(cleaned).as_posix()
+
+
+def resolve_inbox_statement(relative: str, *, inbox: Path | None = None) -> Path:
+    """Return the unique inbox statement at ``relative``, or raise.
+
+    Identity is the posix path from the inbox root, never a list index or a
+    filename-only search.
+    """
+    cleaned = _inbox_relative(relative)
+    root = (inbox if inbox is not None else path_config.INBOX).resolve()
+    candidate = (root.joinpath(*PurePosixPath(cleaned).parts)).resolve()
+    if not candidate.is_relative_to(root):
+        raise ValueError("Inbox path is outside the inbox")
+    got = candidate.relative_to(root).as_posix()
+    if got != cleaned:
+        raise ValueError("Inbox path does not match a single statement file")
+    if candidate.suffix.lower() not in SUPPORTED:
+        raise ValueError("Inbox path must be a PDF or CSV statement")
+    if not candidate.is_file():
+        raise FileNotFoundError("Inbox statement was not found")
+    return candidate
+
+
+def delete_inbox_statement(relative: str, *, inbox: Path | None = None) -> str:
+    """Unlink one statement (and its sidecar) identified by relative path."""
+    cleaned = _inbox_relative(relative)
+    target = resolve_inbox_statement(cleaned, inbox=inbox)
+    root = (inbox if inbox is not None else path_config.INBOX).resolve()
+    sidecar = sidecar_path(target)
+    target.unlink()
+    if sidecar.is_file():
+        sidecar_resolved = sidecar.resolve()
+        if sidecar_resolved.is_relative_to(root) and sidecar_resolved.is_file():
+            sidecar_resolved.unlink()
+    return cleaned
 
 
 def document_id(path: Path) -> str:

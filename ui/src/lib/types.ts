@@ -59,7 +59,7 @@ export interface Status {
   unknown_merchants: number;
   review_pending: number;
   cardholders: string[];
-  inbox_files: { card: string; name: string }[];
+  inbox_files: { card: string; name: string; path: string }[];
   duckdb: boolean;
   exports: boolean;
   ollama_available: boolean;

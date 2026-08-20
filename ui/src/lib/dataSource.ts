@@ -477,6 +477,11 @@ export const api = {
     return req<{ written: string[] }>("/api/uploads/commit", { method: "POST", body: JSON.stringify({ items }) });
   },
 
+  removeInboxFile(path: string) {
+    if (!canWrite) writeGuard();
+    return req<{ deleted: string }>("/api/inbox", { method: "DELETE", body: JSON.stringify({ path }) });
+  },
+
   async cardProducts(): Promise<{ products: Record<string, string[]> }> {
     if (!canWrite) return { products: {} };
     return req<{ products: Record<string, string[]> }>("/api/card-products");
