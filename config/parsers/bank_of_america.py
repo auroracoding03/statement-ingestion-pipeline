@@ -69,15 +69,27 @@ STOP_HEADINGS = {
     "your reward summary",
     "transactions",
 }
+LEGAL_HEADINGS = {
+    "your billing rights",
+    "scope of arbitration",
+    "opt-out of arbitration provision",
+    "authority of arbitrator",
+    "arbitration demand filing requirements",
+    "fee-shifting and sanctions",
+    "mass arbitration",
+}
 NON_NAME_WORDS = {
     "ACCOUNT",
     "ACTIVITY",
     "ADJUSTMENTS",
     "AMERICA",
     "AMOUNT",
+    "ARBITRATION",
+    "ARBITRATOR",
     "AVAILABLE",
     "BALANCE",
     "BANK",
+    "BILLING",
     "CALCULATION",
     "CASH",
     "CHARGE",
@@ -88,6 +100,7 @@ NON_NAME_WORDS = {
     "DATE",
     "DESCRIPTION",
     "FEES",
+    "IMPORTANT",
     "INFORMATION",
     "INTEREST",
     "MASTERCARD",
@@ -95,15 +108,19 @@ NON_NAME_WORDS = {
     "PAYMENTS",
     "PERIOD",
     "POSTING",
+    "PROVISION",
     "PURCHASES",
     "REFERENCE",
     "REWARDS",
+    "RIGHTS",
+    "SANCTIONS",
     "STATEMENT",
     "SUMMARY",
     "TOTAL",
     "TRANSACTION",
     "TRANSACTIONS",
     "VISA",
+    "YOUR",
 }
 
 
@@ -196,6 +213,8 @@ def _product(text: str) -> str | None:
 
 def _cardholder(text: str) -> str | None:
     clean = _clean(text)
+    if clean.lower() in LEGAL_HEADINGS:
+        return None
     if not NAME_RE.fullmatch(clean) or set(clean.split()) & NON_NAME_WORDS:
         return None
     parts = clean.title().split()

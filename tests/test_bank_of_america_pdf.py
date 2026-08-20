@@ -261,6 +261,37 @@ def test_bank_of_america_parser_requires_known_layout():
         _parse_pages([_Page(words)], card="boa", source_file="boa/unknown.pdf")
 
 
+def test_bank_of_america_parser_ignores_legal_headings_as_cardholders():
+    words: list[dict] = []
+    _identity(words)
+    _header(words, 35)
+    _line(words, 40, [(40, "Purchases and Adjustments")])
+    _row(words, 45, "01/05", "01/06", "COFFEE SHOP", "4.50")
+    _line(words, 200, [(40, "YOUR BILLING RIGHTS")])
+    _line(words, 210, [(40, "SCOPE OF ARBITRATION")])
+    _line(words, 220, [(40, "OPT-OUT OF ARBITRATION PROVISION")])
+    _line(words, 230, [(40, "AUTHORITY OF ARBITRATOR")])
+    _line(words, 240, [(40, "ARBITRATION DEMAND FILING REQUIREMENTS")])
+    _line(words, 250, [(40, "FEE-SHIFTING AND SANCTIONS")])
+    _line(words, 260, [(40, "MASS ARBITRATION")])
+
+    parsed = _parse_pages([_Page(words)], card="boa", source_file="boa/legal.pdf")
+    assert parsed["cardholder"].unique().tolist() == ["Alex Example"]
+    assert parsed["amount"].tolist() == [4.50]
+
+
+def test_bank_of_america_parser_rejects_two_real_cardholders():
+    words: list[dict] = []
+    _identity(words)
+    _line(words, 80, [(40, "SAM EXAMPLE")])
+    _header(words, 90)
+    _line(words, 95, [(40, "Purchases and Adjustments")])
+    _row(words, 100, "01/05", "01/06", "COFFEE SHOP", "4.50")
+
+    with pytest.raises(ValueError, match="ambiguous cardholders"):
+        _parse_pages([_Page(words)], card="boa", source_file="boa/two-holders.pdf")
+
+
 def test_bank_of_america_registry_aliases_route_to_pdf_parser():
     for key in ("bankofamerica", "bankofamerica-regular", "bankofamerica-air-france", "boa", "boa-air-france"):
         assert resolve_parser(key, ".pdf") is parse_bank_of_america_pdf
