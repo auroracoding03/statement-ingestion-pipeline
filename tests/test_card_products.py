@@ -11,6 +11,7 @@ from src.upload_context import (
     list_card_products,
     normalize_cardholder,
     normalize_product,
+    remove_card_product,
     resolve_card_product_for_issuer,
 )
 
@@ -43,6 +44,34 @@ def test_list_and_append_card_products(tmp_path: Path):
     # Idempotent
     again = append_card_product("amex", "Delta Gold", path=products)
     assert again["American Express"] == ["Platinum", "Delta Gold"]
+
+
+def test_remove_card_product_drops_unused_name_and_keeps_empty_bucket(tmp_path: Path):
+    products = tmp_path / "card_products.yaml"
+    _write_products(
+        products,
+        {
+            "American Express": ["Platinum", "Gold"],
+            "Chase": ["Sapphire Preferred"],
+            "Bank of America": [],
+            "Capital One": [],
+            "Wells Fargo": [],
+            "Generic": [],
+        },
+    )
+
+    assert remove_card_product("American Express", "Gold", path=products) is True
+    listed = list_card_products(products)
+    assert listed["American Express"] == ["Platinum"]
+    assert "Gold" not in listed["American Express"]
+
+    assert remove_card_product("chase", "Sapphire Preferred", path=products) is True
+    listed = list_card_products(products)
+    assert listed["Chase"] == []
+
+    assert remove_card_product("American Express", "Gold", path=products) is False
+    assert remove_card_product("American Express", "Mystery Card", path=products) is False
+    assert list_card_products(products)["American Express"] == ["Platinum"]
 
 
 def test_normalize_product_enforces_vocab_when_configured(tmp_path: Path):

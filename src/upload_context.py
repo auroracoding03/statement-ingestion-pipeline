@@ -166,6 +166,31 @@ def append_card_product(
         return list_card_products(target)
 
 
+def remove_card_product(
+    issuer: str,
+    product: str,
+    path: Path | None = None,
+) -> bool:
+    """Drop a product from the issuer vocabulary. Keep empty issuer buckets."""
+    cleaned_issuer = normalize_issuer(issuer)
+    cleaned_product = " ".join((product or "").split()).strip()
+    if not cleaned_product:
+        raise ValueError("Card product is required")
+    if len(cleaned_product) > 80:
+        raise ValueError("Card product is too long")
+
+    target = _products_path(path)
+    with FileLock(f"{target}.lock"):
+        doc = load_card_products(target)
+        products = doc.setdefault("products", {})
+        bucket = list(products.setdefault(cleaned_issuer, []))
+        if cleaned_product not in bucket:
+            return False
+        products[cleaned_issuer] = [name for name in bucket if name != cleaned_product]
+        save_card_products(doc, target)
+        return True
+
+
 def normalize_cardholder(value: str | None) -> str:
     """Trim a cardholder name. Reject blanks and the Unassigned sentinel."""
     if value is None:

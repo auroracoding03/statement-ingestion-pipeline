@@ -93,9 +93,11 @@ def _manifest_frame(rows: list[dict]) -> pd.DataFrame:
 def extract_statements(inbox: Path | None = None) -> ExtractionResult:
     """Parse every active inbox document, keeping successes even when siblings fail.
 
-    Identical document bytes are ignored after their first appearance in this
-    run. Different documents may still overlap; normalization reconciles those
-    transaction occurrences using their immutable transaction fingerprint.
+    Identical document bytes are ignored after their first successful parse in
+    this run. A failed copy does not prevent a later copy (for example one with
+    a product sidecar) from being parsed. Different documents may still overlap;
+    normalization reconciles those transaction occurrences using their immutable
+    transaction fingerprint.
     """
     root = inbox if inbox is not None else path_config.INBOX
     files = iter_statement_files(root)
@@ -132,10 +134,10 @@ def extract_statements(inbox: Path | None = None) -> ExtractionResult:
                 successful.append((card, path))
                 console.print(f"[dim]Skipped duplicate document[/dim] {relative}")
                 continue
-            seen_documents.add(doc_id)
             parser = resolve_parser(card, path.suffix.lower())
             parser_name = getattr(parser, "__name__", "parser")
             frame = parser(path, card=card, metadata=read_upload_context(path))
+            seen_documents.add(doc_id)
             frame = frame.copy()
             if not frame.empty:
                 normalize(frame.copy())

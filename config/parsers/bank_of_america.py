@@ -204,10 +204,21 @@ def _cardholder(text: str) -> str | None:
     return " ".join(parts)
 
 
-def _column_bounds(line: Line) -> Bounds | None:
+def _header_keys(line: Line) -> set[str]:
+    return {word.text.lower().rstrip(":") for word in line.words}
+
+
+def _header_positions(*lines: Line | None) -> dict[str, float]:
     positions: dict[str, float] = {}
-    for word in line.words:
-        positions.setdefault(word.text.lower().rstrip(":"), word.x0)
+    for line in lines:
+        if line is None:
+            continue
+        for word in line.words:
+            positions.setdefault(word.text.lower().rstrip(":"), word.x0)
+    return positions
+
+
+def _bounds_from_positions(positions: dict[str, float]) -> Bounds | None:
     trans = positions.get("transaction")
     post = positions.get("posting")
     description = positions.get("description")
@@ -228,6 +239,20 @@ def _column_bounds(line: Line) -> Bounds | None:
         post_end=(post + description) / 2,
         description_end=cut - 8,
     )
+
+
+def _column_bounds(line: Line, previous: Line | None = None) -> Bounds | None:
+    bounds = _bounds_from_positions(_header_positions(line))
+    if bounds:
+        return bounds
+    if previous is None:
+        return None
+    prev_keys = _header_keys(previous)
+    curr_keys = _header_keys(line)
+    stacked = {"transaction", "posting"}.issubset(prev_keys) and {"description", "amount"}.issubset(curr_keys)
+    if not stacked:
+        return None
+    return _bounds_from_positions(_header_positions(previous, line))
 
 
 def _strip_amounts(text: str) -> str:
@@ -417,38 +442,44 @@ def _parse_pages(
     rows: list[dict[str, Any]] = []
     section = "none"
     found_table = False
+    header_mode = "none"
     sections_seen: list[str] = []
+    previous: Line | None = None
     for line in all_lines:
         text = _clean(line.text)
+        header = _column_bounds(line, previous)
+        if header:
+            bounds = header
+            found_table = True
+            header_mode = "stacked" if _bounds_from_positions(_header_positions(line)) is None else "single"
         if _is_stop_heading(text):
             if text.lower() != "transactions":
                 section = "none"
-            header = _column_bounds(line)
-            if header:
-                bounds = header
-                found_table = True
+            previous = line
             continue
         heading = _section_heading(text)
         if heading:
             section = heading
             sections_seen.append(heading)
+            previous = line
             continue
-        header = _column_bounds(line)
         if header:
-            bounds = header
-            found_table = True
+            previous = line
             continue
         if section == "none" or bounds is None or _is_total_line(text):
+            previous = line
             continue
         row = _parse_row(line, bounds, start, end, section, holders[0] if holders else None, metadata)
         if row:
             rows.append(row)
+        previous = line
 
     _dbg(
         "table scan result",
         {
             "file": Path(source_file).name,
             "found_table": found_table,
+            "header_mode": header_mode,
             "row_count": len(rows),
             "sections_seen": sections_seen[:8],
         },

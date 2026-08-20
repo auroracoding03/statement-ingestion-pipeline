@@ -490,6 +490,15 @@ export const api = {
     });
   },
 
+  removeCardProduct(issuer: string, product: string) {
+    if (!canWrite) writeGuard();
+    const qs = new URLSearchParams({ issuer, product });
+    return req<{ deleted: { issuer: string; product: string }; products: Record<string, string[]> }>(
+      `/api/card-products?${qs}`,
+      { method: "DELETE" },
+    );
+  },
+
   // ---------------------------------------------------------------- mutations
 
   submitReview(

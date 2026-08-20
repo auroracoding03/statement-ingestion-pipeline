@@ -96,6 +96,7 @@ export function Cards() {
     secondaryKey: null,
     secondaryOrder: "asc",
   });
+  const [removeError, setRemoveError] = useState("");
   const products = coverage.data?.products ?? [];
   const selected = useMemo(
     () => products.find((row) => productKey(row) === selectedKey) ?? null,
@@ -115,6 +116,24 @@ export function Cards() {
     setSort((current) => nextColumnSort(current, key, ACCOUNT_NUMERIC_SORT));
   }
 
+  async function removeProduct(row: CardProductCoverage) {
+    const label = productLabel(row);
+    if (
+      !window.confirm(
+        `Remove ${label} from the product list? This does not delete any transactions.`,
+      )
+    ) {
+      return;
+    }
+    setRemoveError("");
+    try {
+      await api.removeCardProduct(row.issuer, row.product);
+      coverage.reload({ silent: true });
+    } catch (err) {
+      setRemoveError(err instanceof Error ? err.message : "Could not remove that product.");
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -123,6 +142,7 @@ export function Cards() {
       />
 
       {coverage.error && <ErrorNote error={coverage.error} />}
+      {removeError && <ErrorNote error={removeError} />}
       {coverage.loading && <Loading what="account coverage" />}
 
       {coverage.data && !coverage.loading && (
@@ -156,13 +176,27 @@ export function Cards() {
             <>
               <h2>Cards</h2>
               {cards.length > 0 ? (
-                <ProductTable products={cards} sort={sort} onSort={toggleSort} onSelect={setSelectedKey} variant="card" />
+                <ProductTable
+                  products={cards}
+                  sort={sort}
+                  onSort={toggleSort}
+                  onSelect={setSelectedKey}
+                  onRemove={removeProduct}
+                  variant="card"
+                />
               ) : (
                 <Empty>No card products on the ledger yet. Ingest a statement to get started.</Empty>
               )}
               <h2>Bank accounts</h2>
               {banks.length > 0 ? (
-                <ProductTable products={banks} sort={sort} onSort={toggleSort} onSelect={setSelectedKey} variant="bank" />
+                <ProductTable
+                  products={banks}
+                  sort={sort}
+                  onSort={toggleSort}
+                  onSelect={setSelectedKey}
+                  onRemove={removeProduct}
+                  variant="bank"
+                />
               ) : (
                 <Empty>No bank or debit accounts in the ledger yet.</Empty>
               )}
@@ -179,12 +213,14 @@ function ProductTable({
   sort,
   onSort,
   onSelect,
+  onRemove,
   variant = "card",
 }: {
   products: CardProductCoverage[];
   sort: ColumnSort<AccountSortKey>;
   onSort: (key: AccountSortKey) => void;
   onSelect: (key: string) => void;
+  onRemove: (row: CardProductCoverage) => void;
   variant?: "card" | "bank";
 }) {
   function rank(key: AccountSortKey): 1 | 2 | undefined {
@@ -229,6 +265,7 @@ function ProductTable({
               order={order("last_statement")}
               onClick={() => onSort("last_statement")}
             />
+            {canWrite && <th className="actions-cell">Actions</th>}
           </tr>
         </thead>
         <tbody>
@@ -262,6 +299,22 @@ function ProductTable({
                 </>
               )}
               <td>{shortDate(row.coverage_end)}</td>
+              {canWrite && (
+                <td className="actions-cell">
+                  {row.statement_count === 0 ? (
+                    <button
+                      className="btn danger small"
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onRemove(row);
+                      }}
+                    >
+                      Remove
+                    </button>
+                  ) : null}
+                </td>
+              )}
             </tr>
           ))}
         </tbody>

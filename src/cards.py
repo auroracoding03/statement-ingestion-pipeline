@@ -65,6 +65,19 @@ def assign_cardholder(
     return out, txn_ids
 
 
+def product_in_use(ledger: pd.DataFrame, *, issuer: str, product: str) -> bool:
+    """True when any ledger row uses this issuer+product, any cardholder."""
+    issuer_name = " ".join((issuer or "").split())
+    product_name = " ".join((product or "").split())
+    if not issuer_name or not product_name:
+        return False
+    if ledger.empty or "card_issuer" not in ledger.columns or "card_product" not in ledger.columns:
+        return False
+    issuers = ledger["card_issuer"].map(_label)
+    products = ledger["card_product"].map(_label)
+    return bool(((issuers == issuer_name) & (products == product_name)).any())
+
+
 def _label(value) -> str:
     if _blank(value):
         return ""

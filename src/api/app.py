@@ -68,7 +68,7 @@ from src.classify import (
 )
 from src.extract import iter_statement_files
 from src.merchants import append_merchant, delete_merchant, load_merchants, merge_merchants, update_merchant
-from src.cards import account_kind as product_account_kind, build_cards_coverage
+from src.cards import account_kind as product_account_kind, build_cards_coverage, product_in_use
 from src.overview import _filter_cardholder, build_period_summary, cardholders
 from src.taxonomy import category_impact, delete_category
 from src.paths import DASHBOARD, EXPORT_DIR, FINANCE_DB, INBOX, PENDING_UPLOADS, UI, ensure_dirs
@@ -83,6 +83,7 @@ from src.upload_context import (
     append_card_product,
     card_key,
     list_card_products,
+    remove_card_product,
     normalize_cardholder,
     normalize_issuer,
     normalize_product,
@@ -1128,6 +1129,32 @@ def post_card_product(body: CardProductIn) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"products": products}
+
+
+@app.delete("/api/card-products")
+def delete_card_product(
+    issuer: str = Query(min_length=1, max_length=80),
+    product: str = Query(min_length=1, max_length=80),
+) -> dict:
+    ensure_dirs()
+    try:
+        cleaned_issuer = normalize_issuer(issuer)
+        cleaned_product = " ".join(product.split()).strip()
+        if not cleaned_product:
+            raise ValueError("Card product is required")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if product_in_use(pipeline.load_ledger(), issuer=cleaned_issuer, product=cleaned_product):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Product {cleaned_product!r} is still used on ledger transactions.",
+        )
+    if not remove_card_product(cleaned_issuer, cleaned_product):
+        raise HTTPException(status_code=404, detail="Unknown card product")
+    return {
+        "deleted": {"issuer": cleaned_issuer, "product": cleaned_product},
+        "products": list_card_products(),
+    }
 
 
 # --------------------------------------------------------------------------- static UI

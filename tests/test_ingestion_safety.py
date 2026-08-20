@@ -103,6 +103,46 @@ def test_identical_document_bytes_are_not_parsed_twice(tmp_path: Path):
     assert set(result.manifest["status"]) == {"parsed", "duplicate_document"}
 
 
+def test_failed_parse_does_not_skip_identical_copy_with_product_sidecar(tmp_path: Path, monkeypatch):
+    inbox = tmp_path / "inbox"
+    leftover = inbox / "bankofamerica"
+    tagged = inbox / "bankofamerica-named-card"
+    leftover.mkdir(parents=True)
+    tagged.mkdir(parents=True)
+    content = b"%PDF-1.4 statement-bytes\n"
+    leftover_file = leftover / "eStmt.pdf"
+    tagged_file = tagged / "eStmt.pdf"
+    leftover_file.write_bytes(content)
+    tagged_file.write_bytes(content)
+    write_upload_context(leftover_file, issuer="Bank of America", product=None)
+    write_upload_context(tagged_file, issuer="Bank of America", product="Named Card")
+
+    def fake_parser(path: Path, card: str, metadata=None):
+        metadata = metadata or {}
+        if not metadata.get("card_product"):
+            raise ValueError("Bank of America card product was not found")
+        return pd.DataFrame(
+            [
+                {
+                    "posted_date": "2026-01-17",
+                    "amount": 4.50,
+                    "raw_description": "COFFEE SHOP",
+                    "card": card,
+                }
+            ]
+        )
+
+    monkeypatch.setattr("src.extract.resolve_parser", lambda card, suffix: fake_parser)
+
+    result = extract_statements(inbox)
+
+    assert result.errors
+    assert "card product was not found" in result.errors[0]
+    assert len(result.frame) == 1
+    assert result.frame["amount"].tolist() == [4.50]
+    assert set(result.manifest["status"]) == {"failed", "parsed"}
+
+
 def test_underscore_inbox_dirs_are_ignored(tmp_path: Path):
     inbox = tmp_path / "inbox"
     (inbox / "generic").mkdir(parents=True)

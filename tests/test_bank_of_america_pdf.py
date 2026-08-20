@@ -33,6 +33,32 @@ def _line(words: list[dict], top: float, cells: list[tuple[float, str]]) -> None
             cursor += len(token) * 5.8 + 4
 
 
+def _stacked_header(words: list[dict], top: float) -> None:
+    _line(
+        words,
+        top,
+        [
+            (40, "Transaction"),
+            (140, "Posting"),
+            (430, "Reference"),
+            (530, "Account"),
+        ],
+    )
+    _line(
+        words,
+        top + 3,
+        [
+            (40, "Date"),
+            (140, "Date"),
+            (230, "Description"),
+            (430, "Number"),
+            (530, "Number"),
+            (620, "Amount"),
+            (700, "Total"),
+        ],
+    )
+
+
 def _header(words: list[dict], top: float) -> None:
     _line(
         words,
@@ -160,6 +186,27 @@ def test_bank_of_america_parser_uses_upload_product_when_statement_omits_it():
     )
     assert parsed["card_product"].unique().tolist() == ["Air France"]
     assert parsed["amount"].tolist() == [4.50]
+
+
+def test_bank_of_america_parser_reads_two_line_transaction_header():
+    words: list[dict] = []
+    _identity(words)
+    _line(words, 28, [(40, "Transactions")])
+    _stacked_header(words, 32)
+    _line(words, 40, [(40, "Purchases and Adjustments")])
+    _row(words, 45, "01/05", "01/06", "COFFEE SHOP", "4.50")
+
+    parsed = _parse_pages([_Page(words)], card="boa", source_file="boa/stacked.pdf")
+    assert parsed["amount"].tolist() == [4.50]
+    assert parsed["raw_description"].tolist() == ["COFFEE SHOP"]
+    log_path = paths.LOGS_DIR / "boa-parser.ndjson"
+    events = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert any(
+        event["data"].get("file") == "stacked.pdf"
+        and event["data"].get("found_table") is True
+        and event["data"].get("header_mode") == "stacked"
+        for event in events
+    )
 
 
 def test_bank_of_america_parser_keeps_dates_within_one_day_grace():

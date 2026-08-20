@@ -6,7 +6,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 
-from src.cards import GAP_DAYS, STALE_DAYS, assign_cardholder, build_cards_coverage
+from src.cards import GAP_DAYS, STALE_DAYS, assign_cardholder, build_cards_coverage, product_in_use
 from src.normalize import make_txn_id
 
 
@@ -144,6 +144,46 @@ def test_configured_product_with_no_ledger_rows_is_none(monkeypatch):
     assert by_label["American Express Delta Gold"]["status"] == "none"
     assert by_label["American Express Delta Gold"]["statement_count"] == 0
     assert by_label["American Express Platinum · Alex Example"]["status"] == "ok"
+
+
+def test_product_in_use_is_true_for_any_cardholder_on_that_product():
+    ledger = pd.DataFrame(
+        [
+            _row(
+                card_issuer="American Express",
+                card_product="Platinum",
+                cardholder="Alex Example",
+            ),
+            _row(
+                card_issuer="American Express",
+                card_product="Delta Gold",
+                cardholder=None,
+            ),
+        ]
+    )
+    assert product_in_use(ledger, issuer="American Express", product="Platinum") is True
+    assert product_in_use(ledger, issuer="American Express", product="Gold") is False
+    assert product_in_use(pd.DataFrame(), issuer="American Express", product="Platinum") is False
+
+
+def test_removed_vocab_product_no_longer_appears_as_empty_placeholder(monkeypatch):
+    monkeypatch.setattr("src.cards.list_card_products", lambda: {"American Express": ["Platinum"]})
+    ledger = pd.DataFrame(
+        [
+            _row(
+                card_issuer="American Express",
+                card_product="Platinum",
+                posted_date="2026-08-01",
+                source_document_id="amex-aug",
+                source_file="amex/aug.csv",
+            )
+        ]
+    )
+    payload = build_cards_coverage(ledger, today=date(2026, 8, 10))
+    labels = {row["label"] for row in payload["products"]}
+    assert "American Express Gold" not in labels
+    assert "American Express Delta Gold" not in labels
+    assert "American Express Platinum · Alex Example" in labels
 
 
 def test_payments_are_excluded_from_spend(monkeypatch):

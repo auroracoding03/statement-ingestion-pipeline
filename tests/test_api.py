@@ -751,6 +751,48 @@ def test_card_products_list_and_append(client: TestClient):
     assert "Blue Cash Preferred" in again.json()["products"]["American Express"]
 
 
+def test_card_products_delete_unused_in_use_and_unknown(client: TestClient, workspace: dict):
+    unused = client.delete("/api/card-products", params={"issuer": "American Express", "product": "Gold"})
+    assert unused.status_code == 200
+    assert unused.json()["deleted"] == {"issuer": "American Express", "product": "Gold"}
+    remaining = unused.json()["products"]["American Express"]
+    assert "Gold" not in remaining
+    assert "Platinum" in remaining
+
+    missing = client.delete("/api/card-products", params={"issuer": "American Express", "product": "Gold"})
+    assert missing.status_code == 404
+
+    ledger = pipeline_mod.load_ledger()
+    extra = pd.DataFrame(
+        [
+            {
+                "txn_id": make_txn_id("americanexpress-platinum", "2026-03-04", 55.0, "PLAT DINNER"),
+                "card": "americanexpress-platinum",
+                "card_issuer": "American Express",
+                "card_product": "Platinum",
+                "cardholder": None,
+                "posted_date": "2026-03-04",
+                "amount": 55.0,
+                "raw_description": "PLAT DINNER",
+                "normalized_merchant": "PLAT DINNER",
+                "canonical_merchant": None,
+                "merchant_source": "none",
+                "source_file": "amex/plat.csv",
+            }
+        ]
+    )
+    pipeline_mod.write_ledger(pipeline_mod._ensure_columns(pd.concat([ledger, extra], ignore_index=True)))
+
+    blocked = client.delete("/api/card-products", params={"issuer": "amex", "product": "Platinum"})
+    assert blocked.status_code == 409
+    assert "still used" in blocked.json()["detail"]
+    listed = client.get("/api/card-products").json()["products"]["American Express"]
+    assert "Platinum" in listed
+
+    unknown = client.delete("/api/card-products", params={"issuer": "American Express", "product": "Mystery Card"})
+    assert unknown.status_code == 404
+
+
 def test_staged_boa_pdf_requires_product_before_commit(client: TestClient):
     inspected = client.post(
         "/api/uploads/inspect",
